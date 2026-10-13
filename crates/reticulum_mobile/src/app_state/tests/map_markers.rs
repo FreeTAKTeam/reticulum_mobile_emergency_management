@@ -154,9 +154,25 @@ fn map_marker_symbol_catalog_matches_shared_crate() {
     let fire = symbols.iter().find(|symbol| symbol.id == "fire").expect("fire symbol");
     assert_eq!(fire.set, "mdi");
     assert_eq!(fire.mdi.as_deref(), Some("fire"));
+    assert!(fire.aliases.contains(&"wildfire".to_string()));
+    let mut without_aliases = serde_json::to_value(&symbols).expect("symbols json");
+    for entry in without_aliases.as_array_mut().expect("array") {
+        entry.as_object_mut().expect("object").remove("aliases");
+    }
     assert_eq!(
-        serde_json::to_value(&symbols).expect("symbols json"),
+        without_aliases,
         r3akt_map_core::symbols::catalog_json(),
-        "REM exposes the same catalog JSON as RCH /api/markers/symbols"
+        "REM exposes the same catalog as RCH /api/markers/symbols"
     );
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../../packages/node-client/src/fixtures/map-marker-catalog.json"
+    ))
+    .expect("node-client fixture");
+    assert_eq!(
+        fixture["symbols"],
+        r3akt_map_core::symbols::catalog_json(),
+        "node-client test double catalog must match the shared crate"
+    );
+    let alias_count = symbols.iter().map(|symbol| symbol.aliases.len()).sum::<usize>();
+    assert_eq!(fixture["aliases"].as_object().expect("aliases").len(), alias_count);
 }

@@ -25,6 +25,8 @@ pub struct MapMarkerSymbolRecord {
     pub description: String,
     pub tak: Option<String>,
     pub category: String,
+    /// Input spellings that normalize to this symbol (for search).
+    pub aliases: Vec<String>,
 }
 
 /// Fields for a new marker. Validation and normalization are owned by
