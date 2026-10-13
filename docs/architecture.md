@@ -698,11 +698,24 @@ The repo now carries a local workspace runner for UniFFI CLI generation:
 
 This avoids relying on a globally installed `uniffi-bindgen` executable, which is not always present with the UniFFI `0.28.x` crate layout used by this repo.
 
-## REM 1.4.1 networking dependency
+## Networking and shared map dependencies
 
-The compiled networking stack is pinned to LXMF-rs `v0.13.0` at
-`fbc75b86e15550722923b366398f0a4116182894`. REM logs the upstream
+The compiled networking stack is pinned to LXMF-rs `v0.14.0` at
+`7822b608f2cd2debd8170895bc580d01dda5356e` (REM 1.4.1 shipped with `v0.13.0`
+at `fbc75b86e15550722923b366398f0a4116182894`; v0.14.0 keeps the Reticulum
+and LXMF wire formats and moves to `rusqlite` 0.40). REM logs the upstream
 `OutboundRejected` Resource event distinctly from local cancellation and
 transfer failure. Delivery outcome handling remains in the compiled LXMF
 runtime. This release includes selected Reticulum 1.5.5 changes and does not
 claim full 1.5.5 parity.
+
+Map objects (point markers, the symbol catalog and the Telemeter receive
+contract) come from the shared RCH crate `r3akt-map-core`, pinned to RCH
+`d84265bec71a83c05c11ac75ca2cbc227a483df6` with its `sqlite` feature
+([REM #280](https://github.com/FreeTAKTeam/reticulum_mobile_emergency_management/issues/280),
+[RCH #259](https://github.com/FreeTAKTeam/Reticulum-Community-Hub/issues/259)).
+REM must not re-implement marker validation, symbols, idempotency or marker
+SQL; update the pin deliberately and together with RCH. Because the crate and
+LXMF-rs both bundle SQLite through `libsqlite3-sys`, REM, LXMF-rs and the
+pinned RCH revision must agree on one `rusqlite` minor version (currently
+0.40). The crate is EPL-2.0.
