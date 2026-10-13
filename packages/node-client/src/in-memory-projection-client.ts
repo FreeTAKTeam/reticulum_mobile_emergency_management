@@ -4,6 +4,8 @@ import { cloneChecklistRecord, cloneChecklistTemplateRecord, createDefaultCheckl
 import { addInMemoryTaskRow, createInMemoryChecklistFromTemplate, deleteInMemoryTaskRow, emitChecklistInvalidations, findInMemoryChecklist, setInMemoryTaskCell, setInMemoryTaskRowStyle, setInMemoryTaskStatus, updateInMemoryChecklist } from "./checklist-memory-runtime";
 import { emptyEamReadinessSummary } from "./projection-converters";
 import { TypedEmitter } from "./typed-emitter";
+import { InMemoryMapMarkers } from "./map-marker-memory";
+import type { MapMarkerCreateRequest, MapMarkerCreateResult, MapMarkerRecord, MapMarkerSymbolRecord } from "./contracts-map-markers";
 
 export abstract class InMemoryProjectionClient {
   protected readonly emitter = new TypedEmitter<NodeClientEvents>();
@@ -16,6 +18,28 @@ export abstract class InMemoryProjectionClient {
   private readonly sosAlerts: SosAlertRecord[] = [];
   private readonly sosLocations: SosLocationRecord[] = [];
   private readonly sosAudio: SosAudioRecord[] = [];
+  private readonly mapMarkers = new InMemoryMapMarkers((key, reason) => {
+    this.emitter.emit("projectionInvalidated", {
+      scope: "MapMarkers",
+      key,
+      revision: Date.now(),
+      updatedAtMs: Date.now(),
+      reason: `${this.inMemoryPrefix}${reason}`,
+    });
+  });
+
+  async listMapMarkerSymbols(): Promise<MapMarkerSymbolRecord[]> { return this.mapMarkers.symbols(); }
+  async listMapMarkers(): Promise<MapMarkerRecord[]> { return this.mapMarkers.list(); }
+  async createMapMarker(request: MapMarkerCreateRequest): Promise<MapMarkerCreateResult> {
+    return this.mapMarkers.create(request);
+  }
+  async renameMapMarker(key: string, name: string): Promise<MapMarkerRecord> {
+    return this.mapMarkers.update(key, { name: name.trim() }, "marker-renamed");
+  }
+  async moveMapMarker(key: string, lat: number, lon: number): Promise<MapMarkerRecord> {
+    return this.mapMarkers.update(key, { lat, lon }, "marker-moved");
+  }
+  async deleteMapMarker(key: string): Promise<boolean> { return this.mapMarkers.delete(key); }
 
   async getPowerState(): Promise<PowerStateRecord> {
     return { charging: false, saverActive: false, updatedAtMs: 0 };

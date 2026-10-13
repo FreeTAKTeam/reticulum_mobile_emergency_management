@@ -7,10 +7,10 @@ import { toConversationRecord, toErrorEvent, toHubDirectoryUpdatedEvent, toLogEv
 import { eamProjectionRecordToPlugin, eventProjectionRecordToPlugin, legacyImportPayloadToPlugin, toEamProjectionRecord, toEamReadinessSummaryRecord, toEamTeamSummaryRecord, toEventProjectionRecord, toSavedPeerRecord, toTelemetryPositionRecord } from "./projection-converters";
 import { decodeBase64ToBytes, encodeBytesToBase64, normalizeHex, pluginRecord, toAnnounceReceivedEvent, toAnnounceRecord, toInstalledPlugin, toInterfaceStatusChangedEvent, toNodeStatus, toPeerChangedEvent, toPluginSensor, toStatusChangedEvent } from "./runtime-converters";
 import { TypedEmitter } from "./typed-emitter";
-import { CapacitorProjectionClient } from "./capacitor-projection-client";
+import { CapacitorMapMarkerClient } from "./capacitor-map-marker-client";
 import { classifyPluginErrors } from "./errors";
 
-export class CapacitorReticulumNodeClient extends CapacitorProjectionClient implements ReticulumNodeClient {
+export class CapacitorReticulumNodeClient extends CapacitorMapMarkerClient implements ReticulumNodeClient {
   private readonly emitter = new TypedEmitter<NodeClientEvents>();
   protected readonly plugin = classifyPluginErrors(ReticulumNodePluginInstance);
   private listenerHandles: PluginListenerHandle[] = [];

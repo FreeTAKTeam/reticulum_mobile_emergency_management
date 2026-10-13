@@ -1,5 +1,5 @@
 import { registerPlugin } from "@capacitor/core";
-import type { BlockOnboardingDraft, BlockOnboardingImportRequest, ChecklistUserTaskStatus, LogLevel, PluginCapabilityRecord, RnodeBleDeviceRecord, RnodeBluetoothDeviceRecord, RnodeBluetoothMode, RnodeUsbDeviceRecord, SendMode, SosTriggerSource } from "./contracts";
+import type { BlockOnboardingDraft, BlockOnboardingImportRequest, ChecklistUserTaskStatus, MapMarkerCreateRequest, LogLevel, PluginCapabilityRecord, RnodeBleDeviceRecord, RnodeBluetoothDeviceRecord, RnodeBluetoothMode, RnodeUsbDeviceRecord, SendMode, SosTriggerSource } from "./contracts";
 
 export type PluginListenerHandle = {
   remove: () => Promise<void>;
@@ -57,6 +57,16 @@ export interface ReticulumNodePlugin {
   }): Promise<void>;
   openPluginConfiguration(options: { pluginId: string }): Promise<void>;
   listPluginSensors(): Promise<{ items: Record<string, unknown>[] }>;
+  listMapMarkerSymbols(): Promise<{ items?: unknown }>;
+  listMapMarkers(): Promise<{ items?: unknown }>;
+  createMapMarker(options: { request: MapMarkerCreateRequest }): Promise<Record<string, unknown>>;
+  renameMapMarker(options: {
+    request: { objectDestinationHash: string; name: string };
+  }): Promise<Record<string, unknown>>;
+  moveMapMarker(options: {
+    request: { objectDestinationHash: string; lat: number; lon: number };
+  }): Promise<Record<string, unknown>>;
+  deleteMapMarker(options: { objectDestinationHash: string }): Promise<{ deleted?: boolean }>;
   listPeers(): Promise<{ items: Record<string, unknown>[] }>;
   listConversations(): Promise<{ items: Record<string, unknown>[] }>;
   listMessages(options: { conversationId?: string }): Promise<{ items: Record<string, unknown>[] }>;

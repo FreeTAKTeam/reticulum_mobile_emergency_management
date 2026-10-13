@@ -1,0 +1,196 @@
+{
+  "aliases": {
+    "alarm": "alert",
+    "assignment": "task",
+    "auto": "vehicle",
+    "automobile": "vehicle",
+    "building": "infrastructure",
+    "car": "vehicle",
+    "cctv": "camera",
+    "community": "group",
+    "facility": "infrastructure",
+    "flame": "fire",
+    "group-community": "group",
+    "hospital": "medic",
+    "human": "person",
+    "location": "marker",
+    "medical": "medic",
+    "mission": "task",
+    "operator": "person",
+    "pet": "animal",
+    "pin": "marker",
+    "radar": "sensor",
+    "team": "group",
+    "telemetry": "sensor",
+    "truck": "vehicle",
+    "uas": "drone",
+    "uav": "drone",
+    "vehicle-sensor": "sensor",
+    "warning": "alert",
+    "water": "flood",
+    "wildfire": "fire",
+    "wildlife": "animal"
+  },
+  "symbols": [
+    {
+      "category": "general",
+      "description": "Marker",
+      "id": "marker",
+      "mdi": "map-marker",
+      "set": "mdi",
+      "tak": null
+    },
+    {
+      "category": "nato",
+      "description": "Friendly",
+      "id": "friendly",
+      "mdi": "rectangle",
+      "set": "mdi",
+      "tak": null
+    },
+    {
+      "category": "nato",
+      "description": "Hostile",
+      "id": "hostile",
+      "mdi": "rhombus",
+      "set": "mdi",
+      "tak": null
+    },
+    {
+      "category": "nato",
+      "description": "Neutral",
+      "id": "neutral",
+      "mdi": "square",
+      "set": "mdi",
+      "tak": null
+    },
+    {
+      "category": "nato",
+      "description": "Unknown",
+      "id": "unknown",
+      "mdi": "clover",
+      "set": "mdi",
+      "tak": null
+    },
+    {
+      "category": "mobility",
+      "description": "Vehicle",
+      "id": "vehicle",
+      "mdi": "car",
+      "set": "mdi",
+      "tak": null
+    },
+    {
+      "category": "mobility",
+      "description": "Drone",
+      "id": "drone",
+      "mdi": "drone",
+      "set": "mdi",
+      "tak": null
+    },
+    {
+      "category": "wildlife",
+      "description": "Animal",
+      "id": "animal",
+      "mdi": "paw",
+      "set": "mdi",
+      "tak": null
+    },
+    {
+      "category": "equipment",
+      "description": "Sensor",
+      "id": "sensor",
+      "mdi": "radar",
+      "set": "mdi",
+      "tak": null
+    },
+    {
+      "category": "equipment",
+      "description": "Radio",
+      "id": "radio",
+      "mdi": "radio",
+      "set": "mdi",
+      "tak": null
+    },
+    {
+      "category": "equipment",
+      "description": "Antenna",
+      "id": "antenna",
+      "mdi": "antenna",
+      "set": "mdi",
+      "tak": null
+    },
+    {
+      "category": "equipment",
+      "description": "Camera",
+      "id": "camera",
+      "mdi": "camera",
+      "set": "mdi",
+      "tak": null
+    },
+    {
+      "category": "incident",
+      "description": "Fire",
+      "id": "fire",
+      "mdi": "fire",
+      "set": "mdi",
+      "tak": null
+    },
+    {
+      "category": "incident",
+      "description": "Flood",
+      "id": "flood",
+      "mdi": "home-flood",
+      "set": "mdi",
+      "tak": null
+    },
+    {
+      "category": "people",
+      "description": "Person",
+      "id": "person",
+      "mdi": "account",
+      "set": "mdi",
+      "tak": null
+    },
+    {
+      "category": "people",
+      "description": "Group / Community",
+      "id": "group",
+      "mdi": "account-group",
+      "set": "mdi",
+      "tak": null
+    },
+    {
+      "category": "infrastructure",
+      "description": "Infrastructure",
+      "id": "infrastructure",
+      "mdi": "office-building",
+      "set": "mdi",
+      "tak": null
+    },
+    {
+      "category": "medical",
+      "description": "Medic",
+      "id": "medic",
+      "mdi": "hospital",
+      "set": "mdi",
+      "tak": null
+    },
+    {
+      "category": "incident",
+      "description": "Alert",
+      "id": "alert",
+      "mdi": "alert",
+      "set": "mdi",
+      "tak": null
+    },
+    {
+      "category": "task",
+      "description": "Task",
+      "id": "task",
+      "mdi": "clipboard-check",
+      "set": "mdi",
+      "tak": null
+    }
+  ]
+}

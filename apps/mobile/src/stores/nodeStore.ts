@@ -1,4 +1,4 @@
-import { createReticulumNodeClient, type ReticulumNodeClient } from "@reticulum/node-client";
+import { createReticulumNodeClient, type MapMarkerClient, type ReticulumNodeClient } from "@reticulum/node-client";
 import { defineStore } from "pinia";
 
 import { loadUiSettingsProjection } from "../utils/legacyState";
@@ -347,7 +347,18 @@ export const useNodeStore = defineStore("node", () => {
     settings,
     status,
   });
-  return createNodeStoreApi(
-    state, logging, peers, projections, hub, selectors, lifecycle, actions, transport, community,
-  );
+  /** Map marker calls go straight to the client; the native runtime owns marker rules. */
+  async function mapMarkerClient(): Promise<MapMarkerClient> {
+    await init();
+    if (!client.value) {
+      throw new Error("Node client is not initialized.");
+    }
+    return client.value;
+  }
+  return {
+    ...createNodeStoreApi(
+      state, logging, peers, projections, hub, selectors, lifecycle, actions, transport, community,
+    ),
+    mapMarkerClient,
+  };
 });

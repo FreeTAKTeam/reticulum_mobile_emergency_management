@@ -91,6 +91,20 @@ fn map_marker_result<T: Serialize>(
 ) -> jstring {
     match result {
         Ok(value) => ok_json_result(env, &value),
+        Err(NodeError::InvalidConfig {}) => {
+            // Validation failures carry the shared RCH message as their cause;
+            // surface it as the error message so the UI can show it as is.
+            match crate::error_context::take_internal_failure("InvalidConfig") {
+                Some(failure) => set_last_error_with_context(
+                    "InvalidConfig",
+                    failure.cause,
+                    Some(failure.operation.as_str()),
+                    None,
+                ),
+                None => set_last_node_error(NodeError::InvalidConfig {}),
+            }
+            ptr::null_mut()
+        }
         Err(error) => {
             set_last_node_error(error);
             ptr::null_mut()

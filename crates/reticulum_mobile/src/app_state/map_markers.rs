@@ -53,6 +53,11 @@ pub(crate) fn map_marker_symbols() -> Vec<crate::types::MapMarkerSymbolRecord> {
             description: symbol.description.to_string(),
             tak: symbol.tak.map(str::to_string),
             category: symbol.category.to_string(),
+            aliases: r3akt_map_core::symbols::ALIASES
+                .iter()
+                .filter(|(_, canonical)| *canonical == symbol.id)
+                .map(|(alias, _)| (*alias).to_string())
+                .collect(),
         })
         .collect()
 }

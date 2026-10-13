@@ -961,6 +961,7 @@ dictionary MapMarkerSymbolRecord {
   string description;
   string? tak;
   string category;
+  sequence<string> aliases;
 };
 
 dictionary MapMarkerCreateRequest {

@@ -19,12 +19,13 @@ import type {
   BlockOnboardingDraft, SignedBlockOnboardingEnvelope, BlockOnboardingInspection,
   BlockOnboardingImportRequest, BlockOnboardingImportResult, CommunityStatusProjectionRecord, PowerStateRecord,
 } from "./contracts-domain";
+import type { MapMarkerClient } from "./contracts-map-markers";
 
 export type ChecklistDeleteOptions = {
   deleteRemote?: boolean;
 };
 
-export interface ReticulumNodeClient {
+export interface ReticulumNodeClient extends MapMarkerClient {
   start(config: NodeConfig): Promise<void>;
   stop(): Promise<void>;
   restart(config: NodeConfig): Promise<void>;
