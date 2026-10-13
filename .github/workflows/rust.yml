@@ -18,8 +18,8 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  # Immutable LXMF-rs v0.13.0 release commit (scoped Reticulum 1.5.5 update).
-  LXMF_RS_REF: fbc75b86e15550722923b366398f0a4116182894
+  # Immutable LXMF-rs v0.14.0 release commit (rusqlite 0.40, shared with r3akt-map-core).
+  LXMF_RS_REF: 7822b608f2cd2debd8170895bc580d01dda5356e
 
 jobs:
   web:
