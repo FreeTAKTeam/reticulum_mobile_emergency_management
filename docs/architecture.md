@@ -711,7 +711,7 @@ claim full 1.5.5 parity.
 
 Map objects (point markers, the symbol catalog and the Telemeter receive
 contract) come from the shared RCH crate `r3akt-map-core`, pinned to RCH
-`d84265bec71a83c05c11ac75ca2cbc227a483df6` with its `sqlite` feature
+`3b39694e4536199d1ff40c9d88a92dd0ea2533a6` with its `sqlite` feature
 ([REM #280](https://github.com/FreeTAKTeam/reticulum_mobile_emergency_management/issues/280),
 [RCH #259](https://github.com/FreeTAKTeam/Reticulum-Community-Hub/issues/259)).
 REM must not re-implement marker validation, symbols, idempotency or marker
@@ -739,5 +739,28 @@ service (`app_state/map_markers.rs`, `node/map_markers.rs`) is a thin adapter:
 Telemetry positions, SOS locations and markers remain separate models. The
 JNI surface is `listMapMarkerSymbolsJson`, `listMapMarkersJson`,
 `createMapMarkerJson`, `renameMapMarkerJson`, `moveMapMarkerJson` and
-`deleteMapMarkerJson` (camelCase JSON). Network replication of markers is not
-part of this service yet ([#280](https://github.com/FreeTAKTeam/reticulum_mobile_emergency_management/issues/280)).
+`deleteMapMarkerJson` (camelCase JSON).
+
+### Map marker replication
+
+Every local create, rename, move or delete (`node/map_marker_replication.rs`)
+sends one LXMF message to the same targets as mission events: the hub in
+Connected mode (with the active TEAM in `FIELD_GROUP`, so RCH relays to the
+TEAM), and saved and TEAM peers in Autonomous and Semi-autonomous modes. The
+message carries two views of the change:
+
+- `FIELD_COMMANDS`: the RCH mission command (`mission.marker.create` with
+  REM's `object_destination_hash`, `mission.marker.patch`,
+  `mission.marker.position.patch`, `mission.marker.delete`);
+- `FIELD_EVENT`: the replica event (`mission.marker.created`, `updated`,
+  `position.updated`, `deleted`) whose payload is the shared marker API
+  representation.
+
+Receivers (`runtime/map_marker_receive.rs`) apply only the event, through
+`r3akt_map_core::replica`: the same validation as local input and
+last-writer-wins on `updated_at`. Received replicas are never re-sent, and
+replayed idempotent creates are not replicated again. RCH's legacy
+marker-as-telemetry command is ignored so markers stay out of the telemetry
+layer. Hub sync requires `mission.content.write` for the REM user on RCH.
+Deletes have no tombstones. The wire contract is documented in RCH's
+`docs/rem-southbound-interface.md`.

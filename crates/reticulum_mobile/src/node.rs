@@ -305,6 +305,7 @@ include!("node/eam.rs");
 include!("node/plugin_registry.rs");
 include!("node/events_api.rs");
 include!("node/map_markers.rs");
+include!("node/map_marker_replication.rs");
 include!("node/events_plugins_telemetry.rs");
 include!("node/sos.rs");
 include!("node/team.rs");
@@ -343,4 +344,5 @@ mod tests {
     include!("node/tests/community.rs");
     include!("node/tests/outbound_policy.rs");
     include!("node/tests/block_onboarding.rs");
+    include!("node/tests/map_markers.rs");
 }

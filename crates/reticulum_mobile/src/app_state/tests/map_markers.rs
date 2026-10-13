@@ -176,3 +176,71 @@ fn map_marker_symbol_catalog_matches_shared_crate() {
     let alias_count = symbols.iter().map(|symbol| symbol.aliases.len()).sum::<usize>();
     assert_eq!(fixture["aliases"].as_object().expect("aliases").len(), alias_count);
 }
+
+fn replica_payload(id: &str, name: &str, updated_at: &str) -> serde_json::Value {
+    serde_json::json!({
+        "object_destination_hash": id,
+        "origin_rch": "feedfeed",
+        "type": "medic",
+        "symbol": "medic",
+        "name": name,
+        "category": "medical",
+        "notes": null,
+        "position": { "lat": 10.5, "lon": 20.25 },
+        "created_at": "2026-10-13T10:00:00Z",
+        "updated_at": updated_at,
+    })
+}
+
+#[test]
+fn map_marker_replicas_converge_on_the_newest_copy() {
+    let storage_dir = test_storage_dir("map-markers-replica");
+    let store = AppStateStore::new(storage_dir.to_str()).expect("store");
+    let id = "0123456789abcdef0123456789abcdef";
+
+    let first = store
+        .apply_map_marker_replica(&replica_payload(id, "Aid post", "2026-10-13T10:05:00Z"))
+        .expect("apply")
+        .expect("stored");
+    assert_eq!(first.scope, ProjectionScope::MapMarkers {});
+    let stored = store.get_map_marker(id).expect("get").expect("marker");
+    assert_eq!(stored.name, "Aid post");
+    assert_eq!(stored.origin_rch, "feedfeed");
+    let local_id = store.map_marker_core_record(id).expect("core").expect("record").local_id;
+
+    let older = replica_payload(id, "Stale name", "2026-10-13T10:01:00Z");
+    assert!(store.apply_map_marker_replica(&older).expect("older").is_none());
+    let same = replica_payload(id, "Same time", "2026-10-13T10:05:00Z");
+    assert!(store.apply_map_marker_replica(&same).expect("tie").is_none());
+    assert_eq!(store.get_map_marker(id).expect("get").expect("marker").name, "Aid post");
+
+    let newer = replica_payload(id, "Field hospital", "2026-10-13T10:09:00Z");
+    assert!(store.apply_map_marker_replica(&newer).expect("newer").is_some());
+    assert_eq!(store.get_map_marker(id).expect("get").expect("marker").name, "Field hospital");
+    let record = store.map_marker_core_record(id).expect("core").expect("record");
+    assert_eq!(record.local_id, local_id, "replicas keep the local storage key");
+
+    assert!(store
+        .apply_map_marker_replica_deletion(&serde_json::json!({ "object_destination_hash": id }))
+        .expect("delete")
+        .is_some());
+    assert!(store.get_map_marker(id).expect("get").is_none());
+}
+
+#[test]
+fn map_marker_replicas_are_validated_like_local_input() {
+    let storage_dir = test_storage_dir("map-markers-replica-invalid");
+    let store = AppStateStore::new(storage_dir.to_str()).expect("store");
+    let mut payload = replica_payload("0123456789abcdef0123456789abcdef", "X", "2026-10-13T10:05:00Z");
+    payload["symbol"] = serde_json::json!("spaceship");
+    let error = store.apply_map_marker_replica(&payload).expect_err("symbol");
+    assert_eq!(invalid_marker_cause(error), "Unsupported marker symbol");
+    let error = store
+        .apply_map_marker_replica(&replica_payload("short", "X", "2026-10-13T10:05:00Z"))
+        .expect_err("id");
+    assert_eq!(
+        invalid_marker_cause(error),
+        "object_destination_hash must be 32 hexadecimal characters"
+    );
+    assert!(store.list_map_markers().expect("list").is_empty());
+}

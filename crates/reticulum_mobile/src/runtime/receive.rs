@@ -95,12 +95,22 @@ async fn emit_received_payload(
                     fields_bytes.as_deref(),
                     Some(message.content.as_slice()),
                 );
+                let persisted_marker = persist_received_map_marker_if_present(
+                    &state.app_state,
+                    bus,
+                    Some(metadata),
+                    fields_bytes.as_deref(),
+                );
                 send_operational_ack_if_needed(
                     state,
                     bus,
                     source_hex.as_deref(),
                     Some(metadata),
-                    persisted_eam || persisted_event || persisted_telemetry || persisted_checklist,
+                    persisted_eam
+                        || persisted_event
+                        || persisted_telemetry
+                        || persisted_checklist
+                        || persisted_marker,
                 )
                 .await;
             }

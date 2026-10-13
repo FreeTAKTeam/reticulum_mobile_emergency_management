@@ -229,4 +229,52 @@ impl AppStateStore {
         )?;
         Ok((map_marker_record(&updated), invalidation))
     }
+
+    /// The shared record behind a marker, for replication payloads.
+    pub(crate) fn map_marker_core_record(
+        &self,
+        object_destination_hash: &str,
+    ) -> Result<Option<r3akt_map_core::MarkerRecord>, NodeError> {
+        r3akt_map_core::sqlite::get(&self.connect()?, object_destination_hash.trim())
+            .map_err(map_marker_store_error)
+    }
+
+    /// Applies a replicated marker (RCH API representation). The shared
+    /// crate validates it like local input and keeps the newest copy;
+    /// `None` means the stored copy was already as new.
+    pub fn apply_map_marker_replica(
+        &self,
+        payload: &serde_json::Value,
+    ) -> Result<Option<ProjectionInvalidation>, NodeError> {
+        let connection = self.connect()?;
+        let id = r3akt_map_core::replica::replica_id(payload)
+            .map_err(|error| map_marker_invalid(error.to_string()))?;
+        let existing =
+            r3akt_map_core::sqlite::get(&connection, &id).map_err(map_marker_store_error)?;
+        let local_id = existing
+            .as_ref()
+            .map_or_else(uuid_local_id, |marker| marker.local_id.clone());
+        let replica = r3akt_map_core::replica::from_api_value(payload, local_id)
+            .map_err(|error| map_marker_invalid(error.to_string()))?;
+        if !r3akt_map_core::replica::supersedes(&replica, existing.as_ref()) {
+            return Ok(None);
+        }
+        r3akt_map_core::sqlite::upsert(&connection, &replica).map_err(map_marker_store_error)?;
+        self.bump_projection_revision(
+            ProjectionScope::MapMarkers {},
+            Some(id),
+            Some("marker-replicated".to_string()),
+        )
+        .map(Some)
+    }
+
+    /// Applies a replicated deletion; `None` when the marker was unknown.
+    pub fn apply_map_marker_replica_deletion(
+        &self,
+        payload: &serde_json::Value,
+    ) -> Result<Option<ProjectionInvalidation>, NodeError> {
+        let id = r3akt_map_core::replica::replica_id(payload)
+            .map_err(|error| map_marker_invalid(error.to_string()))?;
+        self.delete_map_marker(&id)
+    }
 }

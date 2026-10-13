@@ -19,6 +19,7 @@ include!("runtime/managed_links.rs");
 include!("runtime/ack_tracking.rs");
 include!("runtime/ack_retries.rs");
 include!("runtime/delivery_send.rs");
+include!("runtime/map_marker_receive.rs");
 include!("runtime/receive.rs");
 include!("runtime/ack_handlers.rs");
 include!("runtime/hub_team_selection.rs");
