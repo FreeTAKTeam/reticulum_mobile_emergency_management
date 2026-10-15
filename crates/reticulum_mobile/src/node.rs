@@ -306,6 +306,7 @@ include!("node/plugin_registry.rs");
 include!("node/events_api.rs");
 include!("node/map_markers.rs");
 include!("node/map_marker_replication.rs");
+include!("node/plugin_map.rs");
 include!("node/events_plugins_telemetry.rs");
 include!("node/sos.rs");
 include!("node/team.rs");

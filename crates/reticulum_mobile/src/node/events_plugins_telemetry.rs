@@ -376,6 +376,7 @@ impl Node {
                 .clone();
             let invalidation = inner.app_state.record_local_telemetry_fix(&position)?;
             emit_projection_invalidation(&inner.bus, invalidation);
+            inner.app_state.record_local_observer_fix(&position)?;
             let summary = inner.app_state.bump_projection_revision(
                 ProjectionScope::OperationalSummary {},
                 None,

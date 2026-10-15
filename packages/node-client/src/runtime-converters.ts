@@ -20,6 +20,9 @@ export function toPluginCapabilities(value: unknown): PluginCapabilityRecord {
     lxmfReceive: Boolean(raw.lxmfReceive ?? raw.lxmf_receive),
     notificationsRaise: Boolean(raw.notificationsRaise ?? raw.notifications_raise),
     operationalRead: Boolean(raw.operationalRead ?? raw.operational_read),
+    mapMarkersRead: Boolean(raw.mapMarkersRead ?? raw.map_markers_read),
+    mapMarkersWrite: Boolean(raw.mapMarkersWrite ?? raw.map_markers_write),
+    mapObserverRead: Boolean(raw.mapObserverRead ?? raw.map_observer_read),
   };
 }
 

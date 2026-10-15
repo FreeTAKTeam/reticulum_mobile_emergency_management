@@ -1,5 +1,5 @@
 impl Node {
-    fn with_app_state<T>(
+    pub(crate) fn with_app_state<T>(
         &self,
         operation: impl FnOnce(&AppStateStore, &EventBus) -> Result<T, NodeError>,
     ) -> Result<T, NodeError> {
