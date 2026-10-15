@@ -31,3 +31,6 @@ docs/rem-capability-infographic.pdf
 docs/rem-capability-infographic.png
 docs/rem-capability-infographic.svg
 tools/generate-rem-infographic.mjs
+
+# Local release builds and screenshots
+output/
