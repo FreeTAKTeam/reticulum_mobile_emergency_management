@@ -701,7 +701,7 @@ This avoids relying on a globally installed `uniffi-bindgen` executable, which i
 ## Networking and shared map dependencies
 
 The compiled networking stack is pinned to LXMF-rs `v0.14.0` at
-`7822b608f2cd2debd8170895bc580d01dda5356e` (REM 1.4.1 shipped with `v0.13.0`
+`7822b608f2cd2debd8170895bc580d01dda5356e` (REM 1.5.0 ships with `v0.14.0`; REM 1.4.1 shipped with `v0.13.0`
 at `fbc75b86e15550722923b366398f0a4116182894`; v0.14.0 keeps the Reticulum
 and LXMF wire formats and moves to `rusqlite` 0.40). REM logs the upstream
 `OutboundRejected` Resource event distinctly from local cancellation and
@@ -711,7 +711,7 @@ claim full 1.5.5 parity.
 
 Map objects (point markers, the symbol catalog and the Telemeter receive
 contract) come from the shared RCH crate `r3akt-map-core`, pinned to RCH
-`3b39694e4536199d1ff40c9d88a92dd0ea2533a6` with its `sqlite` feature
+`19de27f419373c543fe6154aab2a3c027938b65d` with its `sqlite` feature
 ([REM #280](https://github.com/FreeTAKTeam/reticulum_mobile_emergency_management/issues/280),
 [RCH #259](https://github.com/FreeTAKTeam/Reticulum-Community-Hub/issues/259)).
 REM must not re-implement marker validation, symbols, idempotency or marker

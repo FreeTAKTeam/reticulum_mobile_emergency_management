@@ -34,3 +34,4 @@ tools/generate-rem-infographic.mjs
 
 # Local release builds and screenshots
 output/
+.release-work/

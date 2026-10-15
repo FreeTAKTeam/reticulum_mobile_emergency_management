@@ -38,7 +38,7 @@ lxmf-runtime = { path = "../../../LXMF-rs/crates/libs/lxmf-runtime" }
 rmp-serde = "1"
 rmpv = "1"
 # Shared RCH map objects (markers, symbol catalog, Telemeter contract); see docs/architecture.md.
-r3akt-map-core = { git = "https://github.com/FreeTAKTeam/Reticulum-Community-Hub.git", rev = "3b39694e4536199d1ff40c9d88a92dd0ea2533a6", features = ["sqlite"] }
+r3akt-map-core = { git = "https://github.com/FreeTAKTeam/Reticulum-Community-Hub.git", rev = "19de27f419373c543fe6154aab2a3c027938b65d", features = ["sqlite"] }
 rand_core = { version = "0.6.4", features = ["getrandom"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
