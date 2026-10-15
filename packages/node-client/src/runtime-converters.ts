@@ -23,6 +23,7 @@ export function toPluginCapabilities(value: unknown): PluginCapabilityRecord {
     mapMarkersRead: Boolean(raw.mapMarkersRead ?? raw.map_markers_read),
     mapMarkersWrite: Boolean(raw.mapMarkersWrite ?? raw.map_markers_write),
     mapObserverRead: Boolean(raw.mapObserverRead ?? raw.map_observer_read),
+    mapSelectionRead: Boolean(raw.mapSelectionRead ?? raw.map_selection_read),
   };
 }
 

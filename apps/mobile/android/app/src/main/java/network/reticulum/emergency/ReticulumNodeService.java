@@ -284,6 +284,18 @@ public final class ReticulumNodeService extends ReticulumBridgeServiceApi {
         return result;
     }
 
+    public String startPluginMapSessionJson(String payloadJson) throws org.json.JSONException {
+        return pluginCoordinator.startMapSession(payloadJson);
+    }
+
+    public String stopPluginMapSessionJson(String sessionId) throws org.json.JSONException {
+        return pluginCoordinator.stopMapSession(sessionId);
+    }
+
+    public String listPluginMapSessionsJson() {
+        return pluginCoordinator.listMapSessions();
+    }
+
     public String listPluginSensorsJson() {
         return pluginCoordinator.listSensors();
     }

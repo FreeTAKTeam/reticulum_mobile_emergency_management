@@ -109,6 +109,68 @@ public final class PluginCoordinator implements AutoCloseable {
         }
     }
 
+    /**
+     * Starts an operator-selected map session. Only a running plugin can take one; the native
+     * runtime validates the selection, the plugin's API level and its granted capability.
+     */
+    public String startMapSession(String payloadJson) throws JSONException {
+        final String pluginId = new JSONObject(payloadJson).optString("pluginId", "");
+        final PluginConnection connection;
+        synchronized (this) {
+            connection = connections.get(pluginId);
+        }
+        if (connection == null || connection.service == null) {
+            throw new IllegalStateException("The plugin is not running.");
+        }
+        final String session = ReticulumBridge.startPluginMapSessionJson(payloadJson);
+        drainMapSessionEvents();
+        return session;
+    }
+
+    public String stopMapSession(String sessionId) throws JSONException {
+        final String result = ReticulumBridge.stopPluginMapSessionsJson(
+            PluginMapSessionRelay.operatorStopRequest(sessionId)
+        );
+        drainMapSessionEvents();
+        return result;
+    }
+
+    public String listMapSessions() {
+        return ReticulumBridge.listPluginMapSessionsJson();
+    }
+
+    /** Delivers queued native map session events on the plugin executor. */
+    public void drainMapSessionEvents() {
+        executor.execute(() -> {
+            try {
+                PluginMapSessionRelay.deliverPending(
+                    ReticulumBridge::drainPluginMapSessionEventsJson,
+                    this::deliverHostEvent
+                );
+            } catch (JSONException error) {
+                Log.w(TAG, "Invalid plugin map session events", error);
+            }
+        });
+    }
+
+    private boolean deliverHostEvent(String pluginId, String eventJson) {
+        final PluginConnection connection;
+        synchronized (this) {
+            connection = connections.get(pluginId);
+        }
+        final IRemPluginService service = connection == null ? null : connection.service;
+        if (service == null) {
+            return false;
+        }
+        try {
+            service.onHostEvent(eventJson);
+            return true;
+        } catch (RemoteException error) {
+            mainHandler.post(() -> connection.fail("Host event delivery failed: " + error.getMessage()));
+            return false;
+        }
+    }
+
     public Intent configurationIntent(String pluginId) {
         final String raw = ReticulumBridge.listPluginsJson();
         if (raw == null) {
@@ -230,13 +292,18 @@ public final class PluginCoordinator implements AutoCloseable {
                     || descriptor.optInt("apiMinor", -1) != plugin.optInt("apiMinor", -1)) {
                     throw new SecurityException("Binder descriptor does not match manifest identity");
                 }
+                final int apiMinor = PluginProtocol.negotiateApiMinor(
+                    PluginProtocol.API_MINOR,
+                    descriptor.optInt("apiMajor", -1),
+                    descriptor.optInt("apiMinor", -1)
+                );
+                if (apiMinor < 0) {
+                    throw new SecurityException("Plugin API is newer than this REM host");
+                }
                 final JSONObject session = new JSONObject()
                     .put("protocolVersion", PluginProtocol.API_MAJOR)
                     .put("apiMajor", PluginProtocol.API_MAJOR)
-                    .put(
-                        "apiMinor",
-                        Math.min(PluginProtocol.API_MINOR, descriptor.optInt("apiMinor", 0))
-                    )
+                    .put("apiMinor", apiMinor)
                     .put("sessionId", UUID.randomUUID().toString())
                     .put("hostPackage", context.getPackageName());
                 service.start(new HostCallback(this), session.toString());
@@ -263,6 +330,7 @@ public final class PluginCoordinator implements AutoCloseable {
         }
 
         private void cleanup(String reason) {
+            endMapSessions(reason);
             if (service != null) {
                 try {
                     service.stop(reason);
@@ -279,6 +347,17 @@ public final class PluginCoordinator implements AutoCloseable {
             }
             bound = false;
             service = null;
+        }
+
+        /** Sessions never outlive the plugin connection that received them. */
+        private void endMapSessions(String reason) {
+            try {
+                ReticulumBridge.stopPluginMapSessionsJson(
+                    PluginMapSessionRelay.connectionLostStopRequest(pluginId, reason)
+                );
+            } catch (JSONException error) {
+                Log.w(TAG, "Unable to end map sessions for " + pluginId, error);
+            }
         }
 
         void fail(String message) {

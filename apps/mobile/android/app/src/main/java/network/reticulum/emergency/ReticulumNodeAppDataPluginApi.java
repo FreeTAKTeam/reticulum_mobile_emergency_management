@@ -108,6 +108,58 @@ public abstract class ReticulumNodeAppDataPluginApi extends ReticulumNodeTranspo
     }
 
     @PluginMethod
+    public void listPluginMapSessions(PluginCall call) {
+        runStringServiceCall(
+            call,
+            "Failed to list plugin map sessions.",
+            "Native plugin map session JSON parse failed.",
+            ReticulumNodeService::listPluginMapSessionsJson
+        );
+    }
+
+    @PluginMethod
+    public void startPluginMapSession(PluginCall call) {
+        final String pluginId = call.getString("pluginId", "");
+        final com.getcapacitor.JSArray objects = call.getArray("objectDestinationHashes");
+        if (pluginId.isEmpty() || objects == null || objects.length() == 0) {
+            call.reject("pluginId and objectDestinationHashes are required.");
+            return;
+        }
+        final JSObject payload = new JSObject();
+        payload.put("pluginId", pluginId);
+        payload.put("objectDestinationHashes", objects);
+        executeBridgeTask(() -> {
+            try {
+                final String raw = awaitService().startPluginMapSessionJson(payload.toString());
+                if (raw == null || raw.isEmpty()) {
+                    rejectFromNative(call, "Failed to start plugin map session.");
+                    return;
+                }
+                call.resolve(new JSObject(raw));
+            } catch (IllegalStateException error) {
+                call.reject(error.getMessage());
+            } catch (Exception error) {
+                call.reject("Failed to start plugin map session.", error);
+            }
+        });
+    }
+
+    @PluginMethod
+    public void stopPluginMapSession(PluginCall call) {
+        final String sessionId = call.getString("sessionId", "");
+        if (sessionId.isEmpty()) {
+            call.reject("sessionId is required.");
+            return;
+        }
+        runStringServiceCall(
+            call,
+            "Failed to stop plugin map session.",
+            "Native plugin map session JSON parse failed.",
+            service -> service.stopPluginMapSessionJson(sessionId)
+        );
+    }
+
+    @PluginMethod
     public void openPluginConfiguration(PluginCall call) {
         final String pluginId = call.getString("pluginId", "");
         if (pluginId.isEmpty()) {

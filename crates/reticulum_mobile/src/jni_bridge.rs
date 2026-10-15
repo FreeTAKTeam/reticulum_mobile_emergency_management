@@ -19,6 +19,7 @@ include!("jni_bridge/mission_plugin_api.rs");
 include!("jni_bridge/hil_api.rs");
 include!("jni_bridge/sos_telemetry_api.rs");
 include!("jni_bridge/plugin_map_api.rs");
+include!("jni_bridge/plugin_map_session_api.rs");
 include!("jni_bridge/plugin_host_api.rs");
 include!("jni_bridge/plugin_decode_api.rs");
 include!("jni_bridge/map_markers_api.rs");

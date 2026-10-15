@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <queries><package android:name="${remHostPackage}" /></queries>
+    <application android:label="REM Map Fixture" android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        <service android:name=".MapFixturePluginService" android:exported="true">
+            <intent-filter><action android:name="network.reticulum.emergency.PLUGIN_V1" /></intent-filter>
+            <meta-data android:name="rem.plugin.id" android:value="org.freetakteam.rem.plugin.map_fixture" />
+            <meta-data android:name="rem.plugin.displayName" android:value="Map Fixture" />
+            <meta-data android:name="rem.plugin.version" android:value="1.0.0" />
+            <meta-data android:name="rem.plugin.apiMajor" android:value="1" />
+            <meta-data android:name="rem.plugin.apiMinor" android:value="3" />
+            <meta-data android:name="rem.plugin.capabilities" android:value="{&quot;mapMarkersRead&quot;:true,&quot;mapMarkersWrite&quot;:true,&quot;mapObserverRead&quot;:true,&quot;mapSelectionRead&quot;:true}" />
+            <meta-data android:name="rem.plugin.messages" android:value="[]" />
+        </service>
+    </application>
+</manifest>

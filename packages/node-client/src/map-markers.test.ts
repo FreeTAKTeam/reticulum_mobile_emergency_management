@@ -8,6 +8,9 @@ const plugin = vi.hoisted(() => ({
   renameMapMarker: vi.fn(),
   moveMapMarker: vi.fn(),
   deleteMapMarker: vi.fn(),
+  listPluginMapSessions: vi.fn(),
+  startPluginMapSession: vi.fn(),
+  stopPluginMapSession: vi.fn(),
 }));
 
 vi.mock("./capacitor-plugin", () => ({
@@ -81,6 +84,40 @@ describe("Capacitor map marker client", () => {
     await expect(client.deleteMapMarker("a1b2")).resolves.toBe(true);
     await expect(client.listMapMarkers()).resolves.toHaveLength(1);
     await client.dispose();
+  });
+});
+
+describe("Capacitor plugin map session client", () => {
+  const nativeSession = {
+    sessionId: "s-1",
+    pluginId: "org.example.rangefinder",
+    objectDestinationHashes: ["a1b2", 7],
+    startedAtMs: 30,
+    startedBy: "operator",
+  };
+
+  it("starts, lists and stops operator-selected sessions natively", async () => {
+    plugin.startPluginMapSession.mockResolvedValue(nativeSession);
+    plugin.listPluginMapSessions.mockResolvedValue({ items: [nativeSession] });
+    plugin.stopPluginMapSession.mockResolvedValue({ stopped: true });
+    const client = new CapacitorReticulumNodeClient();
+
+    const session = await client.startPluginMapSession("org.example.rangefinder", ["a1b2"]);
+    expect(plugin.startPluginMapSession).toHaveBeenCalledWith({
+      pluginId: "org.example.rangefinder",
+      objectDestinationHashes: ["a1b2"],
+    });
+    expect(session.objectDestinationHashes).toEqual(["a1b2"]);
+    await expect(client.listPluginMapSessions()).resolves.toHaveLength(1);
+    await expect(client.stopPluginMapSession("s-1")).resolves.toBe(true);
+    expect(plugin.stopPluginMapSession).toHaveBeenCalledWith({ sessionId: "s-1" });
+    await client.dispose();
+  });
+
+  it("has no plugin sessions in the web test double", async () => {
+    const client = new MockReticulumNodeClient();
+    await expect(client.listPluginMapSessions()).resolves.toEqual([]);
+    await expect(client.startPluginMapSession("p", ["a1b2"])).rejects.toThrow("Android");
   });
 });
 

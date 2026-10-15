@@ -78,6 +78,7 @@ fn intersect_capabilities(granted: &mut PluginCapabilityRecord, declared: &Plugi
     granted.map_markers_read &= declared.map_markers_read;
     granted.map_markers_write &= declared.map_markers_write;
     granted.map_observer_read &= declared.map_observer_read;
+    granted.map_selection_read &= declared.map_selection_read;
 }
 
 fn validate_sensor_sample(sample: &PluginSensorSampleRequest) -> Result<(), NodeError> {

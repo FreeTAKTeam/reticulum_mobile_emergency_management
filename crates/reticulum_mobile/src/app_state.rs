@@ -305,6 +305,7 @@ include!("app_state/messaging.rs");
 include!("app_state/telemetry_sos.rs");
 include!("app_state/map_markers.rs");
 include!("app_state/plugin_map.rs");
+include!("app_state/plugin_map_sessions.rs");
 include!("app_state/persistence.rs");
 include!("app_state/plugin_helpers.rs");
 include!("app_state/conversation_helpers.rs");
@@ -322,4 +323,5 @@ mod tests {
     include!("app_state/tests/peers.rs");
     include!("app_state/tests/emergency.rs");
     include!("app_state/tests/map_markers.rs");
+    include!("app_state/tests/plugin_map_sessions.rs");
 }

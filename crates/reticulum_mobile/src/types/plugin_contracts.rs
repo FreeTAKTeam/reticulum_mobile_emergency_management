@@ -34,6 +34,10 @@ pub struct PluginCapabilityRecord {
     /// API 1.2: read this device's own location fix.
     #[serde(default)]
     pub map_observer_read: bool,
+    /// API 1.3: read map objects the operator explicitly selected for this
+    /// plugin in a map session, and receive that session's events.
+    #[serde(default)]
+    pub map_selection_read: bool,
 }
 
 impl PluginCapabilityRecord {
@@ -47,6 +51,7 @@ impl PluginCapabilityRecord {
             && (!self.map_markers_read || declared.map_markers_read)
             && (!self.map_markers_write || declared.map_markers_write)
             && (!self.map_observer_read || declared.map_observer_read)
+            && (!self.map_selection_read || declared.map_selection_read)
     }
 }
 
@@ -160,6 +165,18 @@ pub struct PluginLxmfSendRequest {
     pub body_utf8: String,
     pub title: Option<String>,
     pub send_mode: SendMode,
+}
+
+/// An operator-started map selection session (plugin API 1.3). Native-only:
+/// crosses the bridge as JSON, not through UniFFI.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginMapSessionRecord {
+    pub session_id: String,
+    pub plugin_id: String,
+    pub object_destination_hashes: Vec<String>,
+    pub started_at_ms: u64,
+    pub started_by: String,
 }
 
 fn default_plugin_sensor_origin() -> String {

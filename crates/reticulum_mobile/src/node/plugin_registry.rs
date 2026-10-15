@@ -13,6 +13,7 @@ impl Node {
             .app_state
             .sync_discovered_plugins(plugins.as_slice())?;
         emit_projection_invalidation(&inner.bus, invalidation);
+        reconcile_plugin_map_sessions(&inner.app_state, &inner.bus)?;
         inner.app_state.list_plugins()
     }
 
@@ -26,6 +27,7 @@ impl Node {
             .app_state
             .approve_plugin_publisher(plugin_id, display_name)?;
         emit_projection_invalidation(&inner.bus, invalidation);
+        reconcile_plugin_map_sessions(&inner.app_state, &inner.bus)?;
         Ok(())
     }
 
@@ -33,6 +35,7 @@ impl Node {
         let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         let invalidation = inner.app_state.revoke_plugin_publisher(fingerprint)?;
         emit_projection_invalidation(&inner.bus, invalidation);
+        reconcile_plugin_map_sessions(&inner.app_state, &inner.bus)?;
         Ok(())
     }
 
@@ -40,6 +43,7 @@ impl Node {
         let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         let invalidation = inner.app_state.set_plugin_enabled(plugin_id, enabled)?;
         emit_projection_invalidation(&inner.bus, invalidation);
+        reconcile_plugin_map_sessions(&inner.app_state, &inner.bus)?;
         Ok(())
     }
 
@@ -53,6 +57,7 @@ impl Node {
             .app_state
             .grant_plugin_capabilities(plugin_id, capabilities)?;
         emit_projection_invalidation(&inner.bus, invalidation);
+        reconcile_plugin_map_sessions(&inner.app_state, &inner.bus)?;
         Ok(())
     }
 
@@ -85,4 +90,13 @@ impl Node {
         emit_projection_invalidation(&inner.bus, invalidation);
         Ok(record)
     }
+}
+
+/// Ends map sessions of plugins that just lost eligibility (disabled,
+/// removed, untrusted, or `mapSelectionRead` revoked).
+fn reconcile_plugin_map_sessions(app_state: &AppStateStore, bus: &EventBus) -> Result<(), NodeError> {
+    if let Some(invalidation) = app_state.reconcile_plugin_map_sessions()? {
+        emit_projection_invalidation(bus, invalidation);
+    }
+    Ok(())
 }

@@ -1,4 +1,4 @@
-import { createReticulumNodeClient, type MapMarkerClient, type ReticulumNodeClient } from "@reticulum/node-client";
+import { createReticulumNodeClient, type MapMarkerClient, type PluginMapSessionClient, type ReticulumNodeClient } from "@reticulum/node-client";
 import { defineStore } from "pinia";
 
 import { loadUiSettingsProjection } from "../utils/legacyState";
@@ -355,10 +355,19 @@ export const useNodeStore = defineStore("node", () => {
     }
     return client.value;
   }
+  /** Plugin map sessions are native state; the UI only starts, lists and stops them. */
+  async function pluginMapSessionClient(): Promise<PluginMapSessionClient> {
+    await init();
+    if (!client.value) {
+      throw new Error("Node client is not initialized.");
+    }
+    return client.value;
+  }
   return {
     ...createNodeStoreApi(
       state, logging, peers, projections, hub, selectors, lifecycle, actions, transport, community,
     ),
     mapMarkerClient,
+    pluginMapSessionClient,
   };
 });

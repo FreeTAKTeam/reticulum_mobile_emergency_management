@@ -166,6 +166,17 @@ impl AppStateStore {
                     created_at_ms INTEGER NOT NULL,
                     PRIMARY KEY (plugin_id, object_destination_hash)
                 );
+                CREATE TABLE IF NOT EXISTS plugin_map_sessions (
+                    session_id TEXT PRIMARY KEY,
+                    plugin_id TEXT NOT NULL,
+                    json TEXT NOT NULL,
+                    started_at_ms INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS plugin_map_session_events (
+                    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                    plugin_id TEXT NOT NULL,
+                    event_json TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS metadata (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
@@ -176,6 +187,8 @@ impl AppStateStore {
         // Marker tables use the shared RCH layout owned by r3akt-map-core.
         r3akt_map_core::sqlite::ensure_schema(&connection)
             .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
+        // Plugin map sessions never outlive the runtime that started them.
+        Self::clear_plugin_map_sessions(&connection)?;
         self.repair_message_conversations(&connection, &ConversationPeerResolver::default())?;
         Ok(())
     }

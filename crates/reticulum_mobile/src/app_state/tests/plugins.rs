@@ -114,7 +114,7 @@ fn plugin_api_minor_newer_than_host_is_incompatible() {
     let storage_dir = test_storage_dir("plugin-api-minor");
     let store = AppStateStore::new(storage_dir.to_str()).expect("store");
     let mut plugin = discovered_plugin("ef".repeat(32).as_str());
-    plugin.api_minor = 3;
+    plugin.api_minor = 4;
     store.sync_discovered_plugins(&[plugin]).expect("discover plugin");
     let stored = store
         .get_plugin("org.freetakteam.rem.plugin.test")

@@ -103,7 +103,9 @@ jobs:
             :ble-heart-rate-plugin:testDebugUnitTest \
             :ble-heart-rate-plugin:assembleDebug \
             :watch-status-plugin:testDebugUnitTest \
-            :watch-status-plugin:assembleDebug
+            :watch-status-plugin:assembleDebug \
+            :map-fixture-plugin:testDebugUnitTest \
+            :map-fixture-plugin:assembleDebug
       - name: Enable emulator hardware acceleration
         run: sudo chmod 666 /dev/kvm || true
       - name: Exercise plugin discovery and Binder integration
@@ -114,9 +116,10 @@ jobs:
           script: |
             adb install -r rem/apps/mobile/android/plugin-test-fixture/build/outputs/apk/debug/plugin-test-fixture-debug.apk
             adb install -r rem/plugins/watch-status/android/build/outputs/apk/debug/watch-status-plugin-debug.apk
+            adb install -r rem/plugins/map-fixture/android/build/outputs/apk/debug/map-fixture-plugin-debug.apk
             bash rem/apps/mobile/android/gradlew -p rem/apps/mobile/android :app:installDebug :app:installDebugAndroidTest
             adb logcat -c
-            adb shell am instrument -w -r -e class network.reticulum.emergency.plugins.PluginBinderIntegrationTest network.reticulum.emergency.test/androidx.test.runner.AndroidJUnitRunner || { adb logcat -d '*:E'; exit 1; }
+            adb shell am instrument -w -r -e class network.reticulum.emergency.plugins.PluginBinderIntegrationTest,network.reticulum.emergency.plugins.PluginMapFixtureIntegrationTest network.reticulum.emergency.test/androidx.test.runner.AndroidJUnitRunner || { adb logcat -d '*:E'; exit 1; }
       - uses: actions/upload-artifact@v7
         with:
           name: rem-plugin-sdk

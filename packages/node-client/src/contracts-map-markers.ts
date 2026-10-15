@@ -41,6 +41,24 @@ export interface MapMarkerCreateResult {
   created: boolean;
 }
 
+/**
+ * An operator-started plugin map session (plugin API 1.3): the plugin may read only these
+ * selected objects until the session stops. The native runtime owns every session rule.
+ */
+export interface PluginMapSessionRecord {
+  sessionId: string;
+  pluginId: string;
+  objectDestinationHashes: string[];
+  startedAtMs: number;
+  startedBy: string;
+}
+
+export interface PluginMapSessionClient {
+  listPluginMapSessions(): Promise<PluginMapSessionRecord[]>;
+  startPluginMapSession(pluginId: string, objectDestinationHashes: string[]): Promise<PluginMapSessionRecord>;
+  stopPluginMapSession(sessionId: string): Promise<boolean>;
+}
+
 export interface MapMarkerClient {
   listMapMarkerSymbols(): Promise<MapMarkerSymbolRecord[]>;
   listMapMarkers(): Promise<MapMarkerRecord[]>;

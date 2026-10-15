@@ -67,6 +67,12 @@ export interface ReticulumNodePlugin {
     request: { objectDestinationHash: string; lat: number; lon: number };
   }): Promise<Record<string, unknown>>;
   deleteMapMarker(options: { objectDestinationHash: string }): Promise<{ deleted?: boolean }>;
+  listPluginMapSessions(): Promise<{ items?: unknown }>;
+  startPluginMapSession(options: {
+    pluginId: string;
+    objectDestinationHashes: string[];
+  }): Promise<Record<string, unknown>>;
+  stopPluginMapSession(options: { sessionId: string }): Promise<{ stopped?: boolean }>;
   listPeers(): Promise<{ items: Record<string, unknown>[] }>;
   listConversations(): Promise<{ items: Record<string, unknown>[] }>;
   listMessages(options: { conversationId?: string }): Promise<{ items: Record<string, unknown>[] }>;

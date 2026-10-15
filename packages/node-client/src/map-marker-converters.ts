@@ -1,4 +1,4 @@
-import type { MapMarkerRecord, MapMarkerSymbolRecord } from "./contracts-map-markers";
+import type { MapMarkerRecord, MapMarkerSymbolRecord, PluginMapSessionRecord } from "./contracts-map-markers";
 
 function text(value: unknown): string {
   return typeof value === "string" ? value : "";
@@ -56,4 +56,15 @@ export function toMapMarkerFromResult(result: Record<string, unknown>): MapMarke
   return toMapMarkerRecord(typeof marker === "object" && marker !== null
     ? marker as Record<string, unknown>
     : {});
+}
+
+export function toPluginMapSessionRecord(raw: Record<string, unknown>): PluginMapSessionRecord {
+  const ids = Array.isArray(raw.objectDestinationHashes) ? raw.objectDestinationHashes : [];
+  return {
+    sessionId: text(raw.sessionId),
+    pluginId: text(raw.pluginId),
+    objectDestinationHashes: ids.filter((id): id is string => typeof id === "string"),
+    startedAtMs: finiteNumber(raw.startedAtMs),
+    startedBy: text(raw.startedBy),
+  };
 }
