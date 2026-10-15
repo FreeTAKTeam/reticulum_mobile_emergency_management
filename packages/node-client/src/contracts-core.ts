@@ -98,6 +98,9 @@ export interface PluginCapabilityRecord {
   lxmfReceive: boolean;
   notificationsRaise: boolean;
   operationalRead: boolean;
+  mapMarkersRead: boolean;
+  mapMarkersWrite: boolean;
+  mapObserverRead: boolean;
 }
 
 export interface PluginMessageDescriptorRecord {

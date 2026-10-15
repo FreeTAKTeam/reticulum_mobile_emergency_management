@@ -16,6 +16,9 @@ const capabilityDefinitions: Array<{
   { key: "lxmfReceive", label: "Receive LXMF" },
   { key: "notificationsRaise", label: "Raise notifications" },
   { key: "operationalRead", label: "Read operational status" },
+  { key: "mapMarkersRead", label: "Read its own map markers" },
+  { key: "mapMarkersWrite", label: "Add and edit its own map markers" },
+  { key: "mapObserverRead", label: "Read this device's location" },
 ];
 
 async function runPluginAction(key: string, action: () => Promise<void>): Promise<void> {

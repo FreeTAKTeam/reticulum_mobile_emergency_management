@@ -160,6 +160,12 @@ impl AppStateStore {
                     revision INTEGER NOT NULL,
                     updated_at_ms INTEGER NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS plugin_map_markers (
+                    plugin_id TEXT NOT NULL,
+                    object_destination_hash TEXT NOT NULL,
+                    created_at_ms INTEGER NOT NULL,
+                    PRIMARY KEY (plugin_id, object_destination_hash)
+                );
                 CREATE TABLE IF NOT EXISTS metadata (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL

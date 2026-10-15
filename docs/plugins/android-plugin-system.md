@@ -50,6 +50,23 @@ request returns the current node status, operational summary, EAM readiness, lat
 and latest telemetry position. The operation is rejected unless the plugin declares and is granted
 that capability.
 
+API 1.2 adds map capabilities, declared as `mapMarkersRead`, `mapMarkersWrite`, and
+`mapObserverRead` in `rem.plugin.capabilities`. Plugins create and edit ordinary shared markers
+through the same native marker service as the REM UI, but can only read or change markers they
+created themselves:
+
+- `map.symbols.list` (read or write): available marker symbols.
+- `map.markers.create` (write): `idempotencyKey`, `symbol`, `lat`, `lon`, and optional `name`,
+  `category`, `markerType`, `notes`. Replaying the
+  same plugin-scoped idempotency key returns the existing marker.
+- `map.markers.get`, `map.markers.list` (read): own markers; `list` takes `limit` (1-50, default 25).
+- `map.markers.update`, `map.markers.position.update`, `map.markers.delete` (write): own markers
+  only; other markers answer `NotFound`.
+- `map.observer.snapshot` (`mapObserverRead`): this device's latest location fix only.
+
+Map operations require API minor `2` or newer. Denied requests answer `PermissionDenied`; invalid
+payloads answer `InvalidRequest` with the marker service's validation message.
+
 ## Lifecycle and requests
 
 Trusted, enabled plugins bind when the REM node starts and remain bound while the foreground node

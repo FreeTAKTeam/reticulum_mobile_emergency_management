@@ -57,6 +57,15 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_handlePl
         }
     };
     let node = ensure_node_or_return!(&mut guard);
+    let map_result = handle_plugin_map_operation(
+        &node,
+        input.plugin_id.as_str(),
+        input.operation.as_str(),
+        &input.payload,
+    );
+    let response = if let Some(map_result) = map_result {
+        plugin_map_response_json(input.request_id.as_str(), map_result)
+    } else {
     let result = match input.operation.as_str() {
         "sensor.publish" => serde_json::from_value::<PluginSensorSampleRequest>(input.payload)
             .map_err(|error| crate::error_context::contextual_node_error(NodeError::InvalidConfig {}, error))
@@ -131,7 +140,8 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_handlePl
         }),
         _ => Err(NodeError::InvalidConfig {}),
     };
-    let response = plugin_host_response_json(input.request_id.as_str(), result);
+    plugin_host_response_json(input.request_id.as_str(), result)
+    };
     if plugin_host_response_within_limit(&response) {
         ok_json_result(&mut env, &response)
     } else {
