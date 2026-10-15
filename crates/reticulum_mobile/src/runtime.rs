@@ -3705,7 +3705,7 @@ fn lxmf_sdk_announce_record_from_raw(
 ) -> LxmfSdkAnnounceRecord {
     let destination_kind = destination_kind.into();
     let display_name = if destination_kind == DESTINATION_KIND_LXMF_DELIVERY {
-        display_name_from_delivery_app_data(app_data)
+        display_name_from_delivery_app_data(app_data).ok().flatten()
     } else {
         None
     };
