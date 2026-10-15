@@ -5,7 +5,7 @@ import { addInMemoryTaskRow, createInMemoryChecklistFromTemplate, deleteInMemory
 import { emptyEamReadinessSummary } from "./projection-converters";
 import { TypedEmitter } from "./typed-emitter";
 import { InMemoryMapMarkers } from "./map-marker-memory";
-import type { MapMarkerCreateRequest, MapMarkerCreateResult, MapMarkerRecord, MapMarkerSymbolRecord } from "./contracts-map-markers";
+import type { MapMarkerCreateRequest, MapMarkerCreateResult, MapMarkerRecord, MapMarkerSymbolRecord, PluginMapSessionRecord } from "./contracts-map-markers";
 
 export abstract class InMemoryProjectionClient {
   protected readonly emitter = new TypedEmitter<NodeClientEvents>();
@@ -40,6 +40,12 @@ export abstract class InMemoryProjectionClient {
     return this.mapMarkers.update(key, { lat, lon }, "marker-moved");
   }
   async deleteMapMarker(key: string): Promise<boolean> { return this.mapMarkers.delete(key); }
+  // Plugins are Android APKs; the web build has none to run sessions with.
+  async listPluginMapSessions(): Promise<PluginMapSessionRecord[]> { return []; }
+  async startPluginMapSession(): Promise<PluginMapSessionRecord> {
+    throw new Error("Plugin map sessions require the Android app.");
+  }
+  async stopPluginMapSession(): Promise<boolean> { return false; }
 
   async getPowerState(): Promise<PowerStateRecord> {
     return { charging: false, saverActive: false, updatedAtMs: 0 };

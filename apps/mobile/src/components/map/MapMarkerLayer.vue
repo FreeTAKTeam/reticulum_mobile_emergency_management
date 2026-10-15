@@ -7,10 +7,12 @@ import { computed, onBeforeUnmount, onMounted, ref, shallowRef, toRef, watch } f
 
 import { useMapMarkerPins } from "../../composables/useMapMarkerPins";
 import { useMapMarkersStore } from "../../stores/mapMarkersStore";
+import { usePluginMapSessionsStore } from "../../stores/pluginMapSessionsStore";
 import { mdiPathFor } from "../../utils/mapMarkerIcons";
 import { autoMarkerName, formatCoordinate } from "../../utils/mapMarkerPresentation";
 import MapMarkerDetailsSheet from "./MapMarkerDetailsSheet.vue";
 import MapMarkerSymbolSheet from "./MapMarkerSymbolSheet.vue";
+import PluginMapSessionList from "./PluginMapSessionList.vue";
 
 const props = defineProps<{ map: MapLibreMap | null }>();
 
@@ -22,6 +24,7 @@ type MarkerUiState =
   | { kind: "details"; key: string };
 
 const store = useMapMarkersStore();
+const sessions = usePluginMapSessionsStore();
 const state = shallowRef<MarkerUiState>({ kind: "idle" });
 const center = ref({ lat: 0, lon: 0 });
 const mapRef = toRef(props, "map");
@@ -142,6 +145,13 @@ async function remove(): Promise<void> {
   }
 }
 
+/** The operator explicitly hands this one marker to a plugin for reading. */
+function shareWithPlugin(pluginId: string): void {
+  if (selectedKey.value) {
+    void sessions.start(pluginId, [selectedKey.value]);
+  }
+}
+
 function longPress(lat: number, lon: number): void {
   if (state.value.kind !== "idle" || !store.visible) {
     return;
@@ -186,6 +196,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="map-marker-layer">
+    <PluginMapSessionList compact class="plugin-map-sessions-overlay" />
     <div v-if="aiming" class="marker-crosshair" aria-hidden="true">
       <span class="marker-crosshair-pin">
         <svg viewBox="0 0 24 24"><path :d="mdiPathFor(aimingSymbol?.mdi)" fill="currentColor" /></svg>
@@ -221,7 +232,10 @@ onBeforeUnmount(() => {
       :marker="selectedMarker"
       :symbol="store.symbolsById.get(selectedMarker.symbol)"
       :busy="store.busy"
-      :error="store.lastError"
+      :error="store.lastError || sessions.lastError"
+      :plugins="sessions.eligiblePlugins"
+      :shared-with="sessions.sessionsFor(selectedMarker.objectDestinationHash).map((session) => session.pluginId)"
+      @share="shareWithPlugin"
       @rename="rename"
       @move="startMove"
       @delete="remove"

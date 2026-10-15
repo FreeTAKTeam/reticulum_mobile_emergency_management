@@ -93,7 +93,7 @@ impl AppStateStore {
                 PluginCapabilityRecord::default()
             };
             intersect_capabilities(&mut granted, &item.declared_capabilities);
-            let compatible = item.api_major == 1 && item.api_minor <= 2;
+            let compatible = item.api_major == 1 && item.api_minor <= PLUGIN_MAP_SESSION_API_MINOR;
             let enabled = previous.is_some_and(|plugin| plugin.enabled)
                 && same_signer
                 && trusted
@@ -117,6 +117,16 @@ impl AppStateStore {
                 updated_at_ms,
             };
             write_plugin_tx(&transaction, &record)?;
+            if previous.is_some() && !same_signer {
+                // A new signer must not inherit edit rights over markers the
+                // old one created; the shared markers themselves stay.
+                transaction
+                    .execute(
+                        "DELETE FROM plugin_map_markers WHERE plugin_id = ?1",
+                        params![record.discovered.plugin_id],
+                    )
+                    .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
+            }
         }
 
         for (plugin_id, previous) in existing {

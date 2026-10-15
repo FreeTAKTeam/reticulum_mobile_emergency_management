@@ -50,13 +50,13 @@ use crate::types::{
     MapMarkerMoveRequest, MapMarkerRecord, MapMarkerRenameRequest, MapMarkerSymbolRecord,
     MessageDirection, MessageMethod, MessageRecord, MessageState, NodeConfig, NodeError, NodeEvent,
     NodeStatus, OperationalNotice, OperationalSummary, OutboundTrafficClass, PeerRecord,
-    PluginCapabilityRecord, PluginEventRecord, PluginLxmfSendRequest, PluginSensorRecord,
-    PluginSensorSampleRequest, PowerPolicyRecord, PowerStateRecord, PreferredMapLayer,
-    ProjectionInvalidation, ProjectionScope, RuntimeReadinessSnapshot, SavedPeerRecord,
-    SendLxmfRequest, SendMode, SignedBlockOnboardingEnvelope, SosAlertRecord, SosAudioRecord,
-    SosDeviceTelemetryRecord, SosLocationRecord, SosMessageKind, SosSettingsRecord, SosState,
-    SosStatusRecord, SosTriggerSource, SyncStatus, TeamSettingsRecord, TelemetryPositionRecord,
-    TransportDeliveryState, HUB_DIRECTORY_SCHEMA_VERSION, YELLOW_TEAM_UID,
+    PluginCapabilityRecord, PluginEventRecord, PluginLxmfSendRequest, PluginMapSessionRecord,
+    PluginSensorRecord, PluginSensorSampleRequest, PowerPolicyRecord, PowerStateRecord,
+    PreferredMapLayer, ProjectionInvalidation, ProjectionScope, RuntimeReadinessSnapshot,
+    SavedPeerRecord, SendLxmfRequest, SendMode, SignedBlockOnboardingEnvelope, SosAlertRecord,
+    SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord, SosMessageKind, SosSettingsRecord,
+    SosState, SosStatusRecord, SosTriggerSource, SyncStatus, TeamSettingsRecord,
+    TelemetryPositionRecord, TransportDeliveryState, HUB_DIRECTORY_SCHEMA_VERSION, YELLOW_TEAM_UID,
 };
 
 const APP_DESTINATION_NAME: (&str, &str) = ("r3akt", "emergency");

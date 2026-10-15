@@ -145,12 +145,17 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_handlePl
     if plugin_host_response_within_limit(&response) {
         ok_json_result(&mut env, &response)
     } else {
-        ok_json_result(
-            &mut env,
-            &plugin_host_response_json(
-                input.request_id.as_str(),
-                Err(NodeError::InvalidConfig {}),
-            ),
-        )
+        ok_json_result(&mut env, &plugin_host_oversize_response(input.request_id.as_str()))
     }
+}
+
+/// Replaces a response that would exceed the 64 KiB Binder message limit.
+fn plugin_host_oversize_response(request_id: &str) -> Value {
+    plugin_map_response_json(
+        request_id,
+        Err((
+            "ResponseTooLarge",
+            "Response exceeds the 64 KiB plugin message limit".to_string(),
+        )),
+    )
 }

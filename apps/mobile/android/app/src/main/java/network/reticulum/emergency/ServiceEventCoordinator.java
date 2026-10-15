@@ -195,6 +195,12 @@ final class ServiceEventCoordinator {
                 }
             }
         }
+        if ("projectionInvalidated".equals(eventName) && pluginCoordinator != null) {
+            final String scope = payload.getString("scope", "");
+            if ("MapMarkers".equals(scope) || "Plugins".equals(scope)) {
+                pluginCoordinator.drainMapSessionEvents();
+            }
+        }
         dispatchEventToListeners(eventName, payload);
         final boolean uiForeground = foregroundState.isForeground();
         if ("sosAlertChanged".equals(eventName)) {

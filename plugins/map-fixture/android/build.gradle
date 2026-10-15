@@ -1,0 +1,33 @@
+apply plugin: 'com.android.application'
+
+def hostPackage = project.findProperty('remHostPackage')?.toString()?.trim() ?: 'network.reticulum.emergency'
+def hostFingerprints = project.findProperty('remHostFingerprints')?.toString()?.trim() ?: ''
+
+// Test fixture for the plugin map API (1.3): the reference consumer of the contract the
+// BinoX rangefinder plugin (atn-rangefinder#1) uses. Not a product; never published.
+android {
+    namespace 'org.freetakteam.rem.plugin.mapfixture'
+    compileSdk rootProject.ext.compileSdkVersion
+
+    defaultConfig {
+        applicationId 'org.freetakteam.rem.plugin.mapfixture'
+        minSdk rootProject.ext.minSdkVersion
+        targetSdk rootProject.ext.targetSdkVersion
+        versionCode 1
+        versionName '1.0.0'
+        manifestPlaceholders = [remHostPackage: hostPackage]
+        buildConfigField 'String', 'REM_HOST_PACKAGE', '"' + hostPackage + '"'
+        buildConfigField 'String', 'REM_HOST_FINGERPRINTS', '"' + hostFingerprints + '"'
+    }
+    buildFeatures { buildConfig true }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation project(':rem-plugin-sdk')
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.json:json:20240303'
+}

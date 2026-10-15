@@ -207,3 +207,10 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.plugin-map-sessions-overlay {
+  left: 0.75rem;
+  position: absolute;
+  right: 0.75rem;
+  top: calc(0.75rem + env(safe-area-inset-top, 0px));
+}

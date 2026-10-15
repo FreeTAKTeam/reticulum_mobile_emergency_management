@@ -54,7 +54,7 @@ fn persist_received_map_marker_if_present(
     for (event_type, payload) in fields_bytes.map(map_marker_events).unwrap_or_default() {
         match apply_map_marker_event(app_state, &event_type, &payload) {
             Ok(Some(invalidation)) => {
-                bus.emit(NodeEvent::ProjectionInvalidated { invalidation });
+                crate::node::emit_map_marker_invalidation(app_state, bus, invalidation);
                 applied = true;
             }
             Ok(None) => applied = true,

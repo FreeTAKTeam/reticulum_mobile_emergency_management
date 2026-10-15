@@ -3,6 +3,7 @@ import type { PluginCapabilityRecord } from "@reticulum/node-client";
 import { ref } from "vue";
 
 import { useNodeStore } from "../../stores/nodeStore";
+import PluginMapSessionList from "../map/PluginMapSessionList.vue";
 const nodeStore = useNodeStore();
 const pluginActionPending = ref("");
 
@@ -19,6 +20,7 @@ const capabilityDefinitions: Array<{
   { key: "mapMarkersRead", label: "Read its own map markers" },
   { key: "mapMarkersWrite", label: "Add and edit its own map markers" },
   { key: "mapObserverRead", label: "Read this device's location" },
+  { key: "mapSelectionRead", label: "Read map objects you share with it" },
 ];
 
 async function runPluginAction(key: string, action: () => Promise<void>): Promise<void> {
@@ -149,6 +151,7 @@ function setPluginCapability(
                 Revoke publisher
               </button>
             </div>
+            <PluginMapSessionList :plugin-id="plugin.pluginId" />
           </template>
         </article>
       </div>

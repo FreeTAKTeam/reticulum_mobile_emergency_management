@@ -101,6 +101,7 @@ export interface PluginCapabilityRecord {
   mapMarkersRead: boolean;
   mapMarkersWrite: boolean;
   mapObserverRead: boolean;
+  mapSelectionRead: boolean;
 }
 
 export interface PluginMessageDescriptorRecord {

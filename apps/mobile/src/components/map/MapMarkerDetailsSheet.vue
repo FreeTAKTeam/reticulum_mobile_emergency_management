@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { MapMarkerRecord, MapMarkerSymbolRecord } from "@reticulum/node-client";
+import type { InstalledPluginRecord, MapMarkerRecord, MapMarkerSymbolRecord } from "@reticulum/node-client";
 import { computed, ref, watch } from "vue";
 
 import { mdiPathFor } from "../../utils/mapMarkerIcons";
@@ -15,12 +15,17 @@ const props = defineProps<{
   symbol: MapMarkerSymbolRecord | undefined;
   busy: boolean;
   error: string;
+  /** Running plugins that may receive an operator-selected map session. */
+  plugins?: InstalledPluginRecord[];
+  /** Plugins that already have a session reading this marker. */
+  sharedWith?: string[];
 }>();
 
 const emit = defineEmits<{
   rename: [name: string];
   move: [];
   delete: [];
+  share: [pluginId: string];
   close: [];
 }>();
 
@@ -103,11 +108,27 @@ function submitRename(): void {
       </div>
     </div>
 
-    <div v-else class="marker-actions three">
-      <button type="button" @click="startRename">Rename</button>
-      <button type="button" @click="emit('move')">Move</button>
-      <button type="button" class="marker-danger" @click="mode = 'confirm-delete'">Delete</button>
-    </div>
+    <template v-else>
+      <div class="marker-actions three">
+        <button type="button" @click="startRename">Rename</button>
+        <button type="button" @click="emit('move')">Move</button>
+        <button type="button" class="marker-danger" @click="mode = 'confirm-delete'">Delete</button>
+      </div>
+      <div v-if="plugins?.length" class="marker-plugin-share" data-testid="marker-plugin-share">
+        <p>Let a plugin read this marker</p>
+        <div class="marker-actions">
+          <button
+            v-for="plugin in plugins"
+            :key="plugin.pluginId"
+            type="button"
+            :disabled="busy || sharedWith?.includes(plugin.pluginId)"
+            @click="emit('share', plugin.pluginId)"
+          >
+            {{ sharedWith?.includes(plugin.pluginId) ? `Shared with ${plugin.displayName}` : `Share with ${plugin.displayName}` }}
+          </button>
+        </div>
+      </div>
+    </template>
   </section>
 </template>
 
@@ -160,5 +181,15 @@ function submitRename(): void {
 
 .marker-confirm p {
   margin: 0 0 0.6rem;
+}
+
+.marker-plugin-share {
+  margin-top: 0.7rem;
+}
+
+.marker-plugin-share p {
+  color: #9cb3d6;
+  font-size: 0.86rem;
+  margin: 0;
 }
 </style>

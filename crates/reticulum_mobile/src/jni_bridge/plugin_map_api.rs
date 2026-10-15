@@ -43,12 +43,7 @@ fn plugin_map_allowed(
     capability: fn(&PluginCapabilityRecord) -> bool,
 ) -> bool {
     plugin.discovered.plugin_id == plugin_id
-        && plugin.trusted
-        && plugin.enabled
-        && plugin.discovered.api_major == 1
-        && plugin.discovered.api_minor >= PLUGIN_MAP_API_MINOR
-        && capability(&plugin.discovered.declared_capabilities)
-        && capability(&plugin.granted_capabilities)
+        && crate::app_state::plugin_map_capability_allowed(plugin, PLUGIN_MAP_API_MINOR, capability)
 }
 
 fn require_plugin_map_capability(
@@ -94,7 +89,7 @@ fn plugin_marker_idempotency_key(plugin_id: &str, key: &str) -> Result<String, (
 }
 
 fn plugin_marker_json(marker: &r3akt_map_core::MarkerRecord) -> Value {
-    marker.api_value()
+    crate::app_state::plugin_map_object_json(marker)
 }
 
 fn plugin_payload_f64(payload: &Value, key: &str) -> Result<f64, (&'static str, String)> {
@@ -140,11 +135,20 @@ fn plugin_map_marker_value(node: &Node, id: &str) -> PluginMapResult {
     Ok(json!({ "marker": plugin_marker_json(&marker) }))
 }
 
+/// The observer is always this REM device: its own identity and its own
+/// latest fix. Peer telemetry and plugin input never become the observer.
 fn plugin_map_observer_snapshot(node: &Node) -> PluginMapResult {
+    let status = node.get_status();
+    let observer = json!({
+        "kind": "localDevice",
+        "identityHex": Some(status.identity_hex).filter(|hex| !hex.is_empty()),
+        "lxmfDestinationHex": Some(status.lxmf_destination_hex).filter(|hex| !hex.is_empty()),
+    });
     let fix = node.local_observer_fix().map_err(plugin_map_node_error)?;
     Ok(match fix {
         Some(fix) => json!({
             "available": true,
+            "observer": observer,
             "source": "device",
             "datum": "WGS84",
             "lat": fix.lat,
@@ -156,7 +160,7 @@ fn plugin_map_observer_snapshot(node: &Node) -> PluginMapResult {
             "updatedAtMs": fix.updated_at_ms,
             "ageMs": now_ms().saturating_sub(fix.updated_at_ms),
         }),
-        None => json!({ "available": false }),
+        None => json!({ "available": false, "observer": observer }),
     })
 }
 
@@ -224,7 +228,7 @@ fn handle_plugin_map_operation(
             operation,
         )
         .and_then(|()| plugin_map_observer_snapshot(node)),
-        _ => return None,
+        _ => return handle_plugin_map_session_operation(node, plugin_id, operation, payload),
     };
     Some(result)
 }
@@ -376,7 +380,8 @@ mod plugin_map_tests {
     fn observer_snapshot_returns_only_the_local_device_fix() {
         let node = node_with_plugins("observer", &[(PLUGIN_A, 2)]);
         let empty = call(&node, PLUGIN_A, "map.observer.snapshot", &json!({})).expect("snapshot");
-        assert_eq!(empty, json!({ "available": false }));
+        assert_eq!(empty["available"], false);
+        assert_eq!(empty["observer"]["kind"], "localDevice", "observer identity is explicit");
 
         node.with_app_state(|app_state, _| {
             app_state.record_local_telemetry_fix(&TelemetryPositionRecord {

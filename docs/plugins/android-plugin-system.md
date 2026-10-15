@@ -50,22 +50,115 @@ request returns the current node status, operational summary, EAM readiness, lat
 and latest telemetry position. The operation is rejected unless the plugin declares and is granted
 that capability.
 
-API 1.2 adds map capabilities, declared as `mapMarkersRead`, `mapMarkersWrite`, and
-`mapObserverRead` in `rem.plugin.capabilities`. Plugins create and edit ordinary shared markers
-through the same native marker service as the REM UI, but can only read or change markers they
-created themselves:
+API 1.2 and 1.3 add the map API described in [Map API](#map-api-12-13). REM negotiates the API
+minor at bind time: the session JSON passed to `start()` carries `apiMinor`, the lower of the
+host's and the plugin's minor. A plugin declaring a newer minor than the host is `Incompatible`
+and is never bound. Plugins check `apiMinor` before using an operation that needs a newer minor.
 
-- `map.symbols.list` (read or write): available marker symbols.
-- `map.markers.create` (write): `idempotencyKey`, `symbol`, `lat`, `lon`, and optional `name`,
-  `category`, `markerType`, `notes`. Replaying the
-  same plugin-scoped idempotency key returns the existing marker.
-- `map.markers.get`, `map.markers.list` (read): own markers; `list` takes `limit` (1-50, default 25).
-- `map.markers.update`, `map.markers.position.update`, `map.markers.delete` (write): own markers
-  only; other markers answer `NotFound`.
-- `map.observer.snapshot` (`mapObserverRead`): this device's latest location fix only.
+## Map API (1.2, 1.3)
 
-Map operations require API minor `2` or newer. Denied requests answer `PermissionDenied`; invalid
-payloads answer `InvalidRequest` with the marker service's validation message.
+This section is the stable contract consumed by map plugins such as the BinoX rangefinder
+(`atn-rangefinder#1`). Within API major `1`, fields and operations here are only ever added;
+existing names, types, and semantics do not change. Map objects are ordinary shared REM markers
+handled by the same native marker service (`r3akt-map-core`) as the REM UI and replicated to
+REM peers and RCH; plugins never get a second, plugin-only marker store.
+
+### Capabilities
+
+Declare in `rem.plugin.capabilities`; the operator grants each one in REM settings. An operation
+is allowed only while the plugin is trusted, enabled, installed, compatible, and the capability is
+both declared and granted. Revoking a grant takes effect on the next request.
+
+| Capability | Minor | Allows |
+| --- | --- | --- |
+| `mapMarkersRead` | 2 | `map.symbols.list`, `map.markers.get`, `map.markers.list` on markers this plugin created |
+| `mapMarkersWrite` | 2 | `map.symbols.list`, `map.markers.create`, and update/move/delete of markers this plugin created |
+| `mapObserverRead` | 2 | `map.observer.snapshot` |
+| `mapSelectionRead` | 3 | `map.session.*` and session events for objects the operator selected |
+
+### Operations
+
+Requests use the envelope in [Lifecycle and requests](#lifecycle-and-requests). Results are in
+`result` when `ok` is `true`.
+
+- `map.symbols.list` → `{items: [{id, set, mdi?, description, tak?, category, aliases}]}`: the
+  symbol catalog shared with RCH. Use an `id` (or alias) as `symbol`.
+- `map.markers.create` → `{marker, created}`. Payload: `idempotencyKey` (required, unique per
+  observation), `symbol`, `lat`, `lon`, optional `name`, `category`, `markerType`, `notes`. The key is
+  scoped to the plugin; replaying it returns the original marker with `created: false`. The new
+  marker is a normal shared marker and replicates like one created in the UI.
+- `map.markers.get` (`objectDestinationHash`), `map.markers.list` (`limit` 1–50, default 25) →
+  markers this plugin created.
+- `map.markers.update` (`objectDestinationHash`, `name`), `map.markers.position.update`
+  (`objectDestinationHash`, `lat`, `lon`), `map.markers.delete` (`objectDestinationHash`) → own
+  markers only. Any other marker, including one shared in a session, answers `NotFound`.
+- `map.observer.snapshot` → `{available, observer, source, datum, lat, lon, alt,
+  horizontalAccuracyM, course, speed, updatedAtMs, ageMs}`, or `{available: false, observer}`.
+  `observer` is always `{kind: "localDevice", identityHex, lxmfDestinationHex}`: the fix is this REM
+  device's own latest location, never a peer's telemetry and never a value a plugin supplied. Plugins
+  cannot set the observer. Use `ageMs` and `horizontalAccuracyM` to reject stale or poor fixes.
+- `map.session.list` → `{items: [session]}`: this plugin's active sessions.
+- `map.session.objects.get` (`sessionId`) → `{session, objects}`: current snapshots of exactly the
+  objects the operator selected. Objects that no longer exist are omitted.
+- `map.session.stop` (`sessionId`) → `{stopped: true}`. No `map.session.stopped` event follows.
+
+A `session` is `{sessionId, pluginId, objectDestinationHashes, startedAtMs, startedBy}`. A marker
+object uses the RCH marker representation (`object_destination_hash`, `origin_rch`, `type`, `name`,
+`category`, `symbol`, `notes`, `position: {lat, lon}`, `time`, `stale_at`, `created_at`,
+`updated_at`) plus `textTruncated`. REM truncates `name` to 128, `notes` to 1024, and other text
+fields to 64 characters in plugin payloads and sets `textTruncated` when it did; the shared marker
+itself is unchanged.
+
+### Selected-object sessions (1.3)
+
+Plugins cannot browse the map. Only the operator starts a session, from a marker's details sheet
+(“Share with …”), which REM offers for running plugins granted `mapSelectionRead`. A session holds
+1–16 objects; a plugin has at most 4 active sessions. Active sessions are listed on the map and in
+the plugin's settings card, each with a **Stop** button.
+
+REM delivers session events through `onHostEvent` as
+`{"protocolVersion": 1, "event": "<name>", "payload": {...}}`:
+
+| Event | Payload |
+| --- | --- |
+| `map.session.started` | the `session` fields plus `objects` (snapshots of the selection) |
+| `map.session.object.updated` | `sessionId`, `reason`, `object` |
+| `map.session.object.removed` | `sessionId`, `objectDestinationHash`; the object leaves the session |
+| `map.session.stopped` | `sessionId`, `reason` |
+
+Events concern only objects in the session. `reason` for `stopped` is `operator`,
+`capability-revoked`, `plugin-disabled`, `plugin-unavailable`, or `objects-removed` (the last
+selected object was deleted). Sessions also end, without an event, when the plugin's connection
+ends: `stop()`, unbind, Binder death, node stop, or REM restart. Sessions are never restored; a
+plugin treats every unknown `sessionId` as ended and must not cache objects past `stopped` or
+`stop()`. Delivery is best effort: if REM cannot reach the plugin the event is dropped, so a plugin
+that needs current state calls `map.session.objects.get`.
+
+### Ownership and removal
+
+REM records which plugin created each marker so the plugin can edit it later. Uninstalling,
+disabling, or revoking a plugin never deletes its markers; they are shared objects that other
+devices may already hold. If the same plugin ID returns signed by a different publisher, it loses
+edit rights over the old markers.
+
+### Errors and limits
+
+| Code | Meaning |
+| --- | --- |
+| `PermissionDenied` | API minor too old, capability not declared or granted, plugin not enabled |
+| `InvalidRequest` | missing or invalid field; `message` carries the marker service's reason |
+| `NotFound` | marker not created by this plugin, or session unknown, stopped, or another plugin's |
+| `ResponseTooLarge` | the response would exceed 64 KiB |
+| `HostError` | unexpected REM failure; retry with backoff |
+
+Every request, response, and event is UTF-8 JSON of at most 64 KiB
+(`PluginProtocol.MAX_JSON_BYTES`). Bounds on session size and object text keep the largest session
+event below that limit; plugins should still reject larger messages with
+`PluginProtocol.requireJsonSize`. `PluginProtocol` provides `request(...)`, `hostEvent(...)`,
+`negotiateApiMinor(...)`, and the event name constants.
+
+[`plugins/map-fixture`](../../plugins/map-fixture/android) is the reference consumer: it creates a
+marker 100 m north of the observer fix and reads only the objects shared with it.
 
 ## Lifecycle and requests
 
@@ -121,10 +214,11 @@ matching plugin is trusted, enabled, compatible, and granted `lxmf.receive`.
 
 ```bash
 cd apps/mobile/android
-bash ./gradlew :rem-plugin-sdk:assembleDebug :plugin-test-fixture:assembleDebug testDebugUnitTest
+bash ./gradlew :rem-plugin-sdk:assembleDebug :plugin-test-fixture:assembleDebug \
+  :map-fixture-plugin:assembleDebug testDebugUnitTest
 ```
 
-The fixture APK is an integration aid, not a public example. BLE Heart Rate and Watch Status Server
+The fixture APKs are integration aids, not public examples. BLE Heart Rate and Watch Status Server
 are supported plugins built and distributed as separate APK artifacts; neither is embedded or
 automatically installed by REM.
 

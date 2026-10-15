@@ -47,7 +47,7 @@ impl Node {
     ) -> Result<MapMarkerRecord, NodeError> {
         let (marker, record) = self.with_app_state(|app_state, bus| {
             let (marker, invalidation) = app_state.rename_map_marker(&request)?;
-            emit_projection_invalidation(bus, invalidation);
+            emit_map_marker_invalidation(app_state, bus, invalidation);
             let record = app_state.map_marker_core_record(&marker.object_destination_hash)?;
             Ok((marker, record))
         })?;
@@ -60,7 +60,7 @@ impl Node {
     pub fn move_map_marker(&self, request: MapMarkerMoveRequest) -> Result<MapMarkerRecord, NodeError> {
         let (marker, record) = self.with_app_state(|app_state, bus| {
             let (marker, invalidation) = app_state.move_map_marker(&request)?;
-            emit_projection_invalidation(bus, invalidation);
+            emit_map_marker_invalidation(app_state, bus, invalidation);
             let record = app_state.map_marker_core_record(&marker.object_destination_hash)?;
             Ok((marker, record))
         })?;
@@ -76,7 +76,7 @@ impl Node {
             let record = app_state.map_marker_core_record(&object_destination_hash)?;
             let invalidation = app_state.delete_map_marker(&object_destination_hash)?;
             Ok(invalidation.map(|invalidation| {
-                emit_projection_invalidation(bus, invalidation);
+                emit_map_marker_invalidation(app_state, bus, invalidation);
                 record
             }))
         })?;
@@ -88,4 +88,23 @@ impl Node {
         }
         Ok(true)
     }
+}
+
+/// Emits a marker invalidation after queueing events for plugin map
+/// sessions that selected the changed object. Session bookkeeping never
+/// fails the marker operation itself.
+pub(crate) fn emit_map_marker_invalidation(
+    app_state: &AppStateStore,
+    bus: &EventBus,
+    invalidation: ProjectionInvalidation,
+) {
+    if let Some(key) = invalidation.key.as_deref() {
+        let reason = invalidation.reason.as_deref().unwrap_or("marker-updated");
+        match app_state.queue_plugin_map_object_change(key, reason) {
+            Ok(Some(sessions)) => emit_projection_invalidation(bus, sessions),
+            Ok(None) => {}
+            Err(error) => log::warn!("[plugins][map] session event for {key} failed: {error}"),
+        }
+    }
+    emit_projection_invalidation(bus, invalidation);
 }
