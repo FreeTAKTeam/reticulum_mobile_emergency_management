@@ -74,11 +74,11 @@ Cold blue highlights, strong borders, and instrument-style cards communicate sta
 ## Map Markers
 Point markers ("PLEs") are shared map objects using the RCH symbol catalog from `r3akt-map-core`. They are a separate layer from telemetry positions and SOS, and must stay fast to use one-handed under stress.
 
-- **Add**: a single 48px add-marker button at the bottom right of the map, inside the thumb zone. Existing indicator chips stay at the top; a "Markers" count chip joins them.
+- **Add**: a single 48px add-marker button at the bottom right of the map, inside the thumb zone. Existing indicator chips (live, stale, SOS) stay at the top; the marker count lives in the map menu rather than in a chip of its own, so the row stays short on narrow phones.
 - **Pick a symbol**: a bottom sheet lists a "Recent" row first, then every catalog symbol grouped by its RCH category, each with icon and label. Search matches catalog labels and RCH aliases (for example "car", "hospital", "uav"). Icons are the catalog's MDI names, so REM and RCH show the same symbol for the same key.
 - **Place**: a fixed crosshair pin sits at the map center; the user drags the map under it, sees live coordinates, and confirms with a verb button ("Place fire"). Long-press on the map is a shortcut that places the most recent symbol at the pressed point.
 - **No form on create**: names default to the symbol label with a running number ("Fire 3"). Rename later from the details sheet.
 - **Inspect and edit**: tapping a marker opens a details sheet (name, category, age, origin: Local or Shared) with three large actions: Rename, Move (reuses the crosshair), Delete (with confirmation).
-- **Visibility**: the layer menu has a markers on/off switch. Marker pins use bordered tactical styling distinct from telemetry and SOS markers; state is never conveyed by color alone.
+- **Visibility**: one hamburger "Map menu" button at the end of the chip row opens a single menu with the base-layer choice (Base, Satellite) and a Markers on/off switch showing the current count. Marker pins use bordered tactical styling distinct from telemetry and SOS markers; state is never conveyed by color alone.
 - **Touch**: all marker controls are at least 44px; sheets close by drag or an explicit Cancel.
 - Symbols cannot change after creation (shared RCH rule): delete and re-add instead.
