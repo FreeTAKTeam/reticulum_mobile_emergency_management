@@ -387,3 +387,68 @@ fn mission_replication_targets_use_direct_link_then_relay_for_saved_stored_route
     );
     assert_eq!(targets[1].send_mode, SendMode::PropagationOnly {});
 }
+
+/// Field repro (Pixel 7 -> Poco, 2026-10-16): the app saves a peer under its
+/// LXMF delivery hash, while the live record carries the app destination once
+/// the identity is known. The saved Inner peer has an active link, so events
+/// and mission commands must go out direct instead of relay-only (or not at
+/// all without a relay), and ahead of saved peers without a route.
+#[test]
+fn replication_targets_match_saved_peers_by_lxmf_hash_once_identity_is_known() {
+    let status = build_status_for_tests();
+    let lxmf = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let saved = vec![build_saved_peer_with_lxmf_route(
+        lxmf,
+        "cccccccccccccccccccccccccccccccc",
+    )];
+    let linked = build_peer_record("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", lxmf, true, true, true);
+    let relay = "99999999999999999999999999999999";
+
+    for active_relay in [None, Some(relay)] {
+        let events = build_runtime_event_replication_targets(
+            &status,
+            std::slice::from_ref(&linked),
+            &saved,
+            active_relay,
+            None,
+            None,
+        )
+        .expect("event targets");
+        assert_eq!(events.len(), 1, "relay={active_relay:?}");
+        assert_eq!(events[0].app_destination_hex, lxmf);
+        assert_eq!(events[0].send_mode, SendMode::Auto {});
+
+        let missions = build_mission_replication_targets(
+            &status,
+            std::slice::from_ref(&linked),
+            &saved,
+            active_relay,
+        );
+        assert_eq!(missions.len(), 1, "relay={active_relay:?}");
+        assert_eq!(missions[0].app_destination_hex, lxmf);
+        assert_eq!(missions[0].send_mode, SendMode::Auto {});
+    }
+
+    let unreachable = build_saved_peer_with_lxmf_route(
+        "dddddddddddddddddddddddddddddddd",
+        "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    );
+    let mut targets = build_runtime_event_replication_targets(
+        &status,
+        std::slice::from_ref(&linked),
+        &[unreachable, saved[0].clone()],
+        Some(relay),
+        None,
+        None,
+    )
+    .expect("event targets");
+    prioritize_replication_targets_by_route_hops(
+        targets.as_mut_slice(),
+        std::slice::from_ref(&linked),
+        &HashMap::new(),
+    );
+    assert_eq!(targets.len(), 2);
+    assert_eq!(targets[0].app_destination_hex, lxmf, "linked peer goes first");
+    assert_eq!(targets[0].send_mode, SendMode::Auto {});
+    assert_eq!(targets[1].send_mode, SendMode::PropagationOnly {});
+}

@@ -45,9 +45,25 @@ fn peer_for_target<'a>(
     target: &MissionReplicationTarget,
 ) -> Option<&'a PeerRecord> {
     peers.iter().find(|peer| {
-        normalize_hex_32(peer.destination_hex.as_str()).as_deref()
-            == Some(target.app_destination_hex.as_str())
+        peer_destination_hashes(peer).any(|hex| hex == target.app_destination_hex)
     })
+}
+
+/// The app saves a peer under its LXMF delivery hash, while the live record
+/// carries the app destination once the identity is known. Both name the same
+/// peer, so saved-peer lookups must accept either hash.
+fn peer_destination_hashes(peer: &PeerRecord) -> impl Iterator<Item = String> + '_ {
+    [Some(peer.destination_hex.as_str()), peer.lxmf_destination_hex.as_deref()]
+        .into_iter()
+        .flatten()
+        .filter_map(normalize_hex_32)
+}
+
+fn saved_destination_for_peer(
+    peer: &PeerRecord,
+    saved_destination_set: &HashSet<String>,
+) -> Option<String> {
+    peer_destination_hashes(peer).find(|hex| saved_destination_set.contains(hex.as_str()))
 }
 
 fn target_route_hops(
@@ -175,9 +191,11 @@ fn build_mission_replication_targets(
         if !seen_app_destinations.insert(app_destination_hex.clone()) {
             continue;
         }
-        if !saved_destination_set.contains(app_destination_hex.as_str()) {
+        let Some(target_destination_hex) =
+            saved_destination_for_peer(peer, &saved_destination_set)
+        else {
             continue;
-        }
+        };
         if !peer_supports_mission_traffic(peer) {
             continue;
         }
@@ -192,11 +210,11 @@ fn build_mission_replication_targets(
         let direct_ready = peer_is_mission_direct_delivery_ready(peer, has_active_relay)
             || peer_can_use_direct_when_relay_route_is_missing(peer, has_active_relay);
         if direct_ready {
-            direct_destination_set.insert(app_destination_hex.clone());
+            direct_destination_set.insert(target_destination_hex.clone());
             let sequence = direct_targets.len();
             direct_targets.push(build_prioritized_direct_target(
                 peer,
-                app_destination_hex,
+                target_destination_hex,
                 sequence,
             ));
         } else if !connectivity.current_or_stored_route_available() {

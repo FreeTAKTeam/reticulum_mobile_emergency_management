@@ -756,6 +756,11 @@ message carries two views of the change:
   `position.updated`, `deleted`) whose payload is the shared marker API
   representation.
 
+Saved peers are keyed by their LXMF delivery hash, while a live peer record
+carries the app destination once its identity is known; the planners match a
+saved peer on either hash, so a linked Inner peer is sent to directly instead
+of falling back to a relay-only send.
+
 Receivers (`runtime/map_marker_receive.rs`) apply only the event, through
 `r3akt_map_core::replica`: the same validation as local input and
 last-writer-wins on `updated_at`. Received replicas are never re-sent, and
