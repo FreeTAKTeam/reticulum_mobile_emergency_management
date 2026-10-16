@@ -214,6 +214,9 @@ export function createNodeAnnounceController(context: NodeAnnounceContext) {
       displayName: discovered?.announcedName?.trim() || fallback?.displayName?.trim() || undefined,
       lastRouteSeenAtMs: routeSeenAt > 0 ? routeSeenAt : undefined,
       lastHops: typeof hops === "number" && Number.isFinite(hops) ? hops : undefined,
+      // The operator's tier is not announce data; dropping it here let every
+      // announce from a saved peer demote it to Outer on the next persist.
+      circleTier: fallback?.circleTier,
     };
   }
 
@@ -226,7 +229,8 @@ export function createNodeAnnounceController(context: NodeAnnounceContext) {
       && left.appData === right.appData
       && left.displayName === right.displayName
       && left.lastRouteSeenAtMs === right.lastRouteSeenAtMs
-      && left.lastHops === right.lastHops;
+      && left.lastHops === right.lastHops
+      && left.circleTier === right.circleTier;
   }
 
   function refreshSavedPeerProfile(destinationRaw: string, reason: string): void {
