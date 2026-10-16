@@ -102,7 +102,6 @@
             } => {
                 spawn_send_bytes_command(
                     &command_executor,
-                    command_lane,
                     &state,
                     &bus,
                     &transport,
@@ -134,7 +133,7 @@
                         request.send_mode,
                     ),
                 );
-                command_executor.spawn(command_lane, RuntimeCommandClass::Work, resp, async move {
+                command_executor.spawn_send(resp, async move {
                     let result = async {
                         let body_bytes = request.body_utf8.as_bytes().to_vec();
                         let report = send_lxmf_with_delivery_policy(
@@ -261,7 +260,7 @@
                         "[lxmf][queue] enqueued general retry message_id={message_id_hex}",
                     ),
                 );
-                command_executor.spawn(command_lane, RuntimeCommandClass::Work, resp, async move {
+                command_executor.spawn_send(resp, async move {
                     let result = async {
                         let persisted = state
                             .app_state

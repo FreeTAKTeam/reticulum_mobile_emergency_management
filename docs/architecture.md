@@ -787,6 +787,15 @@ the runtime command queue. Delivery outcomes surface through the compiled LXMF
 runtime's own events. (REM 1.5.0 awaited each send with the 120 s command
 timeout, which held the UI for minutes per unreachable saved peer.)
 
+Inside the runtime, outbound sends (`SendBytes`, `SendLxmf`, chat retries) run
+as detached tasks (`RuntimeCommandExecutor::spawn_send`) rather than on the
+bounded `Work` worker pool. Each send is admitted by its own class permit
+(`SendTaskPermits`: for example one concurrent propagation send), so a send
+waiting for its slot must not also hold a worker. Before this, propagation
+sends to unreachable saved peers filled the 16 `Work` workers while blocked on
+the single propagation slot, and a direct marker edit to a reachable peer sat
+in the FIFO behind them for hours (observed on the Poco, 2026-10-16).
+
 Saved peers are keyed by their LXMF delivery hash, while a live peer record
 carries the app destination once its identity is known; the planners match a
 saved peer on either hash, so a linked Inner peer is sent to directly instead
