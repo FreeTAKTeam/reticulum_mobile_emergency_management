@@ -215,3 +215,65 @@ async fn priority_queue_accepts_defined_thousand_peer_burst() {
     .await
     .expect("priority completion wait should join");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sends_complete_while_the_work_lane_is_saturated() {
+    // One worker, one queue slot: a single blocked command saturates the lane.
+    let executor = RuntimeCommandExecutor::with_config(RuntimeCommandExecutorConfig {
+        control: (1, 1),
+        work: (1, 1),
+        local: (1, 1),
+        priority: (1, 1),
+        priority_control: (1, 1),
+    });
+    let release = Arc::new(tokio::sync::Notify::new());
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (blocked_tx, blocked_rx) = cb::bounded(1);
+    let blocked_release = release.clone();
+    executor.spawn(
+        RuntimeCommandLane::Normal,
+        RuntimeCommandClass::Work,
+        blocked_tx,
+        async move {
+            let _ = started_tx.send(());
+            blocked_release.notified().await;
+            Ok::<(), NodeError>(())
+        },
+    );
+    started_rx.await.expect("blocking work command should start");
+
+    // A send modelled like a propagation send to an unreachable peer: it is
+    // waiting on its own class slot, not on a worker, so it must still run.
+    let (send_tx, send_rx) = cb::bounded(1);
+    executor.spawn_send(send_tx, async move { Ok::<&str, NodeError>("sent") });
+    assert_eq!(
+        send_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("send must not wait for a work-lane worker")
+            .expect("send result"),
+        "sent"
+    );
+
+    // The same task through the work lane is still queued behind the blocker.
+    let (queued_tx, queued_rx) = cb::bounded(1);
+    executor.spawn(
+        RuntimeCommandLane::Normal,
+        RuntimeCommandClass::Work,
+        queued_tx,
+        async move { Ok::<(), NodeError>(()) },
+    );
+    assert!(
+        queued_rx.recv_timeout(Duration::from_millis(200)).is_err(),
+        "work-lane command should wait behind the blocked worker"
+    );
+
+    release.notify_waiters();
+    blocked_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("blocked command should finish once released")
+        .expect("blocked result");
+    queued_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("queued command should run after release")
+        .expect("queued result");
+}

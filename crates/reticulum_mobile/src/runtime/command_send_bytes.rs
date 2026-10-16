@@ -9,7 +9,6 @@ struct SendBytesCommand {
 
 fn spawn_send_bytes_command(
     executor: &RuntimeCommandExecutor,
-    lane: RuntimeCommandLane,
     state: &NodeRuntimeState,
     bus: &EventBus,
     transport: &Arc<Transport>,
@@ -46,7 +45,7 @@ fn spawn_send_bytes_command(
             fields_bytes.is_some(),
         ),
     );
-    executor.spawn(lane, RuntimeCommandClass::Work, resp, async move {
+    executor.spawn_send(resp, async move {
         let result = async {
             let lxmf_report = if fields_bytes.is_some() {
                 Some(

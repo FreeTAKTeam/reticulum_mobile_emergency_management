@@ -110,6 +110,23 @@ impl RuntimeCommandExecutor {
         }));
     }
 
+    /// Runs an outbound send outside the bounded worker pools. Sends are
+    /// already admitted one class at a time by `SendTaskPermits`; a send that
+    /// also held a `Work` worker while waiting for its class slot starved every
+    /// other command in that lane. On a phone with several unreachable saved
+    /// peers, propagation sends filled all workers and a direct send to a
+    /// reachable peer sat behind them for hours. Backpressure for sends stays
+    /// with the command channel capacity and the per-class permits.
+    fn spawn_send<T, F>(&self, resp: cb::Sender<Result<T, NodeError>>, task: F)
+    where
+        T: Send + 'static,
+        F: std::future::Future<Output = Result<T, NodeError>> + Send + 'static,
+    {
+        tokio::spawn(async move {
+            let _ = resp.send(task.await);
+        });
+    }
+
     fn spawn_detached<F>(&self, lane: RuntimeCommandLane, class: RuntimeCommandClass, task: F)
     where
         F: std::future::Future<Output = ()> + Send + 'static,
