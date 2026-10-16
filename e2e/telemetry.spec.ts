@@ -88,15 +88,15 @@ test("telemetry map shows live and stale markers while filtering expired fixes",
   });
   expect(bottomGap).toBeLessThanOrEqual(2);
 
-  const layerButton = page.getByRole("button", { name: "Map layer: Base" });
-  await expect(layerButton).toHaveAttribute("data-map-layer", "base");
-  await layerButton.click();
-  await expect(page.getByRole("menuitemradio", { name: "Base" })).toBeVisible();
-  await page.getByRole("menuitemradio", { name: "Satellite" }).click();
-  await expect(page.getByRole("button", { name: "Map layer: Satellite" })).toHaveAttribute(
-    "data-map-layer",
-    "satellite",
-  );
+  const mapMenuButton = page.getByRole("button", { name: "Map menu" });
+  await expect(mapMenuButton).toHaveAttribute("data-map-layer", "base");
+  await mapMenuButton.click();
+  const mapMenu = page.getByRole("menu", { name: "Map menu" });
+  await expect(mapMenu.getByRole("menuitemradio", { name: "Base" })).toBeVisible();
+  await expect(mapMenu.getByRole("menuitemcheckbox", { name: /^Markers: / })).toBeVisible();
+  await mapMenu.getByRole("menuitemradio", { name: "Satellite" }).click();
+  await expect(mapMenuButton).toHaveAttribute("data-map-layer", "satellite");
+  await expect(mapMenu).toHaveCount(0);
 
   await expect(page.locator(".telemetry-marker")).toHaveCount(2);
   await expect(page.locator('.telemetry-marker.is-live[title="Rescue-1"]')).toBeVisible();

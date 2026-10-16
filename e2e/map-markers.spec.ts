@@ -22,9 +22,16 @@ async function panMap(page: Page): Promise<void> {
   await page.keyboard.press("ArrowDown");
 }
 
+/** The marker count lives in the map menu; open it, check, and close it again. */
+async function expectMarkerCount(page: Page, label: string): Promise<void> {
+  await page.getByRole("button", { name: "Map menu" }).click();
+  await expect(page.getByRole("menuitemcheckbox", { name: label })).toBeVisible();
+  await page.getByRole("button", { name: "Map menu" }).click();
+}
+
 test("adds, edits and removes a shared-symbol marker from the map", async ({ page }) => {
   await openMap(page);
-  await expect(page.getByRole("button", { name: "Markers: 0, shown" })).toBeVisible();
+  await expectMarkerCount(page, "Markers: 0, shown");
 
   await page.getByRole("button", { name: "Add marker" }).click();
   const picker = page.getByRole("dialog", { name: "Choose a marker symbol" });
@@ -44,7 +51,7 @@ test("adds, edits and removes a shared-symbol marker from the map", async ({ pag
   await expect(details).toContainText("Incident");
   await expect(details).toContainText("Local");
   await expect(page.getByRole("button", { name: "Fire marker: Fire 1" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Markers: 1, shown" })).toBeVisible();
+  await expectMarkerCount(page, "Markers: 1, shown");
 
   await details.getByRole("button", { name: "Rename" }).click();
   await details.getByLabel("Marker name").fill("  ");
@@ -68,7 +75,7 @@ test("adds, edits and removes a shared-symbol marker from the map", async ({ pag
   await moved.getByRole("button", { name: "Keep" }).click();
   await moved.getByRole("button", { name: "Delete" }).click();
   await moved.getByRole("button", { name: "Delete" }).click();
-  await expect(page.getByRole("button", { name: "Markers: 0, shown" })).toBeVisible();
+  await expectMarkerCount(page, "Markers: 0, shown");
   await expect(page.locator(".map-marker-pin")).toHaveCount(0);
 });
 
@@ -93,9 +100,13 @@ test("recent symbols, long-press placement and the visibility toggle", async ({ 
   await page.getByRole("dialog", { name: "Marker Medic 2" }).getByRole("button", { name: "Close" }).click();
   await expect(page.locator(".map-marker-pin")).toHaveCount(2);
 
-  await page.getByRole("button", { name: "Markers: 2, shown" }).click();
+  await page.getByRole("button", { name: "Map menu" }).click();
+  const mapMenu = page.getByRole("menu", { name: "Map menu" });
+  await mapMenu.getByRole("menuitemcheckbox", { name: "Markers: 2, shown" }).click();
   await expect(page.locator(".map-marker-pin")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Add marker" })).toHaveCount(0);
-  await page.getByRole("button", { name: "Markers: 2, hidden" }).click();
+  await mapMenu.getByRole("menuitemcheckbox", { name: "Markers: 2, hidden" }).click();
   await expect(page.locator(".map-marker-pin")).toHaveCount(2);
+  await page.getByRole("button", { name: "Map menu" }).click();
+  await expect(mapMenu).toHaveCount(0);
 });

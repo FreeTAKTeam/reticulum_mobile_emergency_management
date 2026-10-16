@@ -11,7 +11,7 @@ import {
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 import { useRoute } from "vue-router";
 
-import MapMarkerChip from "../components/map/MapMarkerChip.vue";
+import MapOverlayMenu from "../components/map/MapOverlayMenu.vue";
 import MapMarkerLayer from "../components/map/MapMarkerLayer.vue";
 import { useTelemetryMapActions } from "../composables/useTelemetryMapActions";
 import { useTelemetryRouteTargets } from "../composables/useTelemetryRouteTargets";
@@ -21,7 +21,6 @@ import { useTelemetryStore } from "../stores/telemetryStore";
 import {
   buildSosPopupHtml,
   labelPlacementsFor,
-  mapLayerOptions,
   mapStyleFor,
   matchesSosRouteTarget,
   markerStatusClass as telemetryMarkerStatusClass,
@@ -70,11 +69,6 @@ let lastFocusedSosTargetKey = "";
 let lastFocusedTelemetryTargetKey = "";
 
 const selectedMapLayer = shallowRef<MapLayerId>("base");
-const layerMenuOpen = shallowRef(false);
-
-const activeMapLayerLabel = computed(
-  () => mapLayerOptions.find((option) => option.id === selectedMapLayer.value)?.label ?? "Base",
-);
 
 function markerStatusClass(position: TelemetryPosition): string {
   return telemetryMarkerStatusClass(position, telemetryStore.staleThresholdMs);
@@ -321,12 +315,7 @@ const liveTelemetryCount = computed(() =>
 const staleTelemetryCount = computed(() => telemetryStore.stalePositions.length);
 const sosAlertCount = computed(() => sosStore.activeAlerts.length);
 
-function toggleLayerMenu(): void {
-  layerMenuOpen.value = !layerMenuOpen.value;
-}
-
 function setMapLayer(layer: MapLayerId): void {
-  layerMenuOpen.value = false;
   if (selectedMapLayer.value === layer) {
     return;
   }
@@ -455,37 +444,7 @@ onBeforeUnmount(() => {
             <path d="M12 16h.01" />
           </svg>
         </span>
-        <MapMarkerChip />
-        <div class="layer-control">
-          <button
-            class="map-chip layer-chip"
-            type="button"
-            :aria-expanded="layerMenuOpen"
-            :aria-label="`Map layer: ${activeMapLayerLabel}`"
-            aria-haspopup="menu"
-            :data-map-layer="selectedMapLayer"
-            @click="toggleLayerMenu"
-          >
-            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-              <path d="M12 4 4 8l8 4 8-4-8-4Z" />
-              <path d="M4 12l8 4 8-4" />
-              <path d="M4 16l8 4 8-4" />
-            </svg>
-          </button>
-          <div v-if="layerMenuOpen" class="layer-menu" role="menu" aria-label="Map layer options">
-            <button
-              v-for="option in mapLayerOptions"
-              :key="option.id"
-              class="layer-option"
-              type="button"
-              role="menuitemradio"
-              :aria-checked="selectedMapLayer === option.id"
-              @click="setMapLayer(option.id)"
-            >
-              {{ option.label }}
-            </button>
-          </div>
-        </div>
+        <MapOverlayMenu :layer="selectedMapLayer" @select-layer="setMapLayer" />
       </div>
       <MapMarkerLayer :map="markerMap" />
     </div>

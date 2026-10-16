@@ -89,48 +89,6 @@ button.map-chip {
   color: #ff5e64;
 }
 
-.layer-control {
-  position: relative;
-}
-
-.layer-chip {
-  color: #8fcaff;
-  min-width: 2.72rem;
-  padding-inline: 0.56rem;
-}
-
-.layer-menu {
-  background: rgb(4 17 39 / 94%);
-  border: 1px solid rgb(113 175 255 / 46%);
-  border-radius: 8px;
-  box-shadow: 0 16px 34px rgb(0 0 0 / 38%);
-  display: grid;
-  gap: 0.25rem;
-  min-width: 8rem;
-  padding: 0.34rem;
-  position: absolute;
-  right: 0;
-  top: calc(100% + 0.42rem);
-}
-
-.layer-option {
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  color: #d9ecff;
-  font-family: var(--font-ui);
-  font-size: 0.82rem;
-  font-weight: 800;
-  padding: 0.46rem 0.58rem;
-  text-align: left;
-}
-
-.layer-option[aria-checked="true"] {
-  background: rgb(43 217 178 / 16%);
-  border-color: rgb(72 224 186 / 42%);
-  color: #7af4d3;
-}
-
 .map-container {
   border: 1px solid rgb(90 142 220 / 24%);
   border-radius: 12px;
