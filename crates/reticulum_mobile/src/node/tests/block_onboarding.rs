@@ -323,6 +323,23 @@ fn block_onboarding_import_is_atomic_and_preserves_local_secrets() {
     assert!(imported.transport_node_enabled);
     assert_eq!(imported.rnode.peripheral_id, "local-radio");
     assert_eq!(imported.community.household_name, "Imported Household");
+    assert_eq!(imported.teams.local_teams.iter()
+        .find(|team| team.team_uid == imported.teams.active_team_uid).unwrap()
+        .member_destinations, vec![inspection.issuer_app_destination_hex.clone()]);
+    let saved_peers = store.get_saved_peers().unwrap();
+    let issuer = &inspection.issuer_app_destination_hex;
+    assert_eq!(saved_peers.iter().find(|peer| &peer.destination_hex == issuer).unwrap().circle_tier, CircleTier::Inner {});
+    let mut snapshot = HubDirectorySnapshot::yellow_only(1);
+    snapshot.active_team_uid = imported.teams.active_team_uid.clone();
+    snapshot.local_teams = imported.teams.local_teams.clone();
+    let targets = build_runtime_mission_replication_targets(
+        &build_status_for_tests(),
+        &[build_peer_record(issuer, issuer, true, true, true)],
+        &saved_peers, None, None, Some(&snapshot),
+    ).unwrap();
+    assert_eq!(targets.len(), 1);
+    assert_eq!(&targets[0].app_destination_hex, issuer);
+
 
     let mut incomplete = request;
     incomplete.peer_tiers.pop();

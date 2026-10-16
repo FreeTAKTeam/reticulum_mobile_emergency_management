@@ -164,18 +164,24 @@ async fn desired_managed_peer_link_target_for_destination(
         .and_then(|peer| managed_peer_link_target(&peer))
 }
 
+struct ManagedPeerLinkRegistration {
+    target: ManagedPeerLinkTarget,
+    maintained: bool,
+}
+
 async fn register_desired_managed_peer_link(
     state: &NodeRuntimeState,
     destination_hex: &str,
-) -> Option<ManagedPeerLinkTarget> {
+) -> Option<ManagedPeerLinkRegistration> {
     if !has_active_reticulum_interface(state).await {
         return None;
     }
     let target = desired_managed_peer_link_target_for_destination(state, destination_hex).await?;
-    if should_maintain_peer_link(state, destination_hex).await {
+    let maintained = should_maintain_peer_link(state, destination_hex).await;
+    if maintained {
         state.managed_peer_links.add_desired(target.clone()).await;
     }
-    Some(target)
+    Some(ManagedPeerLinkRegistration { target, maintained })
 }
 
 async fn add_desired_managed_peer_link_and_schedule(

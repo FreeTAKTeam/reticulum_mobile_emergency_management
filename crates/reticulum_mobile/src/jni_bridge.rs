@@ -146,7 +146,14 @@ mod derived_tier_contract_tests {
             }
             let peer =
                 to_explicit_saved_peer_record(serde_json::from_value(input).unwrap()).unwrap();
-            assert_eq!(peer.circle_tier, CircleTier::Outer {});
+            assert_eq!(
+                peer.circle_tier,
+                if tier == Some("inner") {
+                    CircleTier::Inner {}
+                } else {
+                    CircleTier::Outer {}
+                }
+            );
         }
     }
 }

@@ -53,36 +53,7 @@ fn destination_is_active_local_member(
         return false;
     };
     let members = active_local_team_destinations(snapshot);
-    let requested = vec![destination.to_string()];
-    members
-        .iter()
-        .any(|member| normalize_hex_32(destination).as_ref() == Some(member))
-        || saved_peers.iter().any(|peer| {
-            crate::team_membership::destinations_include_peer(
-                &requested,
-                &peer.destination_hex,
-                peer.lxmf_destination_hex.as_deref(),
-                peer.identity_hex.as_deref(),
-            ) && crate::team_membership::destinations_include_peer(
-                &members,
-                &peer.destination_hex,
-                peer.lxmf_destination_hex.as_deref(),
-                peer.identity_hex.as_deref(),
-            )
-        })
-        || peers.iter().any(|peer| {
-            crate::team_membership::destinations_include_peer(
-                &requested,
-                &peer.destination_hex,
-                peer.lxmf_destination_hex.as_deref(),
-                peer.identity_hex.as_deref(),
-            ) && crate::team_membership::destinations_include_peer(
-                &members,
-                &peer.destination_hex,
-                peer.lxmf_destination_hex.as_deref(),
-                peer.identity_hex.as_deref(),
-            )
-        })
+    destination_matches_peer_set(destination, &members, saved_peers, peers)
 }
 
 fn destination_is_configured_hub(
@@ -97,29 +68,39 @@ fn destination_is_configured_hub(
     else {
         return false;
     };
-    let matches_hub = |peer_destination: &str, lxmf: Option<&str>, identity: Option<&str>| {
+    destination_matches_peer_set(destination, &[hub], saved_peers, peers)
+}
+
+fn destination_matches_peer_set(
+    destination: &str,
+    members: &[String],
+    saved_peers: &[SavedPeerRecord],
+    peers: &[PeerRecord],
+) -> bool {
+    let requested = [destination.to_string()];
+    let matches_peer = |peer_destination: &str, lxmf: Option<&str>, identity: Option<&str>| {
         crate::team_membership::destinations_include_peer(
-            std::slice::from_ref(&hub),
+            &requested,
             peer_destination,
             lxmf,
             identity,
         ) && crate::team_membership::destinations_include_peer(
-            &[destination.to_string()],
+            members,
             peer_destination,
             lxmf,
             identity,
         )
     };
-    normalize_hex_32(destination).as_deref() == Some(hub.as_str())
-        || peers.iter().any(|peer| {
-            matches_hub(
+    normalize_hex_32(destination).is_some_and(|value| members.contains(&value))
+        || saved_peers.iter().any(|peer| {
+            matches_peer(
                 &peer.destination_hex,
                 peer.lxmf_destination_hex.as_deref(),
                 peer.identity_hex.as_deref(),
             )
         })
-        || saved_peers.iter().any(|peer| {
-            matches_hub(
+        || peers.iter().any(|peer| {
+            matches_peer(
                 &peer.destination_hex,
                 peer.lxmf_destination_hex.as_deref(),
                 peer.identity_hex.as_deref(),

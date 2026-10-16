@@ -52,13 +52,14 @@ also makes the latest accepted household state available to a late joiner.
 
 The runtime derives `circle_tier` from membership in any local team: members
 project `inner`, other saved peers project `outer`. The field remains in the
-UniFFI/JNI contract for phase 1; explicit writes are ignored with a deprecation
-warning. Phase 3 removes this compatibility field after the UI cutover.
+UniFFI/JNI contract for phase 1; explicit values that disagree with membership
+are ignored with a deprecation warning. Matching projections and omitted tiers
+do not warn. Phase 3 removes this compatibility field after the UI cutover.
 
 Chat send and retry accept any destination, including unsaved discovered peers,
 contacts, and RCH roster members. Connected mode routes a roster-only peer via
-the configured hub; peers with their own route keep that route. Power saver
-still pauses chat. Events, missions, checklists, EAM, and telemetry use the active
+the configured hub only when the caller belongs to that active team; peers with
+their own route keep that route. Power saver still pauses chat. Events, missions, checklists, EAM, and telemetry use the active
 team roster. Household status (B04) and SOS reach all saved peers regardless of
 team. Maintained links follow membership in any local team or an open chat
 conversation; saving a contact alone does not request background links.
@@ -67,6 +68,9 @@ On upgrade, legacy Inner peers outside all local teams join Yellow once; Outer
 contacts are not enrolled. The migration reads legacy values before deriving
 projections and commits settings, peers, and its completion marker together.
 The marker lives in SQLite metadata to keep the UniFFI dictionary unchanged.
+Normal reads do not reserve a writer lock. Importing legacy settings with
+uninitialized teams reruns initialization even if that marker already exists;
+intentional removals from initialized teams remain intact.
 
 ### Signed Block Codes
 
@@ -81,11 +85,12 @@ destinations, signature, and the 1,999-byte encoded limit (the largest
 representable `REMBC1:` URL-safe-unpadded-Base64 envelope below the 2,000-byte
 product ceiling) are validated before
 review. The importer requires the operator to confirm the displayed signer
-fingerprint and provide the legacy complete peer-tier list (tiers are ignored
-in phase 1; team assignment arrives in phase 2), then
-commits network settings, household profile, and peers in one AppState
-transaction. A failed validation or persistence step commits nothing. Legacy
-team QR codes remain import-only and do not become trusted Block Codes.
+fingerprint and provide the legacy complete peer-tier list. During phase 1,
+Inner selections join the active local team (falling back to Yellow when unavailable); Outer
+selections remain contacts unless already enrolled. Network settings, household
+profile, team enrollment, and peers commit in one AppState transaction. A failed
+validation or persistence step commits nothing. Legacy team QR codes remain
+import-only and do not become trusted Block Codes.
 
 ### Battery saver
 

@@ -326,7 +326,9 @@ fn to_saved_peer_record(input: SavedPeerInput) -> Result<SavedPeerRecord, NodeEr
 }
 
 fn to_explicit_saved_peer_record(mut input: SavedPeerInput) -> Result<SavedPeerRecord, NodeError> {
-    input.circle_tier = Some("outer".to_string());
+    let supplied_tier = parse_circle_tier(Some(input.circle_tier.as_deref().unwrap_or("outer")))
+        .unwrap_or(CircleTier::Outer {});
+    input.circle_tier = Some(supplied_tier.as_str().to_string());
     to_saved_peer_record(input)
 }
 

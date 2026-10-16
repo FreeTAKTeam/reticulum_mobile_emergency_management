@@ -57,7 +57,10 @@ fn active_team_directory_destinations(
         }
     }
     // Directly constructed and legacy snapshots may only carry `items`.
-    if active_team_uid == YELLOW_TEAM_UID && destinations.is_empty() {
+    if active_team_uid == YELLOW_TEAM_UID
+        && snapshot.schema_version < HUB_DIRECTORY_SCHEMA_VERSION
+        && destinations.is_empty()
+    {
         for item in &snapshot.items {
             if required_capability.is_some_and(|required| {
                 !item
@@ -222,7 +225,10 @@ fn build_runtime_telemetry_destinations(
         if active_team_has_caller_membership(snapshot)
             && !active_team_directory_destinations(snapshot, Some("telemetry")).is_empty()
         {
-            configured_hub_destination(config)?;
+            // Connected roster membership requires a valid hub even though positions stay local.
+            if configured_hub_destination(config).is_err() {
+                return Err(NodeError::InvalidConfig {});
+            }
         }
         // RCH has no exact-position recipient policy; local team routes remain eligible.
         return Ok(local_targets

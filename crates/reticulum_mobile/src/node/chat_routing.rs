@@ -15,13 +15,9 @@ where
     });
     if connected {
         if let Some(snapshot) = hub_directory_snapshot {
-            let roster_only = snapshot.members.iter().any(|member| {
-                normalize_hex_32(&member.destination_hash).as_deref()
-                    == Some(&requested_destination_hex)
-            }) || snapshot.items.iter().any(|item| {
-                normalize_hex_32(&item.destination_hash).as_deref()
-                    == Some(&requested_destination_hex)
-            });
+            let roster_only = active_team_has_caller_membership(snapshot)
+                && active_team_directory_destinations(snapshot, None)
+                    .contains(&requested_destination_hex);
             if roster_only {
                 let peers = load_routing_context()?;
                 let has_own_route = peers.iter().any(|peer| {

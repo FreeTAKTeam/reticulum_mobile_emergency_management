@@ -1,29 +1,22 @@
 impl AppStateStore {
     pub fn get_app_settings(&self) -> Result<Option<AppSettingsRecord>, NodeError> {
         let mut connection = self.connect()?;
+        let Some((settings, completed)) = read_circle_migration_state(&connection)? else {
+            return Ok(None);
+        };
+        if completed && settings.teams.local_teams_initialized {
+            return Ok(Some(settings));
+        }
         let transaction = connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(|error| {
                 crate::error_context::contextual_node_error(NodeError::IoError {}, error)
             })?;
-        let raw: Option<String> = transaction
-            .query_row("SELECT json FROM app_settings WHERE id = 1", [], |row| {
-                row.get(0)
-            })
-            .optional()
-            .map_err(|error| {
-                crate::error_context::contextual_node_error(NodeError::IoError {}, error)
-            })?;
-        let Some(raw) = raw else {
+        // Another reader may have migrated before we acquired the writer lock.
+        let Some((mut settings, completed)) = read_circle_migration_state(&transaction)? else {
             return Ok(None);
         };
-        let mut settings = deserialize_json::<AppSettingsRecord>(&raw)?;
-        // Storage-only marker: adding a field to TeamSettingsRecord changes UniFFI.
-        let completed: bool = transaction.query_row(
-            "SELECT EXISTS(SELECT 1 FROM metadata WHERE key = 'circle_migration_completed' AND value = '1')",
-            [], |row| row.get(0),
-        ).map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
-        if !completed {
+        if !completed || !settings.teams.local_teams_initialized {
             let mut peers: Vec<SavedPeerRecord> = query_json_records(
                 &transaction,
                 "SELECT json FROM saved_peers ORDER BY destination_hex",
@@ -112,4 +105,24 @@ impl AppStateStore {
         })?;
         Ok(invalidation)
     }
+}
+
+// Read both values in one snapshot without reserving the SQLite writer lock.
+fn read_circle_migration_state(
+    connection: &Connection,
+) -> Result<Option<(AppSettingsRecord, bool)>, NodeError> {
+    let row: Option<(String, bool)> = connection
+        .query_row(
+            "SELECT json, EXISTS(SELECT 1 FROM metadata
+             WHERE key = 'circle_migration_completed' AND value = '1')
+             FROM app_settings WHERE id = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(|error| {
+            crate::error_context::contextual_node_error(NodeError::IoError {}, error)
+        })?;
+    row.map(|(raw, completed)| Ok((deserialize_json(&raw)?, completed)))
+        .transpose()
 }

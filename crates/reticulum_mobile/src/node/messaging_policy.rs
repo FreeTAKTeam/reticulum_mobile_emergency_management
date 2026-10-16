@@ -37,16 +37,17 @@ impl Node {
     }
 
     pub fn set_saved_peers(&self, peers: Vec<SavedPeerRecord>) -> Result<(), NodeError> {
-        self.set_saved_peers_from_bridge(peers, false)
+        let tiers_supplied = vec![true; peers.len()];
+        self.set_saved_peers_from_bridge(peers, &tiers_supplied)
     }
 
-    pub(crate) fn set_saved_peers_from_bridge(&self, mut peers: Vec<SavedPeerRecord>, tier_supplied: bool) -> Result<(), NodeError> {
+    pub(crate) fn set_saved_peers_from_bridge(&self, mut peers: Vec<SavedPeerRecord>, tiers_supplied: &[bool]) -> Result<(), NodeError> {
         let cmd_tx = {
             let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             let teams = inner.app_state.get_app_settings()?.map(|settings| settings.teams).unwrap_or_default();
             let requested_tiers = peers.iter().map(|peer| peer.circle_tier).collect::<Vec<_>>();
             crate::team_membership::apply_derived_circle_tiers(&mut peers, &teams.local_teams);
-            if tier_supplied || peers.iter().zip(requested_tiers).any(|(peer, tier)| peer.circle_tier != tier) {
+            if peers.iter().zip(requested_tiers).zip(tiers_supplied).any(|((peer, tier), supplied)| *supplied && peer.circle_tier != tier) {
                 log::warn!("circle_tier is derived from team membership and was ignored");
             }
             let invalidation = inner.app_state.set_saved_peers(&peers)?;

@@ -345,6 +345,7 @@ mod tests {
     include!("node/tests/community.rs");
     include!("node/tests/outbound_policy.rs");
     include!("node/tests/team_policy.rs");
+    include!("node/tests/team_review_policy.rs");
     include!("node/tests/team_chat_policy.rs");
     include!("node/tests/team_sos_policy.rs");
     include!("node/tests/block_onboarding.rs");

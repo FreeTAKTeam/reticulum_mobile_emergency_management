@@ -142,6 +142,15 @@ async fn set_peer_tier_is_ignored_and_logged_once() {
         build_saved_peer_for("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
     ])
     .unwrap();
+    set_test_team(&node, vec!["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()]);
+    // Re-saving the derived projection, or omitting the tier, must stay quiet.
+    let projection = node.get_saved_peers().unwrap();
+    node.set_saved_peers_from_bridge(projection.clone(), &[true, true]).unwrap();
+    node.set_saved_peers_from_bridge(projection, &[false, false]).unwrap();
+    node.set_saved_peers_from_bridge(vec![
+        policy_peer("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        policy_peer("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+    ], &[false, true]).unwrap();
     NodeLogger::global().set_bus(None);
     let logs = rx
         .try_iter()
@@ -151,11 +160,9 @@ async fn set_peer_tier_is_ignored_and_logged_once() {
         })
         .count();
     assert_eq!(logs, 1);
-    assert!(node
-        .get_saved_peers()
-        .unwrap()
-        .iter()
-        .all(|peer| peer.circle_tier == CircleTier::Outer {}));
+    let peers = node.get_saved_peers().unwrap();
+    assert_eq!(peers[0].circle_tier, CircleTier::Inner {});
+    assert_eq!(peers[1].circle_tier, CircleTier::Outer {});
 }
 
 #[test]

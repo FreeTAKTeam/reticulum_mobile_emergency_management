@@ -338,6 +338,7 @@ impl Node {
                 .lock()
                 .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                 .clone();
+            // shortcut: reclassifies each send; carry planner classification when the dispatch contract is unified.
             let saved_peers = inner.app_state.get_saved_peers()?;
             let peers = inner.peers_snapshot.lock().map_err(|error| {
                 crate::error_context::contextual_node_error(NodeError::InternalError {}, error)

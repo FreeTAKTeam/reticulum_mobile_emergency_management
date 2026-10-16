@@ -11,22 +11,12 @@ pub(crate) fn maintained_link_destinations(
         .flat_map(|team| &team.member_destinations)
         .filter_map(|member| normalize_hex_32(member))
         .collect::<HashSet<_>>();
-    for message in app_state.list_messages(None)? {
-        if !matches!(message.traffic_class, OutboundTrafficClass::Chat {}) {
-            continue;
-        }
-        let correspondent = if matches!(message.direction, MessageDirection::Inbound {}) {
-            message.source_hex.as_deref()
-        } else {
-            message
-                .requested_destination_hex
-                .as_deref()
-                .or(Some(&message.destination_hex))
-        };
-        if let Some(destination) = correspondent.and_then(normalize_hex_32) {
-            destinations.insert(destination);
-        }
-    }
+    destinations.extend(
+        app_state
+            .chat_correspondent_destinations()?
+            .iter()
+            .filter_map(|value| normalize_hex_32(value)),
+    );
     Ok(destinations)
 }
 
