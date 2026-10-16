@@ -90,3 +90,59 @@ fn rch_marker_telemetry_is_recognized_and_not_stored_as_telemetry() {
     let bytes = rmp_serde::to_vec(&rmpv::ext::to_value(&peer).expect("msgpack")).expect("bytes");
     assert!(!crate::runtime::is_marker_telemetry(&bytes));
 }
+
+#[test]
+fn create_map_marker_returns_without_waiting_for_replication_delivery() {
+    let storage_dir = prepare_storage_dir("map-marker-create-non-blocking");
+    let storage_dir_text = storage_dir.to_string_lossy().to_string();
+    let node = Node::with_storage_dir(Some(storage_dir_text.as_str())).expect("node storage");
+    let (tx, mut rx) = mpsc::channel(8);
+    {
+        let mut inner = node.inner.lock().expect("node lock");
+        inner
+            .app_state
+            .set_saved_peers(&[build_saved_peer()])
+            .expect("persist saved peer");
+        *inner.status.lock().expect("status lock") = build_status_for_tests();
+        *inner.peers_snapshot.lock().expect("peers lock") = vec![build_peer_record(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            true,
+            true,
+            true,
+        )];
+        inner.cmd_tx = Some(tx);
+    }
+
+    let started = std::time::Instant::now();
+    let result = node
+        .create_map_marker(crate::types::MapMarkerCreateRequest {
+            idempotency_key: None,
+            marker_type: "fire".into(),
+            symbol: "fire".into(),
+            name: Some("Ridge".into()),
+            category: None,
+            lat: 44.5,
+            lon: -1.25,
+            notes: None,
+        })
+        .expect("create marker");
+    // Nobody answers the queued send; the create must not wait for it.
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "create blocked on replication delivery for {:?}",
+        started.elapsed()
+    );
+    assert!(result.created);
+
+    let command = rx.try_recv().expect("expected queued marker send");
+    let Command::SendBytes { traffic_class, .. } = command else {
+        panic!("expected SendBytes command");
+    };
+    assert!(matches!(traffic_class, OutboundTrafficClass::Event {}));
+    assert_eq!(
+        node.list_map_markers().expect("markers").len(),
+        1,
+        "marker is stored before replication completes"
+    );
+}

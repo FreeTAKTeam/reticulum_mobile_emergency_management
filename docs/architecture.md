@@ -756,6 +756,12 @@ message carries two views of the change:
   `position.updated`, `deleted`) whose payload is the shared marker API
   representation.
 
+Replication is queued, not awaited: the create, rename, move or delete call
+returns as soon as the local change is committed and the sends are handed to
+the runtime command queue. Delivery outcomes surface through the compiled LXMF
+runtime's own events. (REM 1.5.0 awaited each send with the 120 s command
+timeout, which held the UI for minutes per unreachable saved peer.)
+
 Receivers (`runtime/map_marker_receive.rs`) apply only the event, through
 `r3akt_map_core::replica`: the same validation as local input and
 last-writer-wins on `updated_at`. Received replicas are never re-sent, and
