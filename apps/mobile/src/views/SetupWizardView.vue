@@ -71,7 +71,7 @@ onMounted(() => { wizard.open(); });
             <strong>{{ wizard.normalizedDisplayName.value || "Unset" }}</strong>
             <small>Node identity will populate after runtime startup.</small>
           </div>
-          <SetupCommunityProfile :community="wizard.draft.community" :power="wizard.draft.power" />
+          <SetupCommunityProfile :community="wizard.draft.community" :power="wizard.draft.power" :default-household-id="wizard.defaultHouseholdId.value" :invalid-field="wizard.invalidSettingsField.value" />
         </section>
 
         <section v-else-if="wizard.activeStep.value.id === 'tcp'" class="wizard-section">

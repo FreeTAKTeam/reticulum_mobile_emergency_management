@@ -45,6 +45,9 @@ test("operators complete first-run setup and persist core choices", async ({ pag
 
   await page.getByRole("button", { name: "Start setup" }).click();
   await page.getByTestId("setup-callsign").fill("Atlas-9");
+  await page.getByLabel("Household name").fill("Harbour House");
+  await expect(page.getByLabel("Household ID")).toHaveValue("");
+  await expect(page.getByLabel("Household ID")).toHaveAttribute("placeholder", /^[0-9a-f]{16}$/);
   await page.getByRole("button", { name: "Next" }).click();
 
   await expect(page.getByRole("heading", { name: "Permissions" })).toBeVisible();
@@ -109,6 +112,9 @@ test("operators complete first-run setup and persist core choices", async ({ pag
   });
   expect(storedSettings.telemetry.enabled).toBe(true);
   expect(storedSettings.telemetry.publishIntervalSeconds).toBe(420);
+  expect(storedSettings.community.householdName).toBe("Harbour House");
+  expect(storedSettings.community.householdId).toMatch(/^[0-9a-f]{16}$/);
+  expect(status.appDestinationHex.toLowerCase().startsWith(storedSettings.community.householdId)).toBe(true);
   expect(status.running).toBe(true);
   expect(status.name).toBe("Atlas-9");
   expect(sosSettings).toEqual({
