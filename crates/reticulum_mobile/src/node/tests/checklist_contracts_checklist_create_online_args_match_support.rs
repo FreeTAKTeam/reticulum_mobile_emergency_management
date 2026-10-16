@@ -104,7 +104,7 @@ fn checklist_delete_replication_payload_uses_supported_command() {
         &[saved_peer],
         None,
         None,
-        None,
+        Some(&test_team_snapshot(&["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"])),
         None,
         "chk-001",
         true,

@@ -133,3 +133,27 @@ mod community_contract_tests {
         ));
     }
 }
+
+#[cfg(test)]
+mod derived_tier_contract_tests {
+    use super::*;
+    #[test]
+    fn saved_peer_write_accepts_missing_and_ignored_tiers() {
+        for tier in [None, Some("inner"), Some("outer"), Some("old-client-value")] {
+            let mut input = serde_json::json!({"destination": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "savedAt": 1});
+            if let Some(tier) = tier {
+                input["circleTier"] = serde_json::json!(tier);
+            }
+            let peer =
+                to_explicit_saved_peer_record(serde_json::from_value(input).unwrap()).unwrap();
+            assert_eq!(
+                peer.circle_tier,
+                if tier == Some("inner") {
+                    CircleTier::Inner {}
+                } else {
+                    CircleTier::Outer {}
+                }
+            );
+        }
+    }
+}

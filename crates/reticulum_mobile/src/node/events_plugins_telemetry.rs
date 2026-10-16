@@ -54,13 +54,8 @@ impl Node {
                     .lock()
                     .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                     .clone();
-                let mut saved_peers =
+                let saved_peers =
                     saved_peers_for_replication(&inner.app_state, &inner.bus, "event-upsert");
-                if matches!(traffic_class, OutboundTrafficClass::CommunityStatus {}) {
-                    for peer in &mut saved_peers {
-                        peer.circle_tier = CircleTier::Inner {};
-                    }
-                }
                 let route_hops =
                     route_hops_for_replication(&inner.app_state, &inner.bus, "event-upsert");
                 let sync_status = inner
@@ -415,23 +410,13 @@ impl Node {
                     .lock()
                     .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                     .clone();
-                let mut telemetry_destinations = build_runtime_telemetry_destinations(
+                let telemetry_destinations = build_runtime_telemetry_destinations(
                     &status,
                     peers.as_slice(),
                     sync_status.active_propagation_node_hex.as_deref(),
                     inner.active_config.as_ref(),
                     hub_directory_snapshot.as_ref(),
                 )?;
-                let saved_peers = inner.app_state.get_saved_peers()?;
-                let connected_mode = inner.active_config.as_ref().is_some_and(|config| {
-                    matches!(
-                        effective_hub_mode(config.hub_mode, hub_directory_snapshot.as_ref()),
-                        HubMode::Connected {}
-                    )
-                });
-                telemetry_destinations.retain(|target| {
-                    exact_telemetry_target_is_allowed(target, &saved_peers, connected_mode)
-                });
                 for target in telemetry_destinations {
                     match build_telemetry_replication_payload(&position, &target) {
                         Ok((body, fields)) => scheduled_sends.push((

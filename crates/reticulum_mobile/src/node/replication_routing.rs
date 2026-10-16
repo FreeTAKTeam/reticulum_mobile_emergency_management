@@ -6,7 +6,6 @@ fn build_event_replication_targets(
 ) -> Vec<MissionReplicationTarget> {
     let saved_destinations = saved_peers
         .iter()
-        .filter(|peer| matches!(peer.circle_tier, CircleTier::Inner {}))
         .filter_map(saved_peer_target_destination)
         .collect::<Vec<_>>();
     let saved_destination_set = saved_destinations.iter().cloned().collect::<HashSet<_>>();
@@ -264,62 +263,6 @@ fn build_runtime_mission_replication_targets(
     }
 }
 
-fn should_include_checklist_participant_targets(
-    active_config: Option<&NodeConfigFingerprint>,
-    hub_directory_snapshot: Option<&HubDirectorySnapshot>,
-) -> bool {
-    hub_directory_snapshot.is_none_or(|snapshot| snapshot.local_teams.is_empty())
-        && active_team_uid(hub_directory_snapshot) == YELLOW_TEAM_UID
-        && active_config.is_none_or(|config| {
-            matches!(
-                effective_hub_mode(config.hub_mode, hub_directory_snapshot),
-                HubMode::Autonomous {}
-            )
-        })
-}
-
-fn append_checklist_participant_replication_targets(
-    status: &NodeStatus,
-    peers: &[PeerRecord],
-    participant_rns_identities: &[String],
-    active_propagation_node_hex: Option<&str>,
-    targets: &mut Vec<MissionReplicationTarget>,
-) {
-    let self_destinations = [
-        normalize_hex_32(status.identity_hex.as_str()),
-        normalize_hex_32(status.app_destination_hex.as_str()),
-        normalize_hex_32(status.lxmf_destination_hex.as_str()),
-    ]
-    .into_iter()
-    .flatten()
-    .collect::<HashSet<_>>();
-    let mut seen_destinations = targets
-        .iter()
-        .map(|target| target.app_destination_hex.clone())
-        .collect::<HashSet<_>>();
-    for participant in participant_rns_identities {
-        let Some(app_destination_hex) = normalize_hex_32(participant.as_str()) else {
-            continue;
-        };
-        if self_destinations.contains(app_destination_hex.as_str())
-            || !seen_destinations.insert(app_destination_hex.clone())
-        {
-            continue;
-        }
-        let Some(send_mode) = current_replication_send_mode(
-            peers,
-            app_destination_hex.as_str(),
-            active_propagation_node_hex,
-        ) else {
-            continue;
-        };
-        targets.push(MissionReplicationTarget {
-            send_mode,
-            app_destination_hex,
-        });
-    }
-}
-
 fn build_runtime_checklist_replication_targets(
     status: &NodeStatus,
     peers: &[PeerRecord],
@@ -327,31 +270,12 @@ fn build_runtime_checklist_replication_targets(
     active_propagation_node_hex: Option<&str>,
     active_config: Option<&NodeConfigFingerprint>,
     hub_directory_snapshot: Option<&HubDirectorySnapshot>,
-    checklist: Option<&ChecklistRecord>,
+    _checklist: Option<&ChecklistRecord>,
 ) -> Result<Vec<MissionReplicationTarget>, NodeError> {
-    let mut targets = build_runtime_mission_replication_targets(
-        status,
-        peers,
-        saved_peers,
-        active_propagation_node_hex,
-        active_config,
-        hub_directory_snapshot,
-    )?;
-    if should_include_checklist_participant_targets(active_config, hub_directory_snapshot) {
-        if let Some(checklist) = checklist {
-            append_checklist_participant_replication_targets(
-                status,
-                peers,
-                checklist.participant_rns_identities.as_slice(),
-                active_propagation_node_hex,
-                &mut targets,
-            );
-        }
-    }
-    targets.retain(|target| {
-        !peer_is_outer_saved(saved_peers, target.app_destination_hex.as_str())
-    });
-    Ok(targets)
+    build_runtime_mission_replication_targets(
+        status, peers, saved_peers, active_propagation_node_hex,
+        active_config, hub_directory_snapshot,
+    )
 }
 
 fn build_runtime_event_replication_targets(

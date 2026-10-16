@@ -1,5 +1,5 @@
 #[test]
-fn connected_telemetry_destinations_route_only_to_current_hub() {
+fn connected_telemetry_destinations_exclude_the_hub() {
     let status = build_status_for_tests();
     let config = build_config_fingerprint_for_tests(
         HubMode::Connected {},
@@ -35,12 +35,7 @@ fn connected_telemetry_destinations_route_only_to_current_hub() {
     )
     .expect("connected telemetry destinations");
 
-    assert_eq!(destinations.len(), 1);
-    assert_eq!(
-        destinations[0].app_destination_hex,
-        "56565656565656565656565656565656"
-    );
-    assert!(matches!(destinations[0].send_mode, SendMode::Auto {}));
+    assert!(destinations.is_empty());
 }
 
 #[test]
@@ -172,11 +167,11 @@ fn semi_autonomous_telemetry_destinations_use_propagation_for_unsaved_snapshot_p
         destinations[0].app_destination_hex,
         "abababababababababababababababab"
     );
-    assert!(matches!(destinations[0].send_mode, SendMode::Auto {}));
+    assert!(matches!(destinations[0].send_mode, SendMode::PropagationOnly {}));
 }
 
 #[test]
-fn semi_autonomous_yellow_telemetry_uses_local_saved_peers_without_directory() {
+fn semi_autonomous_telemetry_excludes_contacts_without_roster() {
     let status = build_status_for_tests();
     let config = build_config_fingerprint_for_tests(
         HubMode::SemiAutonomous {},
@@ -208,11 +203,7 @@ fn semi_autonomous_yellow_telemetry_uses_local_saved_peers_without_directory() {
     )
     .expect("semi-autonomous fail-closed telemetry destinations");
 
-    assert_eq!(destinations.len(), 1);
-    assert_eq!(
-        destinations[0].app_destination_hex,
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    );
+    assert!(destinations.is_empty());
 }
 
 #[test]
@@ -234,7 +225,7 @@ fn telemetry_targets_keep_direct_peer_before_lxmf_announce_is_current() {
         peers.as_slice(),
         Some("56565656565656565656565656565656"),
         Some(&config),
-        None,
+        Some(&test_team_snapshot(&["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"])),
     )
     .expect("telemetry fallback targets");
 
@@ -263,7 +254,7 @@ fn telemetry_targets_use_direct_for_saved_peers_when_relay_is_active() {
         &[peer],
         Some("56565656565656565656565656565656"),
         Some(&config),
-        None,
+        Some(&test_team_snapshot(&["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"])),
     )
     .expect("telemetry fallback targets");
 
@@ -300,7 +291,7 @@ fn telemetry_targets_include_direct_and_propagation_fanout() {
         &[direct_peer, relay_peer],
         Some("56565656565656565656565656565656"),
         Some(&config),
-        None,
+        Some(&test_team_snapshot(&["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"])),
     )
     .expect("telemetry fallback targets");
 
@@ -334,7 +325,7 @@ fn telemetry_targets_skip_stale_peers_without_relay() {
     stale_peer.stale = true;
 
     let destinations =
-        build_runtime_telemetry_destinations(&status, &[stale_peer], None, Some(&config), None)
+        build_runtime_telemetry_destinations(&status, &[stale_peer], None, Some(&config), Some(&test_team_snapshot(&["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"])))
             .expect("telemetry fallback targets");
 
     assert!(destinations.is_empty());
@@ -359,7 +350,7 @@ fn telemetry_targets_keep_direct_peer_when_relay_is_active_before_lxmf_route_is_
         &[peer],
         Some("56565656565656565656565656565656"),
         Some(&config),
-        None,
+        Some(&test_team_snapshot(&["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"])),
     )
     .expect("telemetry fallback targets");
 
@@ -389,7 +380,7 @@ fn telemetry_targets_skip_unsaved_discovered_peers_when_relay_is_active() {
         &[peer],
         Some("56565656565656565656565656565656"),
         Some(&config),
-        None,
+        Some(&test_team_snapshot(&["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"])),
     )
     .expect("telemetry fallback targets");
 
@@ -413,7 +404,7 @@ fn telemetry_targets_use_relay_for_fresh_route_without_active_link_when_relay_ex
         &[peer],
         Some("56565656565656565656565656565656"),
         Some(&config),
-        None,
+        Some(&test_team_snapshot(&["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"])),
     )
     .expect("telemetry fallback targets");
 

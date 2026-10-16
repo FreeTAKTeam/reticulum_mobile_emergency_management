@@ -99,7 +99,7 @@ fn spawn_connect_peer_command(
             );
             resolve_peer_route(&state, &bus, &destination_hex).await?;
             let target = match register_desired_managed_peer_link(&state, &destination_hex).await {
-                Some(target) => target,
+                Some(registration) => registration.target,
                 None => {
                     let target = ManagedPeerLinkTarget {
                         destination_hex: address_hash_to_hex(&dest),

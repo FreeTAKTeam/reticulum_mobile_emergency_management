@@ -22,33 +22,113 @@ struct CommunityStatusPayloadV1 {
     v: u8,
 }
 
+fn normalize_household_id(raw: &str) -> Result<String, NodeError> {
+    let household_id = raw.trim().to_ascii_lowercase();
+    if household_id.len() != 16 || !household_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(crate::error_context::invalid_config(
+            "household ID must be exactly 16 hexadecimal characters",
+        ));
+    }
+    Ok(household_id)
+}
+
+/// The standard household name used whenever the operator leaves it blank:
+/// `Household <call sign>`, capped at the 64-character profile limit.
+pub(crate) fn default_household_name(display_name: &str) -> String {
+    let call_sign = display_name.split_whitespace().collect::<Vec<_>>().join(" ");
+    let name = if call_sign.is_empty() {
+        "Household".to_string()
+    } else {
+        format!("Household {call_sign}")
+    };
+    name.chars().take(64).collect::<String>().trim_end().to_string()
+}
+
+/// The household ID derived from the node's own app destination (first 16 hex).
+pub(crate) fn household_id_from_app_destination(app_destination_hex: &str) -> Option<String> {
+    let normalized = app_destination_hex.trim().to_ascii_lowercase();
+    (normalized.len() >= 16 && normalized.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then(|| normalized[..16].to_string())
+}
+
+/// Fills the standard defaults so a household profile never stays empty: a blank
+/// name becomes `Household <call sign>` and a blank ID becomes the node's own
+/// destination prefix as soon as the identity is known.
+pub(crate) fn apply_household_defaults(
+    community: &mut CommunitySettingsRecord,
+    display_name: &str,
+    app_destination_hex: &str,
+) {
+    if community.household_name.trim().is_empty() {
+        community.household_name = default_household_name(display_name);
+    }
+    if community.household_id.trim().is_empty() {
+        if let Some(household_id) = household_id_from_app_destination(app_destination_hex) {
+            community.household_id = household_id;
+        }
+    }
+}
+
+fn local_app_destination_hex(inner: &NodeInner) -> String {
+    inner
+        .status
+        .lock()
+        .map(|status| status.app_destination_hex.clone())
+        .unwrap_or_default()
+}
+
+/// Normalizes the community record for persistence. The household ID may still
+/// be empty before the node has started for the first time (no identity yet);
+/// every other field is validated exactly like a published profile.
+pub(crate) fn normalize_stored_community_settings(
+    settings: &CommunitySettingsRecord,
+) -> Result<CommunitySettingsRecord, NodeError> {
+    let household_id = if settings.household_id.trim().is_empty() {
+        String::new()
+    } else {
+        normalize_household_id(&settings.household_id)?
+    };
+    normalize_profile_fields(settings, household_id)
+}
+
 fn normalize_community_settings(
     settings: &CommunitySettingsRecord,
 ) -> Result<CommunitySettingsRecord, NodeError> {
-    let household_id = settings.household_id.trim().to_ascii_lowercase();
-    if household_id.len() != 16 || !household_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(NodeError::InvalidConfig {});
-    }
+    let household_id = normalize_household_id(&settings.household_id)?;
+    normalize_profile_fields(settings, household_id)
+}
+
+fn normalize_profile_fields(
+    settings: &CommunitySettingsRecord,
+    household_id: String,
+) -> Result<CommunitySettingsRecord, NodeError> {
     let household_name = settings.household_name.trim().to_string();
-    if !(1..=64).contains(&household_name.chars().count())
-        || settings.adults > 20
-        || settings.children > 20
-        || settings.pets > 20
-    {
-        return Err(NodeError::InvalidConfig {});
+    if !(1..=64).contains(&household_name.chars().count()) {
+        return Err(crate::error_context::invalid_config(
+            "household name is required (1 to 64 characters) when a household profile is set",
+        ));
+    }
+    if settings.adults > 20 || settings.children > 20 || settings.pets > 20 {
+        return Err(crate::error_context::invalid_config(
+            "household adults, children and pets must each be 20 or fewer",
+        ));
     }
     let mut roles = Vec::new();
     for raw in &settings.role_badges {
         let role = raw.split_whitespace().collect::<Vec<_>>().join(" ");
         if !(1..=24).contains(&role.chars().count()) {
-            return Err(NodeError::InvalidConfig {});
+            return Err(crate::error_context::invalid_config(
+                "each role badge must be 1 to 24 characters",
+            ));
         }
         if !roles.iter().any(|existing: &String| existing.eq_ignore_ascii_case(&role)) {
             roles.push(role);
         }
     }
     if roles.len() > 5 {
-        return Err(NodeError::InvalidConfig {});
+        return Err(crate::error_context::invalid_config(
+            "at most five role badges are allowed",
+        ));
     }
     Ok(CommunitySettingsRecord {
         household_id,
@@ -254,10 +334,15 @@ impl Node {
             let mut inner = self.inner.lock().map_err(|error| {
                 crate::error_context::contextual_node_error(NodeError::InternalError {}, error)
             })?;
-            let settings = inner
+            let mut settings = inner
                 .app_state
                 .get_app_settings()?
                 .ok_or(NodeError::InvalidConfig {})?;
+            apply_household_defaults(
+                &mut settings.community,
+                &settings.display_name,
+                &local_app_destination_hex(&inner),
+            );
             let (identity_hex, node_name) = {
                 let status = inner.status.lock().map_err(|error| {
                     crate::error_context::contextual_node_error(

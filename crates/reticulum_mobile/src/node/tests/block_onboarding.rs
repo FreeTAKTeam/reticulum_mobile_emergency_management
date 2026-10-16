@@ -323,6 +323,23 @@ fn block_onboarding_import_is_atomic_and_preserves_local_secrets() {
     assert!(imported.transport_node_enabled);
     assert_eq!(imported.rnode.peripheral_id, "local-radio");
     assert_eq!(imported.community.household_name, "Imported Household");
+    assert_eq!(imported.teams.local_teams.iter()
+        .find(|team| team.team_uid == imported.teams.active_team_uid).unwrap()
+        .member_destinations, vec![inspection.issuer_app_destination_hex.clone()]);
+    let saved_peers = store.get_saved_peers().unwrap();
+    let issuer = &inspection.issuer_app_destination_hex;
+    assert_eq!(saved_peers.iter().find(|peer| &peer.destination_hex == issuer).unwrap().circle_tier, CircleTier::Inner {});
+    let mut snapshot = HubDirectorySnapshot::yellow_only(1);
+    snapshot.active_team_uid = imported.teams.active_team_uid.clone();
+    snapshot.local_teams = imported.teams.local_teams.clone();
+    let targets = build_runtime_mission_replication_targets(
+        &build_status_for_tests(),
+        &[build_peer_record(issuer, issuer, true, true, true)],
+        &saved_peers, None, None, Some(&snapshot),
+    ).unwrap();
+    assert_eq!(targets.len(), 1);
+    assert_eq!(&targets[0].app_destination_hex, issuer);
+
 
     let mut incomplete = request;
     incomplete.peer_tiers.pop();
@@ -330,4 +347,50 @@ fn block_onboarding_import_is_atomic_and_preserves_local_secrets() {
         .import_block_onboarding_atomic(&inspection, &incomplete)
         .is_err());
     assert_eq!(store.get_saved_peers().expect("peers").len(), 2);
+}
+
+#[test]
+fn block_imported_community_record_round_trips_through_set_app_settings() {
+    let now = 1_700_000_000_000;
+    let identity = reticulum::transport::identity::PrivateIdentity::new_from_name("block-rt");
+    let encoded = signed_block_fixture(&identity, now, now + 60_000);
+    let inspection = decode_and_verify_block_envelope(&encoded, now + 1).expect("inspection");
+    let storage = prepare_storage_dir("block-import-round-trip");
+    let store = AppStateStore::new(storage.to_str()).expect("store");
+    store
+        .set_app_settings(&sample_app_settings())
+        .expect("settings");
+    let request = BlockOnboardingImportRequest {
+        encoded_text: encoded,
+        confirmed_signer_fingerprint: inspection.signer_fingerprint.clone(),
+        community: CommunitySettingsRecord {
+            household_id: "0123456789abcdef".to_string(),
+            household_name: "Imported Household".to_string(),
+            ..CommunitySettingsRecord::default()
+        },
+        peer_tiers: vec![
+            BlockPeerTierRecord {
+                destination_hex: inspection.issuer_app_destination_hex.clone(),
+                circle_tier: CircleTier::Inner {},
+            },
+            BlockPeerTierRecord {
+                destination_hex: "dddddddddddddddddddddddddddddddd".to_string(),
+                circle_tier: CircleTier::Outer {},
+            },
+        ],
+    };
+    store
+        .import_block_onboarding_atomic(&inspection, &request)
+        .expect("atomic import");
+    drop(store);
+
+    let node = Node::with_storage_dir(storage.to_str()).expect("node");
+    let mut stored = node.get_app_settings().expect("read").expect("settings");
+    assert_eq!(stored.community.household_name, "Imported Household");
+    stored.tcp_clients.push("rmap.world:4242".to_string());
+    node.set_app_settings(stored.clone())
+        .expect("block-imported community record must pass set_app_settings");
+    let saved = node.get_app_settings().expect("read").expect("settings");
+    assert_eq!(saved.tcp_clients, stored.tcp_clients);
+    assert_eq!(saved.community, stored.community);
 }

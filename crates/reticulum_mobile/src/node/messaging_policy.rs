@@ -5,10 +5,6 @@ impl Node {
         let peers = inner.peers_snapshot.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?.clone();
         let hub_directory_snapshot = inner.hub_directory_snapshot.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?.clone();
         let sync_status = inner.sync_status_snapshot.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?.clone();
-        let saved_peers = inner.app_state.get_saved_peers()?;
-        let connected_mode = inner.active_config.as_ref().is_some_and(|config| {
-            matches!(effective_hub_mode(config.hub_mode, hub_directory_snapshot.as_ref()), HubMode::Connected {})
-        });
         Ok(build_runtime_telemetry_destinations(
             &status,
             peers.as_slice(),
@@ -17,7 +13,6 @@ impl Node {
             hub_directory_snapshot.as_ref(),
         )?
         .into_iter()
-        .filter(|target| exact_telemetry_target_is_allowed(target, &saved_peers, connected_mode))
         .map(|target| target.app_destination_hex)
         .collect())
     }
@@ -42,8 +37,19 @@ impl Node {
     }
 
     pub fn set_saved_peers(&self, peers: Vec<SavedPeerRecord>) -> Result<(), NodeError> {
+        let tiers_supplied = vec![true; peers.len()];
+        self.set_saved_peers_from_bridge(peers, &tiers_supplied)
+    }
+
+    pub(crate) fn set_saved_peers_from_bridge(&self, mut peers: Vec<SavedPeerRecord>, tiers_supplied: &[bool]) -> Result<(), NodeError> {
         let cmd_tx = {
             let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
+            let teams = inner.app_state.get_app_settings()?.map(|settings| settings.teams).unwrap_or_default();
+            let requested_tiers = peers.iter().map(|peer| peer.circle_tier).collect::<Vec<_>>();
+            crate::team_membership::apply_derived_circle_tiers(&mut peers, &teams.local_teams);
+            if peers.iter().zip(requested_tiers).zip(tiers_supplied).any(|((peer, tier), supplied)| *supplied && peer.circle_tier != tier) {
+                log::warn!("circle_tier is derived from team membership and was ignored");
+            }
             let invalidation = inner.app_state.set_saved_peers(&peers)?;
             emit_projection_invalidation(&inner.bus, invalidation);
             let summary = inner.app_state.bump_projection_revision(

@@ -330,31 +330,31 @@ impl Node {
         send_mode: SendMode,
         traffic_class: OutboundTrafficClass,
     ) -> Result<(), NodeError> {
-        let (tx, active_config, hub_directory_snapshot) = {
+        let (tx, active_config, hub_directory_snapshot, local_target, hub_target) = {
             let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             ensure_outbound_admitted(inner.power_state.saver_active, traffic_class)?;
-            if !matches!(
-                traffic_class,
-                OutboundTrafficClass::Sos {} | OutboundTrafficClass::CommunityStatus {}
-            ) && peer_is_outer_saved(&inner.app_state.get_saved_peers()?, &destination_hex)
-            {
-                return Err(NodeError::InvalidConfig {});
-            }
             let hub_directory_snapshot = inner
                 .hub_directory_snapshot
                 .lock()
                 .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                 .clone();
+            // shortcut: reclassifies each send; carry planner classification when the dispatch contract is unified.
+            let saved_peers = inner.app_state.get_saved_peers()?;
+            let peers = inner.peers_snapshot.lock().map_err(|error| {
+                crate::error_context::contextual_node_error(NodeError::InternalError {}, error)
+            })?;
+            let local_target = destination_is_active_local_member(
+                &destination_hex, hub_directory_snapshot.as_ref(), &saved_peers, &peers,
+            );
+            let hub_target = destination_is_configured_hub(&destination_hex, inner.active_config.as_ref(), &peers, &saved_peers);
             (
                 inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?,
-                inner.active_config.clone(),
-                hub_directory_snapshot,
+                inner.active_config.clone(), hub_directory_snapshot, local_target, hub_target,
             )
         };
-        let destination_hex = routed_destination_hex(
-            destination_hex,
-            active_config.as_ref(),
-            hub_directory_snapshot.as_ref(),
+        let destination_hex = routed_outbound_destination_hex(
+            destination_hex, traffic_class, active_config.as_ref(),
+            hub_directory_snapshot.as_ref(), local_target, hub_target,
         )?;
         let fields_bytes = fields_bytes
             .map(|fields| {

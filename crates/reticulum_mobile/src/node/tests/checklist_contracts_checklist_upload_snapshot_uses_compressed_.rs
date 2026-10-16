@@ -306,6 +306,9 @@ async fn start_node_pair(test_name: &str) -> (TcpRelayHandle, Node, Node) {
         .expect("resolve node a");
     tokio::time::sleep(Duration::from_millis(250)).await;
 
+    // Replication fixtures explicitly share Yellow; saving a contact no longer enrolls it.
+    set_test_team(&node_a, vec![node_b.get_status().app_destination_hex, node_b.get_status().lxmf_destination_hex]);
+    set_test_team(&node_b, vec![node_a.get_status().app_destination_hex, node_a.get_status().lxmf_destination_hex]);
     (relay, node_a, node_b)
 }
 

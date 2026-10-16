@@ -198,3 +198,77 @@ fn typed_community_projection_never_repromotes_demoted_generic_events() {
         .expect("typed projection")
         .is_empty());
 }
+
+#[test]
+fn household_defaults_use_call_sign_and_destination_prefix() {
+    assert_eq!(default_household_name("  Pixel  corvo "), "Household Pixel corvo");
+    assert_eq!(default_household_name(""), "Household");
+    assert_eq!(default_household_name(&"x".repeat(80)).chars().count(), 64);
+    assert_eq!(
+        household_id_from_app_destination("6521979F1165965Baaaaaaaaaaaaaaaa"),
+        Some("6521979f1165965b".to_string())
+    );
+    assert_eq!(household_id_from_app_destination(""), None);
+    assert_eq!(household_id_from_app_destination("not-hex"), None);
+}
+
+#[test]
+fn set_app_settings_fills_standard_household_defaults_and_never_blocks_on_them() {
+    let storage = prepare_storage_dir("community-household-defaults");
+    let node = Node::with_storage_dir(Some(storage.to_string_lossy().as_ref())).expect("node");
+    let mut settings = sample_app_settings();
+    settings.display_name = "Pixelcorvo".to_string();
+    settings.community = CommunitySettingsRecord::default();
+    settings.tcp_clients = vec!["134.122.46.48:37428".to_string(), "rmap.world:4242".to_string()];
+    node.set_app_settings(settings.clone())
+        .expect("an empty household profile must not block saving TCP endpoints");
+    let stored = node.get_app_settings().expect("read").expect("settings");
+    assert_eq!(stored.tcp_clients, settings.tcp_clients);
+    assert_eq!(stored.community.household_name, "Household Pixelcorvo");
+    assert_eq!(stored.community.household_id, "", "no identity before first start");
+
+    {
+        let inner = node.inner.lock().expect("inner");
+        inner.status.lock().expect("status").app_destination_hex =
+            "6521979f1165965baaaaaaaaaaaaaaaa".to_string();
+    }
+    let projected = node.get_app_settings().expect("read").expect("settings");
+    assert_eq!(projected.community.household_id, "6521979f1165965b");
+    node.set_app_settings(projected.clone())
+        .expect("the record the runtime projected must pass its own validation");
+    let persisted = node.get_app_settings().expect("read").expect("settings");
+    assert_eq!(persisted.community, projected.community);
+
+    let mut typed_id_only = sample_app_settings();
+    typed_id_only.community.household_id = "0123456789ABCDEF".to_string();
+    node.set_app_settings(typed_id_only).expect("typed ID without a name saves");
+    let stored = node.get_app_settings().expect("read").expect("settings");
+    assert_eq!(stored.community.household_id, "0123456789abcdef");
+    assert_eq!(stored.community.household_name, "Household Alpha");
+}
+
+#[test]
+fn set_app_settings_names_the_rejected_household_field() {
+    let storage = prepare_storage_dir("community-rejected-field");
+    let node = Node::with_storage_dir(Some(storage.to_string_lossy().as_ref())).expect("node");
+    let mut too_long = sample_app_settings();
+    too_long.community.household_name = "n".repeat(65);
+    crate::error_context::clear_internal_failure();
+    assert!(matches!(
+        node.set_app_settings(too_long),
+        Err(NodeError::InvalidConfig {})
+    ));
+    let failure = crate::error_context::take_internal_failure("InvalidConfig")
+        .expect("rejection carries a reason");
+    assert!(failure.message.contains("household name"), "{}", failure.message);
+
+    let mut bad_id = sample_app_settings();
+    bad_id.community.household_id = "not-hex".to_string();
+    assert!(matches!(
+        node.set_app_settings(bad_id),
+        Err(NodeError::InvalidConfig {})
+    ));
+    let failure = crate::error_context::take_internal_failure("InvalidConfig")
+        .expect("rejection carries a reason");
+    assert!(failure.message.contains("household ID"), "{}", failure.message);
+}

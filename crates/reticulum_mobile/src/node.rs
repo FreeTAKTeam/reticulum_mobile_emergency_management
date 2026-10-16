@@ -42,7 +42,7 @@ use crate::types::{
     ChecklistListActiveRequest, ChecklistRecord, ChecklistTaskCellSetRequest,
     ChecklistTaskRowAddRequest, ChecklistTaskRowDeleteRequest, ChecklistTaskRowStyleSetRequest,
     ChecklistTaskStatusSetRequest, ChecklistTemplateImportCsvRequest, ChecklistTemplateListRequest,
-    ChecklistTemplateRecord, ChecklistUpdateRequest, CircleTier, CommunitySettingsRecord,
+    ChecklistTemplateRecord, ChecklistUpdateRequest, CommunitySettingsRecord,
     CommunityStatusProjectionRecord, ConversationRecord, DiscoveredPluginRecord,
     EamProjectionRecord, EamReadinessSummaryRecord, EamSourceRecord, EamTeamSummaryRecord,
     EventProjectionRecord, HouseholdStatus, HubDirectorySnapshot, HubMode, InstalledPluginRecord,
@@ -344,6 +344,10 @@ mod tests {
     include!("node/tests/telemetry_telemetry_replication_payload_stays_under_.rs");
     include!("node/tests/community.rs");
     include!("node/tests/outbound_policy.rs");
+    include!("node/tests/team_policy.rs");
+    include!("node/tests/team_review_policy.rs");
+    include!("node/tests/team_chat_policy.rs");
+    include!("node/tests/team_sos_policy.rs");
     include!("node/tests/block_onboarding.rs");
     include!("node/tests/map_markers.rs");
 }

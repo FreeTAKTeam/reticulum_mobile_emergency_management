@@ -1,9 +1,12 @@
 impl AppStateStore {
     pub fn get_saved_peers(&self) -> Result<Vec<SavedPeerRecord>, NodeError> {
-        query_json_records(
+        let teams = self.get_app_settings()?.map(|settings| settings.teams).unwrap_or_default();
+        let mut peers = query_json_records(
             &self.connect()?,
             "SELECT json FROM saved_peers ORDER BY updated_at_ms DESC",
-        )
+        )?;
+        crate::team_membership::apply_derived_circle_tiers(&mut peers, &teams.local_teams);
+        Ok(peers)
     }
 
     pub fn set_saved_peers(
