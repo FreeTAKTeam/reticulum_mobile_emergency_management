@@ -726,7 +726,7 @@ This avoids relying on a globally installed `uniffi-bindgen` executable, which i
 ## Networking and shared map dependencies
 
 The compiled networking stack is pinned to LXMF-rs `v0.14.0` at
-`7822b608f2cd2debd8170895bc580d01dda5356e` (REM 1.5.0 ships with `v0.14.0`; REM 1.4.1 shipped with `v0.13.0`
+`7822b608f2cd2debd8170895bc580d01dda5356e` (REM 1.5.1 and 1.5.0 ship with `v0.14.0`; REM 1.4.1 shipped with `v0.13.0`
 at `fbc75b86e15550722923b366398f0a4116182894`; v0.14.0 keeps the Reticulum
 and LXMF wire formats and moves to `rusqlite` 0.40). REM logs the upstream
 `OutboundRejected` Resource event distinctly from local cancellation and

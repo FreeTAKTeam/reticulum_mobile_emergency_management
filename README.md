@@ -9,9 +9,9 @@ It answers two urgent questions:
 
 REM is built around simple pages for team status, chat, checklists, map positions, peer discovery, and event logs. It can work directly with trusted peers over Reticulum mesh networking, and it can also use Reticulum Community Hub support when a team chooses that setup.
 
-The current Android source version is `1.5.0`. The `main` branch builds against
+The current Android source version is `1.5.1`. The `main` branch builds against
 LXMF-rs `v0.14.0` at immutable release revision
-`7822b608f2cd2debd8170895bc580d01dda5356e` (1.5.0 ships with `v0.14.0`; 1.4.1 shipped with `v0.13.0`;
+`7822b608f2cd2debd8170895bc580d01dda5356e` (1.5.1 and 1.5.0 ship with `v0.14.0`; 1.4.1 shipped with `v0.13.0`;
 wire formats are unchanged). This includes selected Reticulum 1.5.5 updates
 and does not claim full Reticulum 1.5.5 parity.
 Automated validation and the two-phone TCP matrix are release gates; the
