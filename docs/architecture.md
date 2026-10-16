@@ -28,7 +28,12 @@ allowed, or reinterpret a community record as an Emergency Action Message.
 
 A household profile contains a stable 16-hex-character household ID, a display
 name, adult/child/pet counts, up to five role badges, one of `all_home`,
-`one_missing`, `evacuated`, or `needs_help`, and a preferred map layer. A status
+`one_missing`, `evacuated`, or `needs_help`, and a preferred map layer. The app
+pre-fills the household ID from the node's own app destination, so Rust treats
+the profile as configured only once the operator has entered a name, counts, or
+badges; an ID alone is stored as an unconfigured profile and never blocks saving
+unrelated settings. Rejections carry a field-naming reason through the bridge
+error context. A status
 publish creates one Rust-owned `event.create` projection in mission
 `rem-community`, with topic `rem.community-status.v1` and a stable UID derived
 from the sender identity. Its body starts with `MECP/2/B04`, carries a matching

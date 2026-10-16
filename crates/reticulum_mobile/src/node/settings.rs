@@ -8,17 +8,11 @@ impl Node {
 
     pub fn set_app_settings(&self, mut settings: AppSettingsRecord) -> Result<(), NodeError> {
         normalize_team_settings(&mut settings.teams)?;
-        let community_is_unconfigured = settings.community.household_id.trim().is_empty()
-            && settings.community.household_name.trim().is_empty()
-            && settings.community.adults == 0
-            && settings.community.children == 0
-            && settings.community.pets == 0
-            && settings.community.role_badges.is_empty();
-        if !community_is_unconfigured {
-            settings.community = normalize_community_settings(&settings.community)?;
-        }
+        settings.community = normalize_stored_community_settings(&settings.community)?;
         if !matches!(settings.power.threshold_percent, 10 | 20 | 30) {
-            return Err(NodeError::InvalidConfig {});
+            return Err(crate::error_context::invalid_config(
+                "power saver threshold must be 10, 20 or 30 percent",
+            ));
         }
         let observed_battery = {
             let inner = self.inner.lock().map_err(|error| {

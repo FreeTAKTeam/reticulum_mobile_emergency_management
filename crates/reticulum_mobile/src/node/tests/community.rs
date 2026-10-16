@@ -198,3 +198,55 @@ fn typed_community_projection_never_repromotes_demoted_generic_events() {
         .expect("typed projection")
         .is_empty());
 }
+
+#[test]
+fn set_app_settings_keeps_default_household_id_without_name_as_unconfigured() {
+    let storage = prepare_storage_dir("community-id-without-name");
+    let node = Node::with_storage_dir(Some(storage.to_string_lossy().as_ref())).expect("node");
+    let mut settings = sample_app_settings();
+    settings.community = CommunitySettingsRecord {
+        household_id: "6521979F1165965B".to_string(),
+        ..CommunitySettingsRecord::default()
+    };
+    settings.tcp_clients = vec!["134.122.46.48:37428".to_string(), "rmap.world:4242".to_string()];
+    node.set_app_settings(settings.clone())
+        .expect("household ID alone must not block saving TCP endpoints");
+
+    let stored = node.get_app_settings().expect("read").expect("settings");
+    assert_eq!(stored.tcp_clients, settings.tcp_clients);
+    assert_eq!(stored.community.household_id, "6521979f1165965b");
+    assert_eq!(stored.community.household_name, "");
+    assert!(community_profile_is_unconfigured(&stored.community));
+    node.set_app_settings(stored)
+        .expect("the record the runtime stored must pass its own validation");
+}
+
+#[test]
+fn set_app_settings_names_the_missing_household_name_when_profile_is_set() {
+    let storage = prepare_storage_dir("community-missing-name");
+    let node = Node::with_storage_dir(Some(storage.to_string_lossy().as_ref())).expect("node");
+    let mut settings = sample_app_settings();
+    settings.community = CommunitySettingsRecord {
+        household_id: "0123456789abcdef".to_string(),
+        adults: 2,
+        ..CommunitySettingsRecord::default()
+    };
+    crate::error_context::clear_internal_failure();
+    assert!(matches!(
+        node.set_app_settings(settings),
+        Err(NodeError::InvalidConfig {})
+    ));
+    let failure = crate::error_context::take_internal_failure("InvalidConfig")
+        .expect("rejection carries a reason");
+    assert!(failure.message.contains("household name"), "{}", failure.message);
+
+    let mut bad_id = sample_app_settings();
+    bad_id.community.household_id = "not-hex".to_string();
+    assert!(matches!(
+        node.set_app_settings(bad_id),
+        Err(NodeError::InvalidConfig {})
+    ));
+    let failure = crate::error_context::take_internal_failure("InvalidConfig")
+        .expect("rejection carries a reason");
+    assert!(failure.message.contains("household ID"), "{}", failure.message);
+}
