@@ -47,7 +47,7 @@
   min-width: 10rem;
   padding: 0.34rem;
   position: absolute;
-  right: 0;
+  left: 0;
   top: calc(100% + 0.42rem);
   z-index: 4;
 }
@@ -89,4 +89,70 @@
 .map-overlay-menu-count {
   font-variant-numeric: tabular-nums;
   opacity: 0.85;
+}
+
+/* Status rows: the live, stale and SOS counts that used to be separate chips.
+   Each keeps its icon and a text label, so state is not colour alone. */
+
+.map-overlay-menu-status {
+  align-items: center;
+  border-radius: 6px;
+  color: #d9ecff;
+  display: flex;
+  font-family: var(--font-ui);
+  font-size: 0.82rem;
+  font-weight: 800;
+  gap: 0.55rem;
+  min-height: 2.2rem;
+  padding: 0.3rem 0.58rem;
+}
+
+.map-overlay-menu-status svg {
+  flex: 0 0 auto;
+  height: 1.05rem;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+  width: 1.05rem;
+}
+
+.map-overlay-menu-status .map-overlay-menu-count {
+  margin-left: auto;
+  opacity: 1;
+}
+
+.map-overlay-menu-status.is-live {
+  color: #58f090;
+}
+
+.map-overlay-menu-status.is-stale {
+  color: #f7b860;
+}
+
+.map-overlay-menu-status.is-sos {
+  color: #ff5e64;
+}
+
+/* Active SOS alerts stay visible on the collapsed button. */
+.map-overlay-menu-button {
+  position: relative;
+}
+
+.map-overlay-menu-badge {
+  background: rgb(239 68 68 / 92%);
+  border: 1px solid rgb(255 150 150 / 70%);
+  border-radius: 999px;
+  color: #fff;
+  font-family: var(--font-ui);
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+  line-height: 1;
+  min-width: 1.15rem;
+  padding: 0.14rem 0.3rem;
+  position: absolute;
+  right: -0.35rem;
+  text-align: center;
+  top: -0.35rem;
 }

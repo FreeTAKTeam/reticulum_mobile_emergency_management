@@ -419,32 +419,14 @@ onBeforeUnmount(() => {
     <div class="map-frame">
       <div ref="mapHost" class="map-container"></div>
 
-      <div class="map-overlay" aria-label="Map indicators">
-        <span class="map-chip live-chip" :aria-label="`Live telemetry: ${liveTelemetryCount}`">
-          <span class="map-chip-count">{{ liveTelemetryCount }}</span>
-          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="M12 20v-5" />
-            <path d="M8 20h8" />
-            <path d="M8.5 11.5a5 5 0 1 1 7 0" />
-            <path d="M6 8a8 8 0 0 1 12 0" />
-          </svg>
-        </span>
-        <span class="map-chip stale-chip" :aria-label="`Stale telemetry: ${staleTelemetryCount}`">
-          <span class="map-chip-count">{{ staleTelemetryCount }}</span>
-          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <circle cx="12" cy="12" r="8" />
-            <path d="M12 8v4l3 2" />
-          </svg>
-        </span>
-        <span class="map-chip sos-chip" :aria-label="`SOS alerts: ${sosAlertCount}`">
-          <span class="map-chip-count">{{ sosAlertCount }}</span>
-          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="M12 4 21 20H3L12 4Z" />
-            <path d="M12 9v4" />
-            <path d="M12 16h.01" />
-          </svg>
-        </span>
-        <MapOverlayMenu :layer="selectedMapLayer" @select-layer="setMapLayer" />
+      <div class="map-overlay" aria-label="Map controls">
+        <MapOverlayMenu
+          :layer="selectedMapLayer"
+          :live="liveTelemetryCount"
+          :stale="staleTelemetryCount"
+          :sos="sosAlertCount"
+          @select-layer="setMapLayer"
+        />
       </div>
       <MapMarkerLayer :map="markerMap" />
     </div>

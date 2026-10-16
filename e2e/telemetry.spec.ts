@@ -69,9 +69,14 @@ test("telemetry map shows live and stale markers while filtering expired fixes",
 
   await expect(page).toHaveURL(/\/telemetry$/);
   await expect(page.getByRole("heading", { name: "Map" })).toBeVisible();
+  // Indicators live in the map menu; with no SOS alert the button carries no badge.
+  await expect(page.getByRole("button", { name: "Map menu" })).toBeVisible();
+  await expect(page.locator('[aria-label^="SOS alerts:"]')).toHaveCount(0);
+  await page.getByRole("button", { name: "Map menu" }).click();
   await expect(page.locator('[aria-label="Live telemetry: 1"]')).toBeVisible();
   await expect(page.locator('[aria-label="Stale telemetry: 1"]')).toBeVisible();
   await expect(page.locator('[aria-label="SOS alerts: 0"]')).toBeVisible();
+  await page.getByRole("button", { name: "Map menu" }).click();
   await expect(page.getByText("1 Live")).toHaveCount(0);
   await expect(page.getByText("Stale: 1")).toHaveCount(0);
   await expect(page.getByText("SOS: 0")).toHaveCount(0);
@@ -303,6 +308,8 @@ test("telemetry map hides locations for cancelled SOS emergencies", async ({ pag
     ];
   }, { timestamp: now });
 
+  // An active SOS alert shows as a badge on the collapsed map menu button.
+  await expect(page.getByRole("button", { name: "Map menu, SOS alerts: 1" })).toBeVisible();
   await expect(page.locator('[aria-label="SOS alerts: 1"]')).toBeVisible();
   await expect(page.locator(".sos-trail-marker")).toHaveCount(1);
 });
