@@ -28,9 +28,11 @@ fn build_event_replication_targets(
         if !seen_app_destinations.insert(app_destination_hex.clone()) {
             continue;
         }
-        if !saved_destination_set.contains(app_destination_hex.as_str()) {
+        let Some(target_destination_hex) =
+            saved_destination_for_peer(peer, &saved_destination_set)
+        else {
             continue;
-        }
+        };
         if !peer_supports_mission_traffic(peer) {
             continue;
         }
@@ -45,11 +47,11 @@ fn build_event_replication_targets(
         let direct_ready = peer_is_mission_direct_delivery_ready(peer, has_active_relay)
             || peer_can_use_direct_when_relay_route_is_missing(peer, has_active_relay);
         if direct_ready {
-            direct_destination_set.insert(app_destination_hex.clone());
+            direct_destination_set.insert(target_destination_hex.clone());
             let sequence = direct_targets.len();
             direct_targets.push(build_prioritized_direct_target(
                 peer,
-                app_destination_hex,
+                target_destination_hex,
                 sequence,
             ));
         } else if !connectivity.current_or_stored_route_available() {

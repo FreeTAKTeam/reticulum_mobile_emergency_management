@@ -330,6 +330,22 @@ impl Node {
         send_mode: SendMode,
         traffic_class: OutboundTrafficClass,
     ) -> Result<(), NodeError> {
+        self.queue_bytes_with_class(destination_hex, bytes, fields_bytes, send_mode, traffic_class)?
+            .recv_timeout(SEND_COMMAND_TIMEOUT)
+            .unwrap_or(Err(NodeError::Timeout {}))
+    }
+
+    /// Admits, routes and queues one outbound send, returning the runtime's
+    /// result channel without waiting on it. Best-effort replication drops the
+    /// receiver so a local edit never waits for delivery attempts.
+    fn queue_bytes_with_class(
+        &self,
+        destination_hex: String,
+        bytes: Vec<u8>,
+        fields_bytes: Option<Vec<u8>>,
+        send_mode: SendMode,
+        traffic_class: OutboundTrafficClass,
+    ) -> Result<cb::Receiver<Result<(), NodeError>>, NodeError> {
         let (tx, active_config, hub_directory_snapshot, local_target, hub_target) = {
             let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             ensure_outbound_admitted(inner.power_state.saver_active, traffic_class)?;
@@ -377,9 +393,7 @@ impl Node {
                 resp: resp_tx,
             },
         )?;
-        resp_rx
-            .recv_timeout(SEND_COMMAND_TIMEOUT)
-            .unwrap_or(Err(NodeError::Timeout {}))
+        Ok(resp_rx)
     }
 
     pub fn broadcast_bytes(&self, bytes: Vec<u8>) -> Result<(), NodeError> {

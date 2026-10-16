@@ -147,8 +147,10 @@ impl Node {
         Ok((bus, sends))
     }
 
-    /// Best effort: the local change is already committed, so delivery
-    /// failures are reported as events rather than failing the edit.
+    /// Best effort and non-blocking: the local change is already committed,
+    /// so each send is only queued here. Waiting on delivery would hold the
+    /// caller for the send timeout per unreachable target; the compiled LXMF
+    /// runtime reports delivery outcomes through its own events instead.
     fn replicate_map_marker_change(&self, change: &MapMarkerChange) {
         let (bus, sends) = match self.map_marker_replication_sends(change) {
             Ok(planned) => planned,
@@ -158,7 +160,7 @@ impl Node {
             }
         };
         for (destination_hex, body, fields, send_mode) in sends {
-            if let Err(err) = self.send_bytes_with_class(
+            if let Err(err) = self.queue_bytes_with_class(
                 destination_hex.clone(),
                 body,
                 Some(fields),
@@ -166,7 +168,7 @@ impl Node {
                 OutboundTrafficClass::Event {},
             ) {
                 let message = format!(
-                    "map marker replication failed destination={destination_hex} marker={} reason={err}",
+                    "map marker replication could not be queued destination={destination_hex} marker={} reason={err}",
                     change.marker.object_destination_hash
                 );
                 emit_replication_delivery_failure(&bus, message, &err);
