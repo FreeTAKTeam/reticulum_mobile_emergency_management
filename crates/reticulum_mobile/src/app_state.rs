@@ -41,13 +41,19 @@ fn initialize_local_team_settings(
         .collect::<Vec<_>>();
     members.sort();
     members.dedup();
-    if let Some(yellow) = settings.teams.local_teams.iter_mut().find(|team| team.team_uid == YELLOW_TEAM_UID) {
+    if let Some(yellow) = settings
+        .teams
+        .local_teams
+        .iter_mut()
+        .find(|team| team.team_uid == YELLOW_TEAM_UID)
+    {
         yellow.member_destinations.extend(members);
         yellow.member_destinations.sort();
         yellow.member_destinations.dedup();
     } else {
         settings.teams.local_teams.push(LocalTeamRecord {
-            team_uid: YELLOW_TEAM_UID.to_string(), member_destinations: members,
+            team_uid: YELLOW_TEAM_UID.to_string(),
+            member_destinations: members,
         });
     }
     settings.teams.local_teams_initialized = true;
