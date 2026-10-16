@@ -50,14 +50,23 @@ also makes the latest accepted household state available to a late joiner.
 
 ### Inner and Outer circles
 
-Every saved peer has a persisted `inner` or `outer` tier; migrated peers default
-to Inner to preserve existing trusted-peer behavior. Chat send and retry are
-admitted by Rust only for saved Inner peers. Exact telemetry is stricter: it is
-sent only to a saved Inner peer over a current direct route. It never uses a
-propagation route, and Connected Hub mode fails closed because RCH does not yet
-provide a recipient policy for exact location. Outer peers can still appear in
-the directory and receive non-private community status through the normal
-mission routing rules.
+The runtime derives `circle_tier` from membership in any local team: members
+project `inner`, other saved peers project `outer`. The field remains in the
+UniFFI/JNI contract for phase 1; explicit writes are ignored with a deprecation
+warning. Phase 3 removes this compatibility field after the UI cutover.
+
+Chat send and retry accept any destination, including unsaved discovered peers,
+contacts, and RCH roster members. Connected mode routes a roster-only peer via
+the configured hub; peers with their own route keep that route. Power saver
+still pauses chat. Events, missions, checklists, EAM, and telemetry use the active
+team roster. Household status (B04) and SOS reach all saved peers regardless of
+team. Maintained links follow membership in any local team or an open chat
+conversation; saving a contact alone does not request background links.
+
+On upgrade, legacy Inner peers outside all local teams join Yellow once; Outer
+contacts are not enrolled. The migration reads legacy values before deriving
+projections and commits settings, peers, and its completion marker together.
+The marker lives in SQLite metadata to keep the UniFFI dictionary unchanged.
 
 ### Signed Block Codes
 
@@ -72,7 +81,8 @@ destinations, signature, and the 1,999-byte encoded limit (the largest
 representable `REMBC1:` URL-safe-unpadded-Base64 envelope below the 2,000-byte
 product ceiling) are validated before
 review. The importer requires the operator to confirm the displayed signer
-fingerprint and provide a complete tier choice for every imported peer, then
+fingerprint and provide the legacy complete peer-tier list (tiers are ignored
+in phase 1; team assignment arrives in phase 2), then
 commits network settings, household profile, and peers in one AppState
 transaction. A failed validation or persistence step commits nothing. Legacy
 team QR codes remain import-only and do not become trusted Block Codes.
@@ -86,7 +96,7 @@ threshold, keeps it active until the battery reaches threshold plus three
 percentage points, and disables it while charging. The native
 `PowerStateChanged` event is the UI source of truth.
 
-Saver mode admits only SOS, exact Inner/direct telemetry, and one community
+Saver mode admits only SOS, team telemetry, and one community
 status transition publish. It rejects chat (including retry), EAM, ordinary
 events, checklists, plugins, raw packets, and control traffic at native command
 admission. Announce and telemetry cadence becomes
@@ -110,15 +120,18 @@ RCH membership remains read-only in REM. Local membership, the active team, and
 optional aliases are editable; aliases are never placed in LXMF fields, mission
 command arguments, or exported team data.
 
-The active team scopes every outbound recipient set while all local timelines
+The active team scopes team traffic while all local timelines
 remain shared. REM can create any of the 13 canonical color teams and assign a
-saved peer to several local colors. Existing saved peers migrate once to local
-Yellow. A local roster and an RCH roster with the same canonical UID appear as
+saved peer to several local colors. Legacy Inner peers outside any local team
+migrate once to Yellow. Contacts receive no team traffic, even without a roster. A local roster and an RCH roster with the same canonical UID appear as
 one merged section and one deduplicated recipient set. Autonomous and
 Semi-autonomous modes intersect the selected roster with local announce/link
 state. Connected mode sends local members directly and sends the RCH-owned
 portion through the configured hub after validating caller membership. An
-empty merged roster fails closed.
+empty merged roster fails closed. Telemetry follows the same roster and route
+availability, including propagation, with no recipient tier policy. Connected
+mode excludes exact positions sent to the hub until RCH defines a recipient
+policy; local team peers remain eligible.
 
 Legacy versioned local-team JSON and QR records remain import-only. Import
 merges membership by canonical color UID, creates saved peer records as needed,
@@ -204,9 +217,9 @@ sequenceDiagram
 
 This diagram shows the historical shape of the end-to-end mobile telemetry
 flow. The current recipient decision is native: Autonomous and
-Semi-autonomous modes require a saved Inner peer with a current direct route;
-Connected mode returns no exact-location destinations until RCH supplies an
-explicit recipient policy. The UI no longer selects a hub or propagation target
+Semi-autonomous modes use the active local and hub roster with available direct
+or propagation routes. Connected mode keeps local roster targets and excludes
+the hub from exact-position sends. The UI no longer selects a hub or propagation target
 for exact telemetry.
 
 ```mermaid
@@ -261,9 +274,9 @@ sequenceDiagram
 
 ## Flow Differences
 
-- `telemetryDestinations` is a native projection of saved Inner peers with a
-  current direct route. Connected mode is empty by policy; exact telemetry does
-  not collapse to the selected hub and does not use propagation.
+- `telemetryDestinations` is a native projection of eligible active-team routes.
+  Connected mode excludes exact-position sends to the hub; propagation to
+  eligible team peers is permitted.
 - Event direct sends can be local-peer fanout (`Autonomous`), hub-directory fanout (`SemiAutonomous`), or single-hop-to-RCH (`Connected`).
 - Telemetry sends compact telemetry fields directly and the receiver parses them immediately from `packetReceived`; events send Community Hub-style `mission.registry.log_entry.*` LXMF messages.
 - Standard LXMF transport proofs transition direct packet deliveries to `Delivered`. Telemetry has no additional application acknowledgement requirement; event and mission commands still depend on a `FIELD_RESULTS (0x0A)` result/event reply to transition from transport-delivered to application `Acknowledged`.

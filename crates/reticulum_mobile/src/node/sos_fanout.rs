@@ -135,23 +135,18 @@ fn run_sos_fanout(
             HubMode::Connected {}
         )
     });
-    let mut targets = match build_runtime_mission_replication_targets(
-        &status,
-        peers.as_slice(),
-        saved_peers.as_slice(),
-        active_propagation_node_hex.as_deref(),
-        active_config.as_ref(),
-        hub_directory_snapshot.as_ref(),
+    let mut targets = build_mission_replication_targets(
+        &status, peers.as_slice(), saved_peers.as_slice(), active_propagation_node_hex.as_deref(),
+    );
+    match build_runtime_mission_replication_targets(
+        &status, &peers, &saved_peers, active_propagation_node_hex.as_deref(),
+        active_config.as_ref(), hub_directory_snapshot.as_ref(),
     ) {
-        Ok(targets) => targets,
-        Err(error) => {
-            bus.emit(NodeEvent::Error {
-                code: "InvalidConfig".to_string(),
-                message: format!("sos active TEAM routing failed: {error}"),
-            });
-            Vec::new()
-        }
-    };
+        Ok(team_targets) => targets = merge_replication_target_sets(targets, team_targets),
+        Err(error) => bus.emit(NodeEvent::Error {
+            code: "InvalidConfig".to_string(), message: format!("sos active TEAM routing failed: {error}"),
+        }),
+    }
     let route_hops = route_hops_for_replication(&app_state, &bus, "sos");
     prioritize_sos_replication_targets(
         targets.as_mut_slice(),
@@ -168,13 +163,10 @@ fn run_sos_fanout(
     }
     for target in targets {
         let destination_hex = target.app_destination_hex.clone();
-        let target_telemetry = exact_telemetry_target_is_allowed(
-            &target,
-            saved_peers.as_slice(),
-            connected_mode,
-        )
-        .then_some(telemetry.as_ref())
-        .flatten();
+        let is_hub = connected_mode && destination_is_configured_hub(
+            &destination_hex, active_config.as_ref(), &peers, &saved_peers,
+        );
+        let target_telemetry = if is_hub { None } else { telemetry.as_ref() };
         let body = compose_sos_body(&settings, kind, target_telemetry);
         let command = SosCommand {
             state: kind,

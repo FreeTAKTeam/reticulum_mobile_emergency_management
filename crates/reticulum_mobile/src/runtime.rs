@@ -16,6 +16,7 @@ include!("runtime/destination_resolution.rs");
 include!("runtime/propagation.rs");
 include!("runtime/messages_commands.rs");
 include!("runtime/managed_links.rs");
+include!("runtime/team_link_policy.rs");
 include!("runtime/ack_tracking.rs");
 include!("runtime/ack_retries.rs");
 include!("runtime/delivery_send.rs");

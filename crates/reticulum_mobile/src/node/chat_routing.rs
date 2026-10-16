@@ -5,32 +5,45 @@ fn routed_chat_destination_hex<F>(
     load_routing_context: F,
 ) -> Result<String, NodeError>
 where
-    F: FnOnce() -> Result<(Vec<MessageRecord>, Vec<PeerRecord>), NodeError>,
+    F: FnOnce() -> Result<Vec<PeerRecord>, NodeError>,
 {
-    match routed_destination_hex(
-        requested_destination_hex.clone(),
-        active_config,
-        hub_directory_snapshot,
-    ) {
-        Ok(destination_hex) => Ok(destination_hex),
-        Err(NodeError::InvalidConfig {}) => {
-            let (messages, peers) = load_routing_context()?;
-            let resolver = conversation_peer_resolver(peers.as_slice());
-            let mut destinations = HashSet::from([requested_destination_hex.clone()]);
-            destinations.extend(
-                resolver
-                    .aliases_for_canonical(requested_destination_hex.as_str())
-                    .into_iter()
-                    .filter_map(|destination| normalize_hex_32(destination.as_str())),
-            );
-            if messages.iter().any(|message| {
-                delivery_policy::inbound_message_matches_destinations(message, &destinations)
-            }) {
-                Ok(requested_destination_hex)
-            } else {
-                Err(NodeError::InvalidConfig {})
+    let connected = active_config.is_some_and(|config| {
+        matches!(
+            effective_hub_mode(config.hub_mode, hub_directory_snapshot),
+            HubMode::Connected {}
+        )
+    });
+    if connected {
+        if let Some(snapshot) = hub_directory_snapshot {
+            let roster_only = snapshot.members.iter().any(|member| {
+                normalize_hex_32(&member.destination_hash).as_deref()
+                    == Some(&requested_destination_hex)
+            }) || snapshot.items.iter().any(|item| {
+                normalize_hex_32(&item.destination_hash).as_deref()
+                    == Some(&requested_destination_hex)
+            });
+            if roster_only {
+                let peers = load_routing_context()?;
+                let has_own_route = peers.iter().any(|peer| {
+                    crate::team_membership::destinations_include_peer(
+                        std::slice::from_ref(&requested_destination_hex),
+                        &peer.destination_hex,
+                        peer.lxmf_destination_hex.as_deref(),
+                        peer.identity_hex.as_deref(),
+                    ) && (peer.active_link || peer_has_observed_lxmf_delivery_route(peer))
+                });
+                let locally_known = snapshot.local_teams.iter().any(|team| {
+                    team.member_destinations.iter().any(|member| {
+                        normalize_hex_32(member).as_deref() == Some(&requested_destination_hex)
+                    })
+                });
+                if !has_own_route && !locally_known {
+                    if let Some(config) = active_config {
+                        return configured_hub_destination(config);
+                    }
+                }
             }
         }
-        Err(error) => Err(error),
     }
+    Ok(requested_destination_hex)
 }

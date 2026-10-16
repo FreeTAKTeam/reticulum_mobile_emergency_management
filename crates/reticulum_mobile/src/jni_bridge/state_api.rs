@@ -80,6 +80,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_setSaved
         Err(_) => return err_result("InternalError", "bridge lock poisoned"),
     };
     let node = ensure_node_or_return!(&mut guard);
+    let tier_supplied = payload.saved_peers.iter().any(|peer| peer.circle_tier.is_some());
     let peers = match payload
         .saved_peers
         .into_iter()
@@ -92,7 +93,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_setSaved
             return RESULT_ERR;
         }
     };
-    match node.set_saved_peers(peers) {
+    match node.set_saved_peers_from_bridge(peers, tier_supplied) {
         Ok(_) => ok_result(),
         Err(err) => {
             set_last_node_error(err);

@@ -22,6 +22,7 @@ impl AppStateStore {
         request: &BlockOnboardingImportRequest,
         fail_after_settings_write: bool,
     ) -> Result<BlockOnboardingImportResult, NodeError> {
+        self.get_app_settings()?;
         let mut expected = inspection.trusted_destination_hashes.clone();
         expected.push(inspection.issuer_app_destination_hex.clone());
         expected.sort();
@@ -100,7 +101,7 @@ impl AppStateStore {
                     last_hops: None,
                     circle_tier: CircleTier::Outer {},
                 });
-            peer.circle_tier = tier.circle_tier;
+            crate::team_membership::apply_derived_circle_tiers(std::slice::from_mut(&mut peer), &settings.teams.local_teams);
             peer.saved_at_ms = now_ms();
             self.write_saved_peer_tx(&transaction, &peer)?;
         }

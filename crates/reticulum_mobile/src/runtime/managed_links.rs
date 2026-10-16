@@ -172,7 +172,9 @@ async fn register_desired_managed_peer_link(
         return None;
     }
     let target = desired_managed_peer_link_target_for_destination(state, destination_hex).await?;
-    state.managed_peer_links.add_desired(target.clone()).await;
+    if should_maintain_peer_link(state, destination_hex).await {
+        state.managed_peer_links.add_desired(target.clone()).await;
+    }
     Some(target)
 }
 
@@ -182,6 +184,7 @@ async fn add_desired_managed_peer_link_and_schedule(
     target: ManagedPeerLinkTarget,
     reason: &str,
 ) {
+    if !should_maintain_peer_link(state, &target.destination_hex).await { return; }
     state.managed_peer_links.add_desired(target.clone()).await;
     if !has_active_relay_transport_interface(state).await {
         info!(
@@ -314,6 +317,10 @@ async fn ensure_managed_peer_link(
 }
 
 async fn maintain_managed_peer_links_once(state: &NodeRuntimeState, bus: &EventBus) {
+    if let Err(error) = reconcile_team_link_targets(state).await {
+        log::warn!("link membership reconciliation failed: {error}");
+        return;
+    }
     // A LoRa RNode is a constrained, half-duplex bearer. Proactively opening a
     // link to every saved peer causes repeated link requests to occupy the
     // airtime queue and can delay a valid proof beyond the link activation

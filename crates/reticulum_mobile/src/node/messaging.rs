@@ -34,7 +34,7 @@ impl Node {
     }
 
     pub fn send_lxmf(&self, request: SendLxmfRequest) -> Result<String, NodeError> {
-        let (tx, active_config, hub_directory_snapshot, app_state, peers_snapshot, saver_active) = {
+        let (tx, active_config, hub_directory_snapshot, peers_snapshot, saver_active) = {
             let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             let snapshot = inner
                 .hub_directory_snapshot
@@ -45,7 +45,6 @@ impl Node {
                 inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?,
                 inner.active_config.clone(),
                 snapshot,
-                inner.app_state.clone(),
                 inner.peers_snapshot.clone(),
                 inner.power_state.saver_active,
             )
@@ -54,25 +53,12 @@ impl Node {
             .ok_or(NodeError::InvalidConfig {})?;
         let logical_destination_hex = requested_destination.clone();
         ensure_outbound_admitted(saver_active, OutboundTrafficClass::Chat {})?;
-        let saved_peers = app_state.get_saved_peers()?;
-        let runtime_peers = peers_snapshot.lock().map_err(|error| {
-            crate::error_context::contextual_node_error(NodeError::InternalError {}, error)
-        })?;
-        if !inner_saved_peer_authorizes_destination(
-            &saved_peers,
-            runtime_peers.as_slice(),
-            &requested_destination,
-        ) {
-            return Err(NodeError::InvalidConfig {});
-        }
-        drop(runtime_peers);
         let request = SendLxmfRequest {
             destination_hex: routed_chat_destination_hex(
                 requested_destination,
                 active_config.as_ref(),
                 hub_directory_snapshot.as_ref(),
                 || {
-                    let messages = app_state.list_messages(None)?;
                     let peers = peers_snapshot
                         .lock()
                         .map(|guard| guard.clone())
@@ -82,7 +68,7 @@ impl Node {
                                 error,
                             )
                         })?;
-                    Ok((messages, peers))
+                    Ok(peers)
                 },
             )?,
             ..request
@@ -126,16 +112,6 @@ impl Node {
                 let runtime_peers = inner.peers_snapshot.lock().map_err(|error| {
                     crate::error_context::contextual_node_error(NodeError::InternalError {}, error)
                 })?;
-                if !inner_saved_peer_authorizes_destination(
-                    &inner.app_state.get_saved_peers()?,
-                    runtime_peers.as_slice(),
-                    message
-                        .requested_destination_hex
-                        .as_deref()
-                        .unwrap_or(&message.destination_hex),
-                ) {
-                    return Err(NodeError::InvalidConfig {});
-                }
                 let hub_directory_snapshot = inner
                     .hub_directory_snapshot
                     .lock()
@@ -150,7 +126,7 @@ impl Node {
                     logical_destination_hex,
                     inner.active_config.as_ref(),
                     hub_directory_snapshot.as_ref(),
-                    || Ok((inner.app_state.list_messages(None)?, runtime_peers.clone())),
+                    || Ok(runtime_peers.clone()),
                 )?
             } else {
                 message

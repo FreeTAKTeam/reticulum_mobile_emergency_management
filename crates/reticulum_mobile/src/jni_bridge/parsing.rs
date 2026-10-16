@@ -325,10 +325,8 @@ fn to_saved_peer_record(input: SavedPeerInput) -> Result<SavedPeerRecord, NodeEr
     })
 }
 
-fn to_explicit_saved_peer_record(input: SavedPeerInput) -> Result<SavedPeerRecord, NodeError> {
-    if input.circle_tier.is_none() {
-        return Err(NodeError::InvalidConfig {});
-    }
+fn to_explicit_saved_peer_record(mut input: SavedPeerInput) -> Result<SavedPeerRecord, NodeError> {
+    input.circle_tier = Some("outer".to_string());
     to_saved_peer_record(input)
 }
 

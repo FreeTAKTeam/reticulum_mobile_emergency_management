@@ -60,6 +60,8 @@ mod sos_detector;
 #[deny(unsafe_code)]
 mod sos_fields;
 #[deny(unsafe_code)]
+mod team_membership;
+#[deny(unsafe_code)]
 mod types;
 
 pub use node::{EventSubscription, Node};

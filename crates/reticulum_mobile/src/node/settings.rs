@@ -35,6 +35,10 @@ impl Node {
             })?;
             let invalidation = inner.app_state.set_app_settings(&settings)?;
             emit_projection_invalidation(&inner.bus, invalidation);
+            let peers_invalidation = inner.app_state.bump_projection_revision(
+                ProjectionScope::SavedPeers {}, None, Some("team-membership-updated".to_string()),
+            )?;
+            emit_projection_invalidation(&inner.bus, peers_invalidation);
             let mut snapshot = inner.hub_directory_snapshot.lock().map_err(|error| {
                 crate::error_context::contextual_node_error(NodeError::InternalError {}, error)
             })?;

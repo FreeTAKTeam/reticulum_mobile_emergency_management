@@ -182,20 +182,19 @@ fn build_runtime_telemetry_destinations(
     let self_destination_hex = normalize_hex_32(status.app_destination_hex.as_str());
     let local_destinations = hub_directory_snapshot
         .map(active_local_team_destinations)
-        .unwrap_or_default()
-        .into_iter()
-        .collect::<HashSet<_>>();
-    let local_peers = if hub_directory_snapshot.is_some_and(|snapshot| !snapshot.local_teams.is_empty()) {
-        peers
-            .iter()
-            .filter(|peer| {
-                local_destinations.contains(&peer.destination_hex.to_ascii_lowercase())
-            })
-            .cloned()
-            .collect::<Vec<_>>()
-    } else {
-        peers.to_vec()
-    };
+        .unwrap_or_default();
+    let local_peers = peers
+        .iter()
+        .filter(|peer| {
+            crate::team_membership::destinations_include_peer(
+                &local_destinations,
+                &peer.destination_hex,
+                peer.lxmf_destination_hex.as_deref(),
+                peer.identity_hex.as_deref(),
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
     let Some(config) = active_config else {
         return Ok(telemetry_targets_from_peers_with_relay(
             &local_peers,
@@ -205,17 +204,11 @@ fn build_runtime_telemetry_destinations(
     };
 
     let mode = effective_hub_mode(config.hub_mode, hub_directory_snapshot);
-    let local_targets = if !local_destinations.is_empty()
-        || hub_directory_snapshot.is_none_or(|snapshot| snapshot.local_teams.is_empty())
-    {
-        telemetry_targets_from_peers_with_relay(
-            &local_peers,
-            self_destination_hex.as_deref(),
-            active_propagation_node_hex,
-        )
-    } else {
-        Vec::new()
-    };
+    let local_targets = telemetry_targets_from_peers_with_relay(
+        &local_peers,
+        self_destination_hex.as_deref(),
+        active_propagation_node_hex,
+    );
     let Some(snapshot) = hub_directory_snapshot else {
         return Ok(local_targets);
     };
@@ -226,20 +219,23 @@ fn build_runtime_telemetry_destinations(
         active_propagation_node_hex,
     );
     if matches!(mode, HubMode::Connected {}) {
-        let hub_targets = if active_team_has_caller_membership(snapshot)
+        if active_team_has_caller_membership(snapshot)
             && !active_team_directory_destinations(snapshot, Some("telemetry")).is_empty()
         {
-            vec![connected_hub_replication_target(
-                peers,
-                active_propagation_node_hex,
-                config,
-            )?]
-        } else {
-            Vec::new()
-        };
-        return Ok(merge_replication_target_sets(local_targets, hub_targets));
+            configured_hub_destination(config)?;
+        }
+        // RCH has no exact-position recipient policy; local team routes remain eligible.
+        return Ok(local_targets
+            .into_iter()
+            .filter(|target| {
+                !destination_is_configured_hub(&target.app_destination_hex, Some(config), peers, &[])
+            })
+            .collect());
     }
-    Ok(merge_replication_target_sets(local_targets, directory_targets))
+    Ok(merge_replication_target_sets(
+        local_targets,
+        directory_targets,
+    ))
 }
 
 fn configured_hub_destination(config: &NodeConfigFingerprint) -> Result<String, NodeError> {
@@ -281,8 +277,7 @@ fn routed_destination_hex(
             && !active_local_team_destinations(snapshot).contains(&requested_destination_hex)
             && !active_team_directory_destinations(snapshot, None)
                 .contains(&requested_destination_hex)
-    })
-    {
+    }) {
         return Err(NodeError::InvalidConfig {});
     }
     Ok(requested_destination_hex)
