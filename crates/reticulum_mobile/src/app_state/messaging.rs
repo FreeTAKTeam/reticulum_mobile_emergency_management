@@ -1,4 +1,24 @@
 impl AppStateStore {
+    pub(crate) fn chat_correspondent_destinations(&self) -> Result<Vec<String>, NodeError> {
+        let connection = self.connect()?;
+        let mut statement = connection.prepare(
+            "SELECT DISTINCT CASE
+                WHEN json_type(json, '$.direction.Inbound') IS NOT NULL
+                THEN json_extract(json, '$.source_hex')
+                ELSE coalesce(json_extract(json, '$.requested_destination_hex'),
+                              json_extract(json, '$.destination_hex'))
+             END AS correspondent
+             FROM messages
+             WHERE (lower(trim(json_extract(json, '$.traffic_class'))) = 'chat'
+                    OR json_type(json, '$.traffic_class') IS NULL)
+               AND correspondent IS NOT NULL",
+        ).map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))
+    }
+
     pub fn list_messages(
         &self,
         conversation_id: Option<&str>,

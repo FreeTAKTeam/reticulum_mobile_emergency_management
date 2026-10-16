@@ -359,12 +359,14 @@ async fn send_lxmf_with_delivery_policy(
         .await;
         if is_saved_peer {
             record_peer_link_state(state, bus, requested_destination_hex, false).await;
-            if let Some(target) =
-                register_desired_managed_peer_link(state, requested_destination_hex).await
+            if let Some(registration) =
+                register_desired_managed_peer_link(state, requested_destination_hex)
+                    .await
+                    .filter(|registration| registration.maintained)
             {
                 if let ManagedPeerReconnectStart::Started(target) = state
                     .managed_peer_links
-                    .begin_reconnect(target.destination_hex.as_str())
+                    .begin_reconnect(registration.target.destination_hex.as_str())
                     .await
                 {
                     spawn_managed_peer_link_reconnect(state.clone(), bus.clone(), target);

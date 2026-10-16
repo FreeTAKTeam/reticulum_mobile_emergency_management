@@ -43,6 +43,25 @@ where
     error
 }
 
+/// Records an `InvalidConfig` rejection whose human-readable `reason` names the
+/// offending field, so the bridge can surface it instead of a bare "invalid config".
+#[track_caller]
+pub(crate) fn invalid_config(reason: impl Into<String>) -> NodeError {
+    let reason = reason.into();
+    let operation = operation_from_location(Location::caller());
+    log::warn!("{operation} [InvalidConfig] rejected: {reason}");
+    LAST_INTERNAL_FAILURE.with(|slot| {
+        slot.replace(Some(InternalFailure {
+            code: "InvalidConfig",
+            message: reason.clone(),
+            operation,
+            retryable: false,
+            cause: reason,
+        }))
+    });
+    NodeError::InvalidConfig {}
+}
+
 pub(crate) fn clear_internal_failure() {
     LAST_INTERNAL_FAILURE.with(|slot| slot.replace(None));
 }
@@ -105,6 +124,20 @@ mod tests {
         assert_eq!(context.code, "IoError");
         assert!(context.retryable);
         assert_eq!(context.cause, "\"database unavailable\"");
+        assert!(context.operation.contains("error_context"));
+    }
+
+    #[test]
+    fn invalid_config_reasons_are_surfaced_as_the_failure_message() {
+        clear_internal_failure();
+
+        let error = invalid_config("household name is required");
+
+        assert!(matches!(error, NodeError::InvalidConfig {}));
+        let context = take_internal_failure("InvalidConfig").expect("reason should be recorded");
+        assert_eq!(context.message, "household name is required");
+        assert_eq!(context.cause, "household name is required");
+        assert!(!context.retryable);
         assert!(context.operation.contains("error_context"));
     }
 }

@@ -33,3 +33,12 @@ export function householdIdFromDestination(destination: string): string {
   const normalized = destination.trim().toLowerCase();
   return /^[0-9a-f]{16,}$/.test(normalized) ? normalized.slice(0, 16) : "";
 }
+
+/**
+ * Household ID a form sends to the runtime: the operator's own entry when present,
+ * otherwise the node's app destination prefix, so a profile with only a name
+ * typed is not rejected for a missing ID.
+ */
+export function resolveHouseholdId(typed: string, appDestinationHex: string): string {
+  return typed.trim().toLowerCase() || householdIdFromDestination(appDestinationHex);
+}

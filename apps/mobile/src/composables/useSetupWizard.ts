@@ -3,6 +3,8 @@ import { useRouter } from "vue-router";
 import { useNodeStore } from "../stores/nodeStore";
 import { useSosStore } from "../stores/sosStore";
 import { normalizeDisplayName } from "../utils/peers";
+import { householdIdFromDestination, resolveHouseholdId } from "../utils/communityStatus";
+import { describeSettingsSaveError, type SettingsSaveField } from "../utils/settingsSaveErrors";
 import { DEFAULT_TCP_COMMUNITY_ENDPOINTS, normalizeTcpCommunityClients } from "../utils/tcpCommunityServers";
 import { markSetupWizardCompleted, markSetupWizardOpened } from "../utils/setupWizardState";
 import { runDetachedStoreTask } from "../utils/detachedStoreTask";
@@ -42,7 +44,6 @@ import {
   requestNotificationPermission,
   requestRnodeBluetoothPermission,
   type SetupPermissionSnapshot,
-  type SetupPermissionState,
 } from "../services/setupPermissions";
 import {
   SETUP_STEPS,
@@ -50,6 +51,7 @@ import {
   USB_BOND_POLL_DELAY_MS,
   normalizeWizardTcpEndpoint,
   normalizeWizardTelemetryPublishIntervalSeconds,
+  permissionLabel,
 } from "./setupWizardConfig";
 
 export {
@@ -65,6 +67,7 @@ export function useSetupWizard() {
   const customTcpEndpoint = shallowRef("");
   const feedback = shallowRef("");
   const saving = shallowRef(false);
+  const invalidSettingsField = shallowRef<SettingsSaveField | undefined>(undefined);
   const rnodePairedLoading = shallowRef(false);
   const rnodePairedDevices = shallowRef<RnodeBluetoothDeviceRecord[]>([]);
   const rnodeScanning = shallowRef(false);
@@ -97,6 +100,7 @@ export function useSetupWizard() {
     normalizeWizardTelemetryPublishIntervalSeconds(draft.telemetryPublishIntervalSeconds),
   );
   const selectedTcpEndpointSet = computed(() => new Set(normalizedTcpClients.value));
+  const defaultHouseholdId = computed(() => householdIdFromDestination(nodeStore.status.appDestinationHex));
   const sosFloatingButtonEnabled = computed(() => draft.sosEnabled || sosStore.settings.floatingButton);
 
   const canGoNext = computed(() => {
@@ -394,20 +398,6 @@ export function useSetupWizard() {
     return rnodeProfileSummary(profile);
   }
 
-  function permissionLabel(value: SetupPermissionState): string {
-    switch (value) {
-      case "granted":
-        return "Granted";
-      case "denied":
-        return "Denied";
-      case "unavailable":
-        return "Unavailable";
-      case "prompt":
-      default:
-        return "Not requested";
-    }
-  }
-
   async function finish(): Promise<void> {
     if (!normalizedDisplayName.value || saving.value) {
       feedback.value = "Set a call sign before finishing setup.";
@@ -419,6 +409,7 @@ export function useSetupWizard() {
     }
     saving.value = true;
     feedback.value = "";
+    invalidSettingsField.value = undefined;
     try {
       await nodeStore.updateSettings({
         displayName: normalizedDisplayName.value,
@@ -429,7 +420,12 @@ export function useSetupWizard() {
           publishIntervalSeconds: normalizedTelemetryPublishIntervalSeconds.value,
         },
         rnode: normalizeRnodeSettings(draft.rnode),
-        community: { ...draft.community, householdId: draft.community.householdId.trim().toLowerCase(), householdName: draft.community.householdName.trim(), roleBadges: [...draft.community.roleBadges] },
+        community: {
+          ...draft.community,
+          householdId: resolveHouseholdId(draft.community.householdId, nodeStore.status.appDestinationHex),
+          householdName: draft.community.householdName.trim(),
+          roleBadges: [...draft.community.roleBadges],
+        },
         power: { ...draft.power },
       });
       await sosStore.saveSettings({
@@ -444,7 +440,9 @@ export function useSetupWizard() {
       await nodeStore.startNode();
       await router.replace("/dashboard");
     } catch (error: unknown) {
-      feedback.value = error instanceof Error ? error.message : String(error);
+      const failure = describeSettingsSaveError(error);
+      feedback.value = failure.message;
+      invalidSettingsField.value = failure.field;
     } finally {
       saving.value = false;
     }
@@ -455,8 +453,10 @@ export function useSetupWizard() {
     activeStep,
     canGoNext,
     customTcpEndpoint,
+    defaultHouseholdId,
     draft,
     feedback,
+    invalidSettingsField,
     normalizedDisplayName,
     normalizedTelemetryPublishIntervalSeconds,
     normalizedTcpClients,

@@ -73,7 +73,7 @@ async fn selected_saved_peer_record(
         display_name: None,
         last_route_seen_at_ms: None,
         last_hops: None,
-        circle_tier: CircleTier::Inner {},
+        circle_tier: CircleTier::Outer {},
     });
     record.destination_hex = destination_hex;
     record.saved_at_ms = now;
@@ -92,6 +92,8 @@ async fn selected_saved_peer_record(
     } else if record.lxmf_destination_hex.is_none() {
         record.lxmf_destination_hex = Some(normalized_selected);
     }
+    let teams = state.app_state.get_app_settings()?.map(|settings| settings.teams).unwrap_or_default();
+    crate::team_membership::apply_derived_circle_tiers(std::slice::from_mut(&mut record), &teams.local_teams);
     Ok(record)
 }
 
@@ -300,6 +302,7 @@ async fn apply_saved_peer_management_projection(
     cleanup_removed_saved_destinations(state, cleanup_destinations.as_slice()).await;
     mark_peer_destinations_ignored(state, cleanup_destinations.as_slice()).await;
 
+    reconcile_team_link_targets(state).await?;
     for target in desired_targets {
         add_desired_managed_peer_link_and_schedule(state, bus, target, "saved-peers-updated").await;
     }

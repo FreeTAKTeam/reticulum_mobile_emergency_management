@@ -403,6 +403,18 @@ fn replication_targets_match_saved_peers_by_lxmf_hash_once_identity_is_known() {
     )];
     let linked = build_peer_record("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", lxmf, true, true, true);
     let relay = "99999999999999999999999999999999";
+    // Replication trust comes from the active local team, so list both saved
+    // peers as Yellow members.
+    let snapshot = HubDirectorySnapshot {
+        local_teams: vec![crate::types::LocalTeamRecord {
+            team_uid: YELLOW_TEAM_UID.to_string(),
+            member_destinations: vec![
+                lxmf.to_string(),
+                "dddddddddddddddddddddddddddddddd".to_string(),
+            ],
+        }],
+        ..HubDirectorySnapshot::yellow_only(123)
+    };
 
     for active_relay in [None, Some(relay)] {
         let events = build_runtime_event_replication_targets(
@@ -411,7 +423,7 @@ fn replication_targets_match_saved_peers_by_lxmf_hash_once_identity_is_known() {
             &saved,
             active_relay,
             None,
-            None,
+            Some(&snapshot),
         )
         .expect("event targets");
         assert_eq!(events.len(), 1, "relay={active_relay:?}");
@@ -439,7 +451,7 @@ fn replication_targets_match_saved_peers_by_lxmf_hash_once_identity_is_known() {
         &[unreachable, saved[0].clone()],
         Some(relay),
         None,
-        None,
+        Some(&snapshot),
     )
     .expect("event targets");
     prioritize_replication_targets_by_route_hops(

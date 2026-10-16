@@ -111,6 +111,14 @@ fn create_map_marker_returns_without_waiting_for_replication_delivery() {
             true,
             true,
         )];
+        // Replication targets are the active local team's members.
+        *inner.hub_directory_snapshot.lock().expect("directory lock") = Some(HubDirectorySnapshot {
+            local_teams: vec![crate::types::LocalTeamRecord {
+                team_uid: YELLOW_TEAM_UID.to_string(),
+                member_destinations: vec!["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()],
+            }],
+            ..HubDirectorySnapshot::yellow_only(123)
+        });
         inner.cmd_tx = Some(tx);
     }
 

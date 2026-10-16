@@ -22,6 +22,7 @@ impl AppStateStore {
         request: &BlockOnboardingImportRequest,
         fail_after_settings_write: bool,
     ) -> Result<BlockOnboardingImportResult, NodeError> {
+        self.get_app_settings()?;
         let mut expected = inspection.trusted_destination_hashes.clone();
         expected.push(inspection.issuer_app_destination_hex.clone());
         expected.sort();
@@ -41,7 +42,9 @@ impl AppStateStore {
             crate::error_context::contextual_node_error(NodeError::IoError {}, error)
         })?;
         let raw: String = transaction
-            .query_row("SELECT json FROM app_settings WHERE id = 1", [], |row| row.get(0))
+            .query_row("SELECT json FROM app_settings WHERE id = 1", [], |row| {
+                row.get(0)
+            })
             .map_err(|error| {
                 crate::error_context::contextual_node_error(NodeError::InvalidConfig {}, error)
             })?;
@@ -67,6 +70,38 @@ impl AppStateStore {
         }
         settings.community = request.community.clone();
         settings.community.preferred_map_layer = inspection.preferred_map_layer;
+        // The phase-1 tier picker enrolls Inner selections in the active local team.
+        let active_uid = settings.teams.active_team_uid.clone();
+        let team_index = settings
+            .teams
+            .local_teams
+            .iter()
+            .position(|team| team.team_uid == active_uid)
+            .or_else(|| {
+                settings
+                    .teams
+                    .local_teams
+                    .iter()
+                    .position(|team| team.team_uid == YELLOW_TEAM_UID)
+            })
+            .unwrap_or_else(|| {
+                settings.teams.local_teams.push(LocalTeamRecord {
+                    team_uid: YELLOW_TEAM_UID.to_string(),
+                    member_destinations: Vec::new(),
+                });
+                settings.teams.local_teams.len() - 1
+            });
+        settings.teams.active_team_uid = settings.teams.local_teams[team_index].team_uid.clone();
+        let members = &mut settings.teams.local_teams[team_index].member_destinations;
+        for tier in &request.peer_tiers {
+            if matches!(tier.circle_tier, CircleTier::Inner {}) {
+                let destination = crate::delivery_policy::normalize_hex_32(&tier.destination_hex)
+                    .ok_or(NodeError::InvalidConfig {})?;
+                if !members.contains(&destination) {
+                    members.push(destination);
+                }
+            }
+        }
         self.write_app_settings_tx(&transaction, &settings)?;
         if fail_after_settings_write {
             return Err(NodeError::IoError {});
@@ -100,7 +135,10 @@ impl AppStateStore {
                     last_hops: None,
                     circle_tier: CircleTier::Outer {},
                 });
-            peer.circle_tier = tier.circle_tier;
+            crate::team_membership::apply_derived_circle_tiers(
+                std::slice::from_mut(&mut peer),
+                &settings.teams.local_teams,
+            );
             peer.saved_at_ms = now_ms();
             self.write_saved_peer_tx(&transaction, &peer)?;
         }

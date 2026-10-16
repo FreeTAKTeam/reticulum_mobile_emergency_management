@@ -15,6 +15,7 @@ import SosEmergencyCard from "../components/sos/SosEmergencyCard.vue";
 import { useNodeStore } from "../stores/nodeStore";
 import { ensureRequiredAnnounceCapabilities } from "../utils/peers";
 import { householdIdFromDestination } from "../utils/communityStatus";
+import { describeSettingsSaveError, type SettingsSaveField } from "../utils/settingsSaveErrors";
 import {
   RNODE_FREQUENCY_MAX_HZ,
   RNODE_FREQUENCY_MIN_HZ,
@@ -68,6 +69,7 @@ const form = reactive({
 const initialFormSnapshot = JSON.stringify(form);
 
 const runtimeFeedback = ref("");
+const saveErrorField = ref<SettingsSaveField | undefined>(undefined);
 const nodeControlPanel = useTemplateRef<{ openPanel: () => void }>("nodeControlPanel");
 
 const normalizedTcpClients = computed(() =>
@@ -232,6 +234,7 @@ async function applySettings(): Promise<void> {
   let rnodeApplyError = "";
   let rnodeAppliedToRuntime = false;
   savingSettings.value = true;
+  saveErrorField.value = undefined;
   try {
     await nodeStore.updateSettings({
       displayName: form.displayName,
@@ -293,7 +296,9 @@ async function applySettings(): Promise<void> {
       }
     }
   } catch (error: unknown) {
-    runtimeFeedback.value = error instanceof Error ? error.message : String(error);
+    const failure = describeSettingsSaveError(error);
+    runtimeFeedback.value = failure.message;
+    saveErrorField.value = failure.field;
     return;
   } finally {
     savingSettings.value = false;
@@ -417,7 +422,7 @@ function openNodeControlPanel(): void {
 
     <SettingsTelemetryPanel :form="form" />
 
-    <SettingsCommunityPanel :form="form" />
+    <SettingsCommunityPanel :form="form" :invalid-field="saveErrorField" />
 
     <SettingsBlockOnboardingPanel />
 

@@ -1,3 +1,5 @@
+import type { SetupPermissionState } from "../services/setupPermissions";
+
 export type SetupWizardStepId =
   | "welcome"
   | "callsign"
@@ -27,6 +29,20 @@ export const SETUP_STEPS: SetupWizardStep[] = [
 
 export const USB_BOND_POLL_ATTEMPTS = 15;
 export const USB_BOND_POLL_DELAY_MS = 2_000;
+
+export function permissionLabel(value: SetupPermissionState): string {
+  switch (value) {
+    case "granted":
+      return "Granted";
+    case "denied":
+      return "Denied";
+    case "unavailable":
+      return "Unavailable";
+    case "prompt":
+    default:
+      return "Not requested";
+  }
+}
 
 const DEFAULT_TELEMETRY_PUBLISH_INTERVAL_SECONDS = 360;
 
