@@ -154,10 +154,13 @@ function shareWithPlugin(pluginId: string): void {
   }
 }
 
+/** Long-press places the next marker; an open details sheet gets out of the way first. */
 function longPress(lat: number, lon: number): void {
-  if (state.value.kind !== "idle" || !store.visible) {
+  const current = state.value;
+  if (!store.visible || (current.kind !== "idle" && current.kind !== "details")) {
     return;
   }
+  state.value = { kind: "idle" };
   const latest = store.recent[0];
   if (latest) {
     void createAt(latest, lat, lon);
@@ -185,6 +188,11 @@ useMapMarkerPins({
     }
   },
   onLongPress: longPress,
+  onMapTap: () => {
+    if (state.value.kind === "details") {
+      state.value = { kind: "idle" };
+    }
+  },
 });
 
 onMounted(() => {
