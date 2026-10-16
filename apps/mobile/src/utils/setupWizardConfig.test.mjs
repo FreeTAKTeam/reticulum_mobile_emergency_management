@@ -13,6 +13,7 @@ const transpiled = ts.transpileModule(source, {
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(transpiled).toString("base64")}`;
 const {
   SETUP_STEPS,
+  permissionLabel,
   normalizeWizardTcpEndpoint,
   normalizeWizardTelemetryPublishIntervalSeconds,
 } = await import(moduleUrl);
@@ -35,4 +36,11 @@ test("setup wizard validates IPv4, hostname, and bracketed IPv6 endpoints", () =
   assert.equal(normalizeWizardTcpEndpoint("[2001:db8::1]:4242"), "[2001:db8::1]:4242");
   assert.equal(normalizeWizardTcpEndpoint("missing-port"), undefined);
   assert.equal(normalizeWizardTcpEndpoint("mesh.example:70000"), undefined);
+});
+
+test("permission states map to operator-facing labels", () => {
+  assert.equal(permissionLabel("granted"), "Granted");
+  assert.equal(permissionLabel("denied"), "Denied");
+  assert.equal(permissionLabel("unavailable"), "Unavailable");
+  assert.equal(permissionLabel("prompt"), "Not requested");
 });

@@ -8,7 +8,7 @@ const transpiled = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 },
 }).outputText;
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(transpiled).toString("base64")}`;
-const { COMMUNITY_STATUS_OPTIONS, freshnessLabel, householdComposition } = await import(moduleUrl);
+const { COMMUNITY_STATUS_OPTIONS, freshnessLabel, householdComposition, resolveHouseholdId } = await import(moduleUrl);
 
 test("community status exposes the exact four operator actions", () => {
   assert.deepEqual(COMMUNITY_STATUS_OPTIONS.map(({ label }) => label), [
@@ -26,4 +26,13 @@ test("native-projected B04 records are presentation-only inputs", () => {
   };
   assert.equal(householdComposition(projection), "3 people · 2 pets");
   assert.equal(freshnessLabel(updatedAt, updatedAt + 3_600_000), "updated 1h ago");
+});
+
+test("a household profile without a typed ID falls back to the node's app destination", () => {
+  const destination = "0123456789ABCDEF0123456789abcdef";
+  assert.equal(resolveHouseholdId("", destination), "0123456789abcdef");
+  assert.equal(resolveHouseholdId("   ", destination), "0123456789abcdef");
+  assert.equal(resolveHouseholdId("FEDCBA9876543210", destination), "fedcba9876543210");
+  assert.equal(resolveHouseholdId("", ""), "");
+  assert.equal(resolveHouseholdId("", "not-a-destination"), "");
 });
