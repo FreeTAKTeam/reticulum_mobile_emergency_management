@@ -35,60 +35,6 @@
   z-index: 3;
 }
 
-.map-chip {
-  align-items: center;
-  background: rgb(7 25 54 / 84%);
-  border: 1px solid rgb(73 173 255 / 46%);
-  border-radius: 12px;
-  box-shadow:
-    inset 0 1px 0 rgb(183 235 255 / 8%),
-    0 0 18px rgb(33 153 255 / 7%);
-  color: #8fcaff;
-  display: inline-flex;
-  font-family: var(--font-ui);
-  font-size: clamp(0.88rem, 2vw, 1.02rem);
-  font-weight: 700;
-  gap: 0.42rem;
-  justify-content: center;
-  min-height: 2.64rem;
-  min-width: 3.35rem;
-  padding: 0.42rem 0.58rem;
-}
-
-button.map-chip {
-  cursor: pointer;
-}
-
-.map-chip svg {
-  flex: 0 0 auto;
-  height: 1.05rem;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.8;
-  width: 1.05rem;
-}
-
-.map-chip-count {
-  font-variant-numeric: tabular-nums;
-  min-width: 0;
-}
-
-.live-chip {
-  border-color: rgb(67 218 157 / 48%);
-  color: #58f090;
-}
-
-.stale-chip {
-  border-color: rgb(225 159 79 / 48%);
-  color: #f7b860;
-}
-
-.sos-chip {
-  border-color: rgb(239 68 68 / 58%);
-  color: #ff5e64;
-}
-
 .map-container {
   border: 1px solid rgb(90 142 220 / 24%);
   border-radius: 12px;
@@ -391,18 +337,5 @@ button.map-chip {
     left: 0.58rem;
     max-width: calc(100% - 1.16rem);
     top: 0.58rem;
-  }
-
-  .map-chip {
-    font-size: 0.72rem;
-    gap: 0.3rem;
-    min-height: 2.4rem;
-    min-width: 2.86rem;
-    padding-inline: 0.42rem;
-  }
-
-  .map-chip svg {
-    height: 0.9rem;
-    width: 0.9rem;
   }
 }
