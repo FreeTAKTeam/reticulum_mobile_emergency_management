@@ -16,7 +16,7 @@ const invalid = (field: SettingsSaveField): boolean => props.invalidField === fi
   <section class="settings-panel community-panel">
     <header><div><p class="eyebrow">COMMUNITY PROFILE</p><h2>Household & power</h2></div><p>Share only a compact, GPS-free household summary.</p></header>
     <div class="community-grid">
-      <label class="wide"><span>Household name</span><input v-model="form.householdName" maxlength="64" placeholder="Harbour House" :aria-invalid="invalid('householdName')" /><small v-if="invalid('householdName')" class="field-error" role="alert">The native runtime needs a household name before it can save this profile.</small></label>
+      <label class="wide"><span>Household name</span><input v-model="form.householdName" maxlength="64" placeholder="Harbour House" :aria-invalid="invalid('householdName')" /><small v-if="!invalid('householdName') && !form.householdName.trim()">Leave empty to use the standard name "Household &lt;call sign&gt;".</small><small v-if="invalid('householdName')" class="field-error" role="alert">Household name must be 1 to 64 characters.</small></label>
       <label><span>Household ID</span><input v-model="form.householdId" maxlength="16" pattern="[0-9a-fA-F]{16}" placeholder="16 hex characters" :aria-invalid="invalid('householdId')" /><small v-if="invalid('householdId')" class="field-error" role="alert">Must be exactly 16 hex characters.</small></label>
       <label><span>Adults</span><input v-model.number="form.adults" type="number" min="0" max="20" :aria-invalid="invalid('householdCounts')" /></label>
       <label><span>Children</span><input v-model.number="form.children" type="number" min="0" max="20" :aria-invalid="invalid('householdCounts')" /></label>

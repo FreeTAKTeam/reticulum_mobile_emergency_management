@@ -332,11 +332,21 @@ impl Node {
         {
             return Err(NodeError::InvalidConfig {});
         }
-        request.community = normalize_community_settings(&request.community)?;
         let (result, restart_config, bus) = {
             let inner = self.inner.lock().map_err(|error| {
                 crate::error_context::contextual_node_error(NodeError::InternalError {}, error)
             })?;
+            let display_name = inner
+                .app_state
+                .get_app_settings()?
+                .map(|settings| settings.display_name)
+                .unwrap_or_default();
+            apply_household_defaults(
+                &mut request.community,
+                &display_name,
+                &local_app_destination_hex(&inner),
+            );
+            request.community = normalize_community_settings(&request.community)?;
             let restart_config = inner.active_config.as_ref().map(|active| {
                 let mut config = active.to_config();
                 config.tcp_clients = inspection.network.tcp_clients.clone();

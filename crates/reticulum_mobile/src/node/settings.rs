@@ -3,11 +3,26 @@ impl Node {
         let inner = self.inner.lock().map_err(|error| {
             crate::error_context::contextual_node_error(NodeError::InternalError {}, error)
         })?;
-        inner.app_state.get_app_settings()
+        let mut settings = inner.app_state.get_app_settings()?;
+        if let Some(settings) = settings.as_mut() {
+            apply_household_defaults(
+                &mut settings.community,
+                &settings.display_name,
+                &local_app_destination_hex(&inner),
+            );
+        }
+        Ok(settings)
     }
 
     pub fn set_app_settings(&self, mut settings: AppSettingsRecord) -> Result<(), NodeError> {
         normalize_team_settings(&mut settings.teams)?;
+        let app_destination_hex = {
+            let inner = self.inner.lock().map_err(|error| {
+                crate::error_context::contextual_node_error(NodeError::InternalError {}, error)
+            })?;
+            local_app_destination_hex(&inner)
+        };
+        apply_household_defaults(&mut settings.community, &settings.display_name, &app_destination_hex);
         settings.community = normalize_stored_community_settings(&settings.community)?;
         if !matches!(settings.power.threshold_percent, 10 | 20 | 30) {
             return Err(crate::error_context::invalid_config(
