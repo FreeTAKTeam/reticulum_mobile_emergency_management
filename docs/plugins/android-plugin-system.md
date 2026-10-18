@@ -75,6 +75,7 @@ both declared and granted. Revoking a grant takes effect on the next request.
 | `mapMarkersWrite` | 2 | `map.symbols.list`, `map.markers.create`, and update/move/delete of markers this plugin created |
 | `mapObserverRead` | 2 | `map.observer.snapshot` |
 | `mapSelectionRead` | 3 | `map.session.*` and session events for objects the operator selected |
+| `mapNearbyRead` | 3 | `map.markers.nearby`: every map marker near this device, without per-marker sharing (REM 1.5.2+) |
 
 ### Operations
 
@@ -97,6 +98,11 @@ Requests use the envelope in [Lifecycle and requests](#lifecycle-and-requests). 
   `observer` is always `{kind: "localDevice", identityHex, lxmfDestinationHex}`: the fix is this REM
   device's own latest location, never a peer's telemetry and never a value a plugin supplied. Plugins
   cannot set the observer. Use `ageMs` and `horizontalAccuracyM` to reject stale or poor fixes.
+- `map.markers.nearby` (`radiusM` up to 100000, `limit` 1–50, default 50) → `{available, radiusM,
+  items}`: markers within `radiusM` of this device's own fix, nearest first, each with `distanceM`
+  and with `notes` omitted. `available` is `false` (and `items` empty) while REM has no fix. Granting
+  `mapNearbyRead` is the operator's one-time opt-in for a plugin to follow the whole map around
+  them, for example to mirror it on a display device.
 - `map.session.list` → `{items: [session]}`: this plugin's active sessions.
 - `map.session.objects.get` (`sessionId`) → `{session, objects}`: current snapshots of exactly the
   objects the operator selected. Objects that no longer exist are omitted.

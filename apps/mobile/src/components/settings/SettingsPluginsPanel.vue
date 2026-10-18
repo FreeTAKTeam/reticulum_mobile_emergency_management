@@ -21,7 +21,30 @@ const capabilityDefinitions: Array<{
   { key: "mapMarkersWrite", label: "Add and edit its own map markers" },
   { key: "mapObserverRead", label: "Read this device's location" },
   { key: "mapSelectionRead", label: "Read map objects you share with it" },
+  { key: "mapNearbyRead", label: "Read all map markers near this device" },
 ];
+
+/** Plain words for the Android permissions a plugin app uses; anything else stays in the technical details. */
+const androidPermissionLabels: Array<[RegExp, string]> = [
+  [/BLUETOOTH/, "Bluetooth"],
+  [/LOCATION/, "location"],
+  [/POST_NOTIFICATIONS/, "notifications"],
+  [/FOREGROUND_SERVICE/, "running in the background"],
+  [/CAMERA/, "camera"],
+  [/RECORD_AUDIO/, "microphone"],
+  [/BODY_SENSORS|OTHER_SENSORS/, "body sensors"],
+  [/INTERNET/, "internet"],
+];
+
+function readableAndroidPermissions(permissions: string[]): string {
+  const labels = new Set<string>();
+  for (const permission of permissions) {
+    const match = androidPermissionLabels.find(([pattern]) => pattern.test(permission));
+    if (match) labels.add(match[1]);
+  }
+  const list = [...labels];
+  return list.length ? `${list[0][0].toUpperCase()}${list[0].slice(1)}${list.length > 1 ? `, ${list.slice(1).join(", ")}` : ""}` : "Nothing special";
+}
 
 async function runPluginAction(key: string, action: () => Promise<void>): Promise<void> {
   if (pluginActionPending.value) return;
@@ -79,22 +102,20 @@ function setPluginCapability(
           <header class="plugin-card-header">
             <div>
               <h3>{{ plugin.displayName }}</h3>
-              <p>{{ plugin.pluginId }} · {{ plugin.version }}</p>
+              <p>Version {{ plugin.version }}</p>
             </div>
             <span class="status-pill">{{ plugin.state }}</span>
           </header>
-          <p class="section-note">Package: {{ plugin.packageName }}</p>
-          <p class="fingerprint">Publisher: {{ plugin.publisherFingerprint }}</p>
           <p class="section-note">
-            Requests:
-            {{ capabilityDefinitions
-              .filter((item) => plugin.declaredCapabilities[item.key])
-              .map((item) => item.label)
-              .join(", ") || "No REM host capabilities" }}
+            Uses on this phone: {{ readableAndroidPermissions(plugin.androidPermissions) }}
           </p>
-          <p class="section-note">
-            Android permissions: {{ plugin.androidPermissions.join(", ") || "None declared" }}
-          </p>
+          <details class="plugin-technical">
+            <summary>Technical details</summary>
+            <p>ID: {{ plugin.pluginId }}</p>
+            <p>Package: {{ plugin.packageName }}</p>
+            <p>Publisher: {{ plugin.publisherFingerprint }}</p>
+            <p>Android permissions: {{ plugin.androidPermissions.join(", ") || "None declared" }}</p>
+          </details>
           <p v-if="plugin.diagnostic" class="feedback">{{ plugin.diagnostic }}</p>
           <div v-if="!plugin.trusted" class="button-row">
             <button
@@ -106,6 +127,7 @@ function setPluginCapability(
             </button>
           </div>
           <template v-else>
+            <p class="section-note">Allow it to:</p>
             <div class="plugin-capability-grid">
               <label
                 v-for="capability in capabilityDefinitions.filter((item) => plugin.declaredCapabilities[item.key])"

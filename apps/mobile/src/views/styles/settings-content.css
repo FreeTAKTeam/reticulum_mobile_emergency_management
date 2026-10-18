@@ -49,6 +49,23 @@
   margin-top: 0.65rem;
 }
 
+/* One permission per line, so every checkbox stays on screen. */
+.settings-view .plugin-capability-grid {
+  flex-direction: column;
+}
+
+.settings-view .plugin-technical {
+  color: #89a8d4;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  margin-top: 0.45rem;
+}
+
+.settings-view .plugin-technical summary {
+  cursor: pointer;
+  font-family: var(--font-ui);
+}
+
 .settings-view .plugin-card-list {
   display: grid;
   gap: 0.7rem;
@@ -59,6 +76,8 @@
   background: rgb(7 20 44 / 78%);
   border: 1px solid rgb(67 106 165 / 35%);
   border-radius: 12px;
+  min-width: 0;
+  overflow-wrap: anywhere;
   padding: 0.75rem;
 }
 

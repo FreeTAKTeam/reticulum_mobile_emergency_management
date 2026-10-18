@@ -38,6 +38,10 @@ pub struct PluginCapabilityRecord {
     /// plugin in a map session, and receive that session's events.
     #[serde(default)]
     pub map_selection_read: bool,
+    /// Operator opt-in: read every map marker near this device's own fix,
+    /// nearest first, without sharing each one (`map.markers.nearby`).
+    #[serde(default)]
+    pub map_nearby_read: bool,
 }
 
 impl PluginCapabilityRecord {
@@ -52,6 +56,7 @@ impl PluginCapabilityRecord {
             && (!self.map_markers_write || declared.map_markers_write)
             && (!self.map_observer_read || declared.map_observer_read)
             && (!self.map_selection_read || declared.map_selection_read)
+            && (!self.map_nearby_read || declared.map_nearby_read)
     }
 }
 
