@@ -228,6 +228,13 @@ fn handle_plugin_map_operation(
             operation,
         )
         .and_then(|()| plugin_map_observer_snapshot(node)),
+        "map.markers.nearby" => require_plugin_map_capability(
+            node,
+            plugin_id,
+            |caps| caps.map_nearby_read,
+            operation,
+        )
+        .and_then(|()| plugin_map_nearby(node, payload)),
         _ => return handle_plugin_map_session_operation(node, plugin_id, operation, payload),
     };
     Some(result)
