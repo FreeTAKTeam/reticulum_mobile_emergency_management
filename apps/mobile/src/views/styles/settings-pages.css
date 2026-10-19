@@ -1,0 +1,563 @@
+/* Settings index (hub) and sub-page (spoke) building blocks. */
+
+.settings-view.settings-index,
+.settings-view.settings-page {
+  gap: 0.85rem;
+  margin-inline: auto;
+  max-width: 46rem;
+  width: 100%;
+}
+
+/* Restart banner */
+.settings-view .restart-banner {
+  align-items: center;
+  background: rgb(45 27 4 / 82%);
+  border: 1px solid rgb(251 161 38 / 70%);
+  border-radius: 14px;
+  color: #ffc56b;
+  display: grid;
+  gap: 0.6rem;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  padding: 0.65rem 0.8rem;
+}
+
+.settings-view .restart-banner p {
+  font-family: var(--font-body);
+  margin: 0;
+}
+
+.settings-view .restart-banner button {
+  --btn-bg: rgb(251 161 38 / 18%);
+  --btn-border: rgb(251 161 38 / 70%);
+  --btn-color: #ffd28a;
+  min-height: 2.75rem;
+}
+
+/* Quiet press feedback for row-like buttons (global button rules read these). */
+.settings-view .settings-row,
+.settings-view .settings-group-toggle,
+.settings-view .settings-back {
+  --btn-bg-pressed: rgb(93 213 255 / 12%);
+  --btn-border-pressed: transparent;
+  --btn-shadow-pressed: none;
+  --btn-color-pressed: #e0f2fe;
+}
+
+/* Links are not covered by the global button press rules. */
+.settings-view a.settings-row:active {
+  background: rgb(93 213 255 / 12%);
+}
+
+/* Index sections */
+.settings-view .settings-group {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.settings-view .settings-group-heading {
+  margin: 0;
+}
+
+.settings-view .settings-group-toggle {
+  --btn-bg: transparent;
+  --btn-border: transparent;
+  --btn-shadow: none;
+  --btn-color: #60d8ff;
+  align-items: center;
+  border-radius: 10px;
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-start;
+  letter-spacing: 0.14em;
+  min-height: 2.75rem;
+  padding: 0 0.35rem;
+  text-align: left;
+  width: 100%;
+}
+
+.settings-view .settings-group-label {
+  flex: 0 0 auto;
+}
+
+.settings-view .settings-group-summary {
+  color: #90aad4;
+  flex: 1 1 auto;
+  font-family: var(--font-body);
+  font-weight: 500;
+  letter-spacing: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.settings-view .settings-group-toggle svg {
+  margin-left: auto;
+}
+
+/* Rows: settings (value + chevron), tasks (verb), status (read-only) */
+.settings-view .settings-rows {
+  background:
+    linear-gradient(150deg, rgb(9 25 55 / 90%), rgb(7 16 37 / 92%));
+  border: 1px solid rgb(74 120 193 / 33%);
+  border-radius: 16px;
+  display: grid;
+  overflow: hidden;
+}
+
+.settings-view .settings-row {
+  --btn-bg: transparent;
+  --btn-border: transparent;
+  --btn-shadow: none;
+  --btn-color: #d5eaff;
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  color: #d5eaff;
+  display: grid;
+  font-family: var(--font-body);
+  font-size: 1rem;
+  font-weight: 500;
+  gap: 0.75rem;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  letter-spacing: 0;
+  min-height: 3.6rem;
+  padding: 0.55rem 0.85rem;
+  text-align: left;
+  text-decoration: none;
+  text-transform: none;
+  width: 100%;
+}
+
+.settings-view .settings-rows > .settings-row + .settings-row {
+  border-top: 1px solid rgb(69 107 168 / 28%);
+}
+
+.settings-view .settings-row:focus-visible {
+  outline: 2px solid #5de7ff;
+  outline-offset: -2px;
+}
+
+.settings-view .settings-row > svg {
+  color: #8fd9ff;
+}
+
+.settings-view .settings-row-icon {
+  align-items: center;
+  background: linear-gradient(145deg, rgb(8 29 58 / 92%), rgb(5 20 44 / 96%));
+  border: 1px solid rgb(92 184 255 / 28%);
+  border-radius: 10px;
+  color: #7fdbff;
+  display: inline-flex;
+  height: 2.2rem;
+  justify-content: center;
+  width: 2.2rem;
+}
+
+.settings-view .settings-row-copy {
+  display: grid;
+  gap: 0.12rem;
+  min-width: 0;
+}
+
+.settings-view .settings-row-copy strong {
+  color: #e0f2fe;
+  font-weight: 650;
+}
+
+.settings-view .settings-row-copy small {
+  color: #90aad4;
+  font-size: 0.85rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-view .settings-row:not(:has(.settings-row-icon)) {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.settings-view .task-row .settings-row-copy strong {
+  color: #8ee6ff;
+}
+
+.settings-view .settings-card .settings-row {
+  border: 1px solid rgb(71 112 176 / 29%);
+  border-radius: 12px;
+}
+
+.settings-view .settings-footer {
+  margin-top: 0.4rem;
+}
+
+/* Sub-page header */
+.settings-view .settings-page-header {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.settings-view .settings-back {
+  --btn-bg: transparent;
+  --btn-border: transparent;
+  --btn-shadow: none;
+  align-items: center;
+  display: inline-flex;
+  gap: 0.35rem;
+  justify-self: start;
+  min-height: 2.75rem;
+  padding-inline: 0.2rem;
+}
+
+.settings-view .settings-page-title h2 {
+  color: #e0f2fe;
+  font-family: var(--font-headline);
+  font-size: 1.45rem;
+  margin: 0;
+}
+
+.settings-view .settings-page-title p {
+  color: #90aad4;
+  font-family: var(--font-body);
+  margin: 0.2rem 0 0;
+}
+
+/* Cards and fields */
+.settings-view .settings-card,
+.settings-view .settings-advanced {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.9rem;
+}
+
+.settings-view .settings-fields {
+  display: grid;
+  gap: 0.7rem;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+}
+
+.settings-view .settings-fields .wide {
+  grid-column: 1 / -1;
+}
+
+.settings-view .settings-field {
+  color: #a0b7db;
+  display: grid;
+  font-family: var(--font-body);
+  font-size: 0.88rem;
+  gap: 0.3rem;
+}
+
+.settings-view .settings-counts {
+  display: grid;
+  gap: 0.6rem;
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.settings-view small {
+  color: #819bb8;
+  font-size: 0.78rem;
+}
+
+.settings-view .field-error {
+  color: #fca5a5;
+}
+
+.settings-view input[aria-invalid="true"],
+.settings-view select[aria-invalid="true"] {
+  border-color: #f87171;
+  box-shadow: 0 0 0 1px rgb(248 113 113 / 45%);
+}
+
+.settings-view .settings-indented {
+  margin-left: 1.6rem;
+  max-width: 14rem;
+}
+
+.settings-view .restart-badge {
+  background: rgb(251 161 38 / 14%);
+  border: 1px solid rgb(251 161 38 / 50%);
+  border-radius: 999px;
+  color: #ffc56b;
+  font-family: var(--font-ui);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  margin-left: 0.35rem;
+  padding: 0.1rem 0.4rem;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+
+.settings-view .settings-advanced > summary {
+  color: #8fd9ff;
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  min-height: 1.6rem;
+  text-transform: uppercase;
+}
+
+.settings-view .settings-advanced:not([open]) {
+  gap: 0;
+}
+
+/* Radio options with a plain-language line each */
+.settings-view .mode-options,
+.settings-view .settings-pair {
+  border: 0;
+  display: grid;
+  gap: 0.45rem;
+  margin: 0;
+  padding: 0;
+}
+
+.settings-view .mode-options legend,
+.settings-view .settings-pair legend {
+  color: #a0b7db;
+  font-family: var(--font-body);
+  font-size: 0.88rem;
+  margin-bottom: 0.35rem;
+  padding: 0;
+}
+
+.settings-view .mode-option {
+  align-items: start;
+  background: rgb(9 24 50 / 70%);
+  border: 1px solid rgb(71 112 176 / 29%);
+  border-radius: 11px;
+  cursor: pointer;
+  display: grid;
+  gap: 0.6rem;
+  grid-template-columns: auto 1fr;
+  padding: 0.6rem 0.7rem;
+}
+
+.settings-view .mode-option:has(input:checked) {
+  border-color: rgb(93 213 255 / 72%);
+}
+
+.settings-view .mode-option span {
+  display: grid;
+  gap: 0.1rem;
+}
+
+.settings-view .mode-option strong {
+  color: #e0f2fe;
+}
+
+.settings-view .settings-pair p {
+  color: #a0b7db;
+  line-height: 2.4;
+  margin: 0;
+}
+
+.settings-view .settings-pair input {
+  margin-inline: 0.3rem;
+  width: 5rem;
+}
+
+/* Status rows */
+.settings-view .status-rows {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0;
+}
+
+.settings-view .status-row {
+  align-items: baseline;
+  display: grid;
+  gap: 0.15rem 0.8rem;
+  grid-template-columns: minmax(8rem, 0.4fr) minmax(0, 1fr);
+}
+
+.settings-view .status-row dt {
+  color: #60d8ff;
+  font-family: var(--font-ui);
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.settings-view .status-row dd {
+  align-items: center;
+  color: #d5eaff;
+  display: flex;
+  flex-wrap: wrap;
+  font-family: var(--font-body);
+  gap: 0.5rem;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.settings-view .status-row code {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.settings-view .icon-button {
+  align-items: center;
+  display: inline-flex;
+  justify-content: center;
+  min-height: 2.25rem;
+  min-width: 2.25rem;
+  padding: 0;
+}
+
+/* Role badge chips */
+.settings-view .role-badges {
+  align-items: center;
+  background: rgb(6 17 38 / 82%);
+  border: 1px solid rgb(70 110 174 / 42%);
+  border-radius: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  padding: 0.3rem;
+}
+
+.settings-view .role-badges.invalid {
+  border-color: #f87171;
+}
+
+.settings-view .role-badges input {
+  background: transparent;
+  border: 0;
+  flex: 1 1 8rem;
+  min-width: 6rem;
+}
+
+.settings-view .role-chip {
+  align-items: center;
+  background: rgb(13 120 195 / 34%);
+  border: 1px solid rgb(95 193 255 / 42%);
+  border-radius: 999px;
+  color: #d5eaff;
+  display: inline-flex;
+  font-size: 0.82rem;
+  gap: 0.2rem;
+  padding: 0.1rem 0.15rem 0.1rem 0.55rem;
+}
+
+.settings-view .role-chip-remove {
+  font-size: 0.95rem;
+  min-height: 1.6rem;
+  min-width: 1.6rem;
+  padding: 0;
+}
+
+/* Actions and danger sections */
+.settings-view .settings-actions-section {
+  border-style: dashed;
+}
+
+.settings-view .danger-zone {
+  border-color: rgb(239 68 68 / 45%);
+}
+
+.settings-view .tcp-custom-row.wrap {
+  flex-wrap: wrap;
+}
+
+/* Sticky save bar */
+.settings-view .settings-save-bar {
+  align-items: center;
+  backdrop-filter: blur(10px);
+  background: rgb(5 16 35 / 92%);
+  border: 1px solid rgb(73 173 255 / 40%);
+  border-radius: 14px;
+  bottom: 0.5rem;
+  display: grid;
+  gap: 0.6rem;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 0.6rem 0.75rem;
+  position: sticky;
+  z-index: 5;
+}
+
+.settings-view .settings-save-bar p {
+  color: #90aad4;
+  font-family: var(--font-body);
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.settings-view .settings-save-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.settings-view .settings-save-actions button {
+  min-height: 2.75rem;
+}
+
+.settings-view .settings-save {
+  --btn-bg: linear-gradient(180deg, rgb(31 118 225 / 88%), rgb(17 72 167 / 92%));
+  --btn-border: rgb(73 173 255 / 66%);
+  --btn-color: #e3f5ff;
+}
+
+/* Dialogs */
+.settings-dialog-backdrop {
+  align-items: center;
+  background: rgb(1 6 16 / 70%);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 1rem;
+  position: fixed;
+  z-index: 50;
+}
+
+.settings-view .settings-dialog {
+  background: linear-gradient(150deg, rgb(9 25 55 / 98%), rgb(7 16 37 / 98%));
+  border: 1px solid rgb(74 120 193 / 50%);
+  border-radius: 16px;
+  display: grid;
+  gap: 0.7rem;
+  max-width: 24rem;
+  padding: 1rem;
+  width: 100%;
+}
+
+.settings-view .settings-dialog h3 {
+  color: #e0f2fe;
+  font-family: var(--font-headline);
+  margin: 0;
+}
+
+.settings-view .settings-dialog p {
+  color: #a0b7db;
+  font-family: var(--font-body);
+  margin: 0;
+}
+
+.settings-view .settings-dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
+.settings-view .settings-dialog-actions button {
+  min-height: 2.75rem;
+}
+
+@media (max-width: 560px) {
+  .settings-view .status-row {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-view .settings-save-bar {
+    gap: 0.45rem;
+    padding: 0.45rem 0.55rem;
+  }
+
+  .settings-view .settings-save-bar p {
+    font-size: 0.82rem;
+  }
+}
