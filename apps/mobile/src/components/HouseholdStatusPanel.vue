@@ -13,7 +13,7 @@ import CommunityStatusPicker from "./CommunityStatusPicker.vue";
  * Dashboard household card: one badge with the status your community currently
  * sees. Tapping it opens the four choices; picking one shares it.
  */
-const props = defineProps<{
+defineProps<{
   householdName: string;
   adults: number;
   children: number;
@@ -28,9 +28,10 @@ const props = defineProps<{
 const emit = defineEmits<{ share: [status: HouseholdStatus] }>();
 const choosing = ref(false);
 
+/** Always shares the choice: the runtime skips an unchanged beacon, and a first share must go out. */
 function choose(status: HouseholdStatus): void {
   choosing.value = false;
-  if (status !== props.status) emit("share", status);
+  emit("share", status);
 }
 </script>
 

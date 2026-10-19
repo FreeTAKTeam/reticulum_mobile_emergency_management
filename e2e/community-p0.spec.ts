@@ -49,6 +49,21 @@ test("dashboard presents exactly four native-backed household actions", async ({
   await expect(group.getByRole("button", { name: "All Home" })).toHaveAttribute("aria-pressed", "true");
   await current.click();
   await expect(group).toHaveCount(0);
+
+  // Choosing the highlighted status still shares it: a fresh device has nothing published yet.
+  const published = await page.evaluate(async () => {
+    const { useNodeStore } = await import("/src/stores/nodeStore.ts");
+    const store = useNodeStore();
+    const calls: string[] = [];
+    store.publishCommunityStatus = async (status: string) => { calls.push(status); };
+    (window as typeof window & { __householdShares?: string[] }).__householdShares = calls;
+    return true;
+  });
+  expect(published).toBe(true);
+  await current.click();
+  await group.getByRole("button", { name: "All Home" }).click();
+  await expect.poll(() => page.evaluate(() =>
+    (window as typeof window & { __householdShares?: string[] }).__householdShares ?? [])).toEqual(["all_home"]);
   await page.screenshot({ path: "output/playwright/community-dashboard.png", fullPage: true });
 });
 
