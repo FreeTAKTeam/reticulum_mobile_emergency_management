@@ -387,3 +387,20 @@ test("Settings links to the Manage Teams page", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Scan QR", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Back to settings" })).toBeVisible();
 });
+
+test("save feedback clears once the form is edited or discarded again", async ({ page }) => {
+  await seedAppStorage(page, { settings: { ...defaultSettings, displayName: "Atlas-1" } });
+  await gotoApp(page, "/settings/map");
+  const bar = page.locator(".settings-save-bar");
+
+  await page.getByRole("radio", { name: /Satellite/ }).check();
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(bar).toContainText("Saved");
+
+  await page.getByRole("radio", { name: /Base/ }).check();
+  await expect(bar).not.toContainText("Saved");
+  await expect(bar).toContainText("Unsaved changes");
+
+  await page.getByRole("button", { name: "Discard" }).click();
+  await expect(bar).toContainText("All changes saved");
+});
