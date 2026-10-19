@@ -36,7 +36,8 @@ enum SituationMessageOutcome {
   "SkippedUnchanged",
   "SkippedHouseholdOff",
   "SkippedAnotherPhoneReports",
-  "Failed"
+  "Failed",
+  "WaitingForSosCountdown"
 };
 
 enum PreferredMapLayer { "Base", "Satellite" };

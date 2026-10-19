@@ -29,6 +29,7 @@ const MESSAGE_OUTCOMES: readonly SituationMessageOutcome[] = [
   "skipped_household_off",
   "skipped_another_phone_reports",
   "failed",
+  "waiting_for_sos_countdown",
 ];
 
 function oneOf<T extends string>(values: readonly T[], raw: unknown): T | undefined {

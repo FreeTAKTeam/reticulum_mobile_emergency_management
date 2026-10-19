@@ -52,6 +52,7 @@ impl Node {
             traffic_class,
             await_delivery,
         )
+        .map(drop)
     }
 
     pub fn delete_event(&self, uid: String, deleted_at_ms: u64) -> Result<(), NodeError> {

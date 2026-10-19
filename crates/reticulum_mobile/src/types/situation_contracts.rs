@@ -33,7 +33,8 @@ community_string_enum!(SituationMessageOutcome, Queued, {
     SkippedUnchanged => "skipped_unchanged",
     SkippedHouseholdOff => "skipped_household_off",
     SkippedAnotherPhoneReports => "skipped_another_phone_reports",
-    Failed => "failed"
+    Failed => "failed",
+    WaitingForSosCountdown => "waiting_for_sos_countdown"
 });
 
 /// What happened to one of the messages a situation fans out to.

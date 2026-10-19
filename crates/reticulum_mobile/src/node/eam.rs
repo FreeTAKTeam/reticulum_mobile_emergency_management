@@ -29,16 +29,17 @@ impl Node {
             emit_projection_invalidation(&inner.bus, summary);
             normalized_record
         };
-        self.replicate_eam(&normalized_record, true)
+        self.replicate_eam(&normalized_record, true).map(drop)
     }
 
     /// Plans and sends replication for an EAM that is already stored. With
-    /// `await_delivery` false the sends are only queued.
+    /// `await_delivery` false the sends are only queued. Returns how many sends
+    /// the runtime refused.
     fn replicate_eam(
         &self,
         normalized_record: &EamProjectionRecord,
         await_delivery: bool,
-    ) -> Result<(), NodeError> {
+    ) -> Result<usize, NodeError> {
         let mut scheduled_sends = Vec::<(String, Vec<u8>, Vec<u8>, SendMode)>::new();
         let bus = {
             let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
@@ -117,6 +118,7 @@ impl Node {
             inner.bus.clone()
         };
 
+        let mut refused = 0;
         for (destination_hex, body, fields_bytes, send_mode) in scheduled_sends {
             let sent = if await_delivery {
                 self.send_bytes_with_class(
@@ -137,6 +139,7 @@ impl Node {
                 .map(drop)
             };
             if let Err(err) = sent {
+                refused += 1;
                 bus.emit(NodeEvent::Error {
                     code: "NotRunning".to_string(),
                     message: format!(
@@ -147,7 +150,7 @@ impl Node {
             }
         }
 
-        Ok(())
+        Ok(refused)
     }
 
     pub fn delete_eam(&self, callsign: String, deleted_at_ms: u64) -> Result<(), NodeError> {

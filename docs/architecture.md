@@ -88,7 +88,11 @@ the event is an ordinary MECP log entry and the EAM is a real EAM.
 Flow of one `set_situation` call:
 
 1. SOS side effects run first. `sos` calls `trigger_sos(Manual)` (re-broadcasts
-   when already active). `all_ok` while an SOS is engaged calls
+   when already active). If that only starts a countdown, nothing is stored or
+   sent and every message reports `waiting_for_sos_countdown`, so cancelling
+   the countdown leaves no `needs_help` B04 or red EAM behind; the fan-out
+   happens on the next `sos` choice once the SOS is active (phase 3 ties this
+   to activation). `all_ok` while an SOS is engaged calls
    `deactivate_sos(detail)`: `detail` carries the cancel PIN, is never stored, and
    a wrong PIN fails the call before anything changes.
 2. Under the node lock, Rust loads the stored situation, the household mode and
@@ -103,7 +107,8 @@ Flow of one `set_situation` call:
    with `Event` and the EAM with `Eam` to the team.
 5. The returned `HouseholdSituationRecord` lists each message's outcome:
    `queued`, `held_by_power_saver`, `skipped_unchanged`,
-   `skipped_household_off`, `skipped_another_phone_reports` or `failed`.
+   `skipped_household_off`, `skipped_another_phone_reports`, `failed` or
+   `waiting_for_sos_countdown`.
 
 Choosing the current situation again sends nothing, except `sos`. A different
 `detail` (another supply kind, medical code or destination) counts as a change.
@@ -118,8 +123,11 @@ factor (a hand-set Red security stays Red under *Sheltering*).
 Power saver: a situation's B04 is always admitted (`CommunityStatus`), even after
 saver's single automatic transition publish. The event and EAM are stored and
 held; a newer situation replaces the held event, so the team never receives an
-outdated sequence. When saver ends, `update_battery_state` releases the newest
-held event and the current EAM through the normal queued paths.
+outdated sequence. Every `update_battery_state` outside saver (not only the
+saver-to-normal transition, so holds stored before a restart are covered)
+releases the newest held event and the current EAM through the normal queued
+paths. Each hold marker is cleared only after the runtime queue accepted its
+sends; a refused send stays held for the next battery update.
 
 Household mode (`off`, `this_phone_reports` (default), `another_phone_reports`)
 is stored with the situation, outside `CommunitySettingsRecord`, so a Block Code

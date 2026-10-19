@@ -117,7 +117,8 @@ export type SituationMessageOutcome =
   | "skipped_unchanged"
   | "skipped_household_off"
   | "skipped_another_phone_reports"
-  | "failed";
+  | "failed"
+  | "waiting_for_sos_countdown";
 
 export interface SituationMessageRecord {
   kind: SituationMessageKind;

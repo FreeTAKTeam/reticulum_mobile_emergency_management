@@ -154,6 +154,12 @@ struct SituationSends {
     eam: Option<EamProjectionRecord>,
 }
 
+/// Which held messages the runtime queue accepted.
+struct SituationSendsAccepted {
+    event: bool,
+    eam: bool,
+}
+
 impl Node {
     pub fn get_household_situation(&self) -> Result<HouseholdSituationRecord, NodeError> {
         let (state, household_id, identity_hex) = {
@@ -189,7 +195,13 @@ impl Node {
         let mut messages = Vec::new();
         // SOS side effects first, so a wrong cancel PIN leaves the situation unchanged.
         if situation == (HouseholdSituation::Sos {}) {
-            self.trigger_sos(SosTriggerSource::Manual {})?;
+            let sos = self.trigger_sos(SosTriggerSource::Manual {})?;
+            if !matches!(sos.state, SosState::Active {}) {
+                // During the countdown nothing is stored or sent, so cancelling it
+                // with the PIN leaves no needs_help B04 or red EAM behind. The
+                // fan-out happens on the next `sos` choice once the SOS is active.
+                return self.situation_waiting_for_sos_countdown();
+            }
             messages.push(situation_message(SituationMessageKind::Sos {}, SituationMessageOutcome::Queued {}, Some("B01".to_string())));
         } else if situation == (HouseholdSituation::AllOk {}) && sos_is_engaged(&self.get_sos_status()?) {
             self.deactivate_sos(detail)?;
@@ -274,43 +286,109 @@ impl Node {
         Ok(self.situation_record(&state, household_id, &identity_hex, messages))
     }
 
-    /// Sends the situation event and EAM that power saver held, once saver ends.
+    /// Sends the situation event and EAM that power saver held. Runs on every
+    /// battery update outside saver, so holds stored before a restart are sent
+    /// too. A marker is cleared only after its send was accepted by the runtime
+    /// queue; a refused send stays held for the next update.
     fn release_held_situation_messages(&self) {
-        let result = self.lock_inner().and_then(|inner| {
-            if inner.cmd_tx.is_none() || inner.power_state.saver_active {
-                return Ok(None);
+        let result = (|| {
+            let (held, sends) = {
+                let inner = self.lock_inner()?;
+                if inner.cmd_tx.is_none() || inner.power_state.saver_active {
+                    return Ok(());
+                }
+                let Some(pending) = held_situation_sends(&inner)? else {
+                    return Ok(());
+                };
+                pending
+            };
+            let eam_sent_at_ms = sends.eam.as_ref().map(|eam| eam.updated_at_ms);
+            let accepted = self.queue_situation_sends(sends);
+            let inner = self.lock_inner()?;
+            let mut state = load_household_situation(&inner.app_state)?;
+            let mut changed = false;
+            // A newer situation may have replaced the hold meanwhile; keep that one.
+            if accepted.event && state.held_event_uid == held.held_event_uid {
+                state.held_event_uid = None;
+                changed |= held.held_event_uid.is_some();
             }
-            take_held_situation_sends(&inner)
-        });
-        match result {
-            Ok(Some(sends)) => self.queue_situation_sends(sends),
-            Ok(None) => {}
-            Err(error) => self.emit_situation_error(&format!(
-                "held situation messages were not released reason={error}"
-            )),
+            if accepted.eam && state.held_eam {
+                let current_at_ms = match state.eam_callsign.as_deref() {
+                    Some(callsign) => own_eam(&inner.app_state, callsign)?.map(|eam| eam.updated_at_ms),
+                    None => None,
+                };
+                if current_at_ms == eam_sent_at_ms {
+                    state.held_eam = false;
+                    changed = true;
+                }
+            }
+            if changed {
+                commit_situation_state(&inner, &state)?;
+            }
+            Ok::<(), NodeError>(())
+        })();
+        if let Err(error) = result {
+            self.emit_situation_error(&format!("held situation messages were not released reason={error}"));
         }
     }
 
-    fn queue_situation_sends(&self, sends: SituationSends) {
+    /// Queues each message and reports which ones the runtime queue accepted
+    /// (an absent message counts as accepted).
+    fn queue_situation_sends(&self, sends: SituationSends) -> SituationSendsAccepted {
         let mut failures = Vec::new();
         if let Some(b04) = sends.b04 {
-            if let Err(error) = self.replicate_event_with_delivery(&b04, None, OutboundTrafficClass::CommunityStatus {}, false) {
-                failures.push(format!("b04 reason={error}"));
+            match self.replicate_event_with_delivery(&b04, None, OutboundTrafficClass::CommunityStatus {}, false) {
+                Ok(0) => {}
+                Ok(refused) => failures.push(format!("b04 refused={refused}")),
+                Err(error) => failures.push(format!("b04 reason={error}")),
             }
         }
+        let mut accepted = SituationSendsAccepted { event: true, eam: true };
         if let Some(event) = sends.event {
-            if let Err(error) = self.replicate_event_with_delivery(&event, None, OutboundTrafficClass::Event {}, false) {
-                failures.push(format!("event uid={} reason={error}", event.uid));
+            match self.replicate_event_with_delivery(&event, None, OutboundTrafficClass::Event {}, false) {
+                Ok(0) => {}
+                Ok(refused) => {
+                    accepted.event = false;
+                    failures.push(format!("event uid={} refused={refused}", event.uid));
+                }
+                Err(error) => {
+                    accepted.event = false;
+                    failures.push(format!("event uid={} reason={error}", event.uid));
+                }
             }
         }
         if let Some(eam) = sends.eam {
-            if let Err(error) = self.replicate_eam(&eam, false) {
-                failures.push(format!("eam callsign={} reason={error}", eam.callsign));
+            match self.replicate_eam(&eam, false) {
+                Ok(0) => {}
+                Ok(refused) => {
+                    accepted.eam = false;
+                    failures.push(format!("eam callsign={} refused={refused}", eam.callsign));
+                }
+                Err(error) => {
+                    accepted.eam = false;
+                    failures.push(format!("eam callsign={} reason={error}", eam.callsign));
+                }
             }
         }
         for failure in failures {
             self.emit_situation_error(&format!("situation replication was not queued {failure}"));
         }
+        accepted
+    }
+
+    /// The record returned while an SOS countdown runs: nothing was stored.
+    fn situation_waiting_for_sos_countdown(&self) -> Result<HouseholdSituationRecord, NodeError> {
+        let mut record = self.get_household_situation()?;
+        let waiting = SituationMessageOutcome::WaitingForSosCountdown {};
+        record.messages = [
+            SituationMessageKind::Sos {},
+            SituationMessageKind::CommunityStatus {},
+            SituationMessageKind::Eam {},
+        ]
+        .into_iter()
+        .map(|kind| situation_message(kind, waiting, None))
+        .collect();
+        Ok(record)
     }
 
     fn situation_record(
@@ -354,9 +432,11 @@ impl Node {
     }
 }
 
-/// Clears the held markers and returns the stored records they point to.
-fn take_held_situation_sends(inner: &NodeInner) -> Result<Option<SituationSends>, NodeError> {
-    let mut state = load_household_situation(&inner.app_state)?;
+/// The stored records the held markers point to, with the state that holds them.
+fn held_situation_sends(
+    inner: &NodeInner,
+) -> Result<Option<(StoredHouseholdSituation, SituationSends)>, NodeError> {
+    let state = load_household_situation(&inner.app_state)?;
     if !state.is_held() {
         return Ok(None);
     }
@@ -368,10 +448,7 @@ fn take_held_situation_sends(inner: &NodeInner) -> Result<Option<SituationSends>
         Some(callsign) if state.held_eam => own_eam(&inner.app_state, callsign)?,
         _ => None,
     };
-    state.held_event_uid = None;
-    state.held_eam = false;
-    commit_situation_state(inner, &state)?;
-    Ok(Some(SituationSends { b04: None, event, eam }))
+    Ok(Some((state, SituationSends { b04: None, event, eam })))
 }
 
 fn commit_situation_state(inner: &NodeInner, state: &StoredHouseholdSituation) -> Result<(), NodeError> {

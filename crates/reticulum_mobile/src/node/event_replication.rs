@@ -1,14 +1,14 @@
 impl Node {
     /// Plans and sends replication for an event that is already stored. With
     /// `await_delivery` false the sends are only queued, so the caller returns
-    /// before any delivery attempt.
+    /// before any delivery attempt. Returns how many sends the runtime refused.
     fn replicate_event_with_delivery(
         &self,
         record: &EventProjectionRecord,
         requested_destination_hex: Option<String>,
         traffic_class: OutboundTrafficClass,
         await_delivery: bool,
-    ) -> Result<(), NodeError> {
+    ) -> Result<usize, NodeError> {
         let targeted_send = requested_destination_hex.is_some();
         let mut scheduled_sends = Vec::<(String, Vec<u8>, Vec<u8>, SendMode)>::new();
         let bus = {
@@ -108,6 +108,7 @@ impl Node {
             inner.bus.clone()
         };
 
+        let mut refused = 0;
         for (destination_hex, body, fields_bytes, send_mode) in scheduled_sends {
             let sent = if await_delivery {
                 self.send_bytes_with_class(
@@ -134,12 +135,13 @@ impl Node {
                     destination_hex, record.uid, err
                 );
                 emit_replication_delivery_failure(&bus, message, &err);
+                refused += 1;
                 if targeted_send {
                     return Err(err);
                 }
             }
         }
 
-        Ok(())
+        Ok(refused)
     }
 }

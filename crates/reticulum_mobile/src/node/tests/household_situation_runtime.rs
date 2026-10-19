@@ -156,13 +156,16 @@ fn power_saver_sends_b04_and_holds_then_releases_the_rest() {
     assert_eq!(state.held_event_uid, replaced.event_uid, "only the newest held event goes out");
     drop(inner);
     node.inner.lock().expect("inner").power_state.saver_active = false;
-    let sends = take_held_situation_sends(&node.inner.lock().expect("inner"))
-        .expect("take")
+    let (_, sends) = held_situation_sends(&node.inner.lock().expect("inner"))
+        .expect("held")
         .expect("held sends");
     assert_eq!(sends.event.expect("held event").content, "MECP/2/P02 #HH_0123456789abcdef school");
     assert_eq!(sends.eam.expect("held EAM").security_status, "Yellow");
     assert!(sends.b04.is_none());
-    assert!(!node.get_household_situation().expect("situation").held_by_power_saver);
+    assert!(
+        node.get_household_situation().expect("situation").held_by_power_saver,
+        "reading the holds does not clear them; only an accepted send does"
+    );
 }
 
 #[test]
