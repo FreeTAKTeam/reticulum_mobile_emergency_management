@@ -25,6 +25,8 @@ export function useSettingsDraft<D extends object>(options: SettingsDraftOptions
   const errorField = ref<SettingsSaveField | undefined>(undefined);
   const leavePending = ref(false);
   let resolveLeave: ((leave: boolean) => void) | undefined;
+  /** Draft fingerprint the current feedback describes; any later edit makes it stale. */
+  let feedbackFingerprint = "";
 
   const baseline = computed(() => options.fingerprint(options.read()));
   const validationError = computed(() => options.validate?.(draft));
@@ -32,16 +34,33 @@ export function useSettingsDraft<D extends object>(options: SettingsDraftOptions
     () => options.fingerprint(draft) !== baseline.value || Boolean(validationError.value),
   );
 
-  function discard(): void {
+  function resetDraft(): void {
     Object.assign(draft, options.read());
-    errorField.value = undefined;
+  }
+
+  function showFeedback(message: string, field?: SettingsSaveField): void {
+    feedback.value = message;
+    errorField.value = field;
+    feedbackFingerprint = options.fingerprint(draft);
+  }
+
+  function discard(): void {
+    resetDraft();
+    showFeedback("");
   }
 
   // Persisted settings can change underneath a pristine form (store init, an import):
   // follow them, but never overwrite what the user is editing.
   watch(baseline, (_next, previous) => {
     if (options.fingerprint(draft) === previous) {
-      discard();
+      resetDraft();
+    }
+  });
+
+  // "Saved." or an old error must not linger once the user edits the form again.
+  watch(() => options.fingerprint(draft), (next) => {
+    if ((feedback.value || errorField.value) && next !== feedbackFingerprint) {
+      showFeedback("");
     }
   });
 
@@ -50,23 +69,23 @@ export function useSettingsDraft<D extends object>(options: SettingsDraftOptions
       return false;
     }
     if (validationError.value) {
-      feedback.value = validationError.value;
+      showFeedback(validationError.value);
       return false;
     }
     saving.value = true;
-    feedback.value = "";
-    errorField.value = undefined;
+    showFeedback("");
+    let message: string;
     try {
-      feedback.value = await options.commit(draft);
+      message = await options.commit(draft);
     } catch (error: unknown) {
       const failure = describeSettingsSaveError(error);
-      feedback.value = failure.message;
-      errorField.value = failure.field;
+      showFeedback(failure.message, failure.field);
       return false;
     } finally {
       saving.value = false;
     }
-    discard();
+    resetDraft();
+    showFeedback(message);
     return true;
   }
 
