@@ -1,6 +1,6 @@
 # REM Settings redesign proposal
 
-Status: phases 1–3 implemented on 2026-10-19 (branch `corvo/settings-redesign`); phase 4 (wizard reuse) not started. Written 2026-10-19 against `main` at 451f8d9.
+Status: phases 1–3 implemented on 2026-10-19 (branch `corvo/settings-redesign`); phase 4 (wizard reuse) implemented on 2026-10-19 (branch `corvo/settings-wizard-phase4`). Written 2026-10-19 against `main` at 451f8d9.
 
 Implementation notes, where the build differs from the text below:
 
@@ -217,6 +217,8 @@ Unchanged content.
 ## 5. Setup wizard alignment
 
 Reorder the wizard to match the index: Welcome → Identity → Network (TCP, then optional LoRa) → Routing (optional, default Autonomous) → Location sharing (with permission) → SOS (with notification permission) → Review. Each step renders the same form component as the corresponding Settings sub-page, inside the wizard shell. Settings and Setup then share labels, order and validation, and the "Run setup wizard again" row becomes a guided walk through the same screens.
+
+Implementation notes (phase 4): the form bodies live in `apps/mobile/src/components/settings/forms/` (`IdentityFields`, `NetworkFields`, `RnodePairingFields`, `RoutingFields`, `LocationFields`, `SosFields`) and the page headings in `settingsPageCopy.ts`. The Settings pages wrap them with the Save / Discard bar; the wizard holds one draft per step from the same slices in `settingsFormSlices.ts` and `sosFormDraft.ts`, blocks Next on the same slice validation (call sign required, hide time ≥ stale time, legal LoRa frequency), and saves everything once on Finish. The RNode pairing page opens inline in the Network step. Power saver and preferred map are no longer asked during setup; they stay under Settings > Power and Settings > Map. The SOS PIN, routing actions and the trigger-now button stay Settings-only because they act immediately.
 
 ## 6. Suggested phasing
 
