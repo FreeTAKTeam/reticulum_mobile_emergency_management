@@ -93,3 +93,55 @@ export interface BlockOnboardingImportResult {
   importedPeerCount: number;
   settingsUpdated: boolean;
 }
+
+/** One situation the operator chooses; the native runtime derives B04, MECP and EAM from it. */
+export type HouseholdSituation =
+  | "all_ok"
+  | "sheltering_in_place"
+  | "evacuating"
+  | "someone_missing"
+  | "lost"
+  | "stranded"
+  | "threat_nearby"
+  | "need_supplies"
+  | "medical_help_needed"
+  | "sos";
+
+export type HouseholdMode = "off" | "this_phone_reports" | "another_phone_reports";
+
+export type SituationMessageKind = "community_status" | "event" | "eam" | "sos";
+
+export type SituationMessageOutcome =
+  | "queued"
+  | "held_by_power_saver"
+  | "skipped_unchanged"
+  | "skipped_household_off"
+  | "skipped_another_phone_reports"
+  | "failed";
+
+export interface SituationMessageRecord {
+  kind: SituationMessageKind;
+  outcome: SituationMessageOutcome;
+  reference?: string;
+}
+
+export interface HouseholdReporterConflictRecord {
+  sourceIdentity: string;
+  householdName: string;
+  updatedAtMs: number;
+}
+
+export interface HouseholdSituationRecord {
+  situation?: HouseholdSituation;
+  detail?: string;
+  mecpCode?: string;
+  eventUid?: string;
+  sequence: number;
+  updatedAtMs: number;
+  householdMode: HouseholdMode;
+  householdId?: string;
+  situationEamFactors: string[];
+  heldByPowerSaver: boolean;
+  duplicateReporter?: HouseholdReporterConflictRecord;
+  messages: SituationMessageRecord[];
+}

@@ -112,6 +112,41 @@ public class ReticulumNodePlugin extends ReticulumNodeChecklistPluginApi {
     }
 
     @PluginMethod
+    public void setSituation(PluginCall call) {
+        final JSObject payload = new JSObject();
+        payload.put("situation", call.getString("situation", ""));
+        payload.put("detail", call.getString("detail"));
+        runStringServiceCall(
+            call,
+            "Failed to set the household situation.",
+            "Native household situation JSON parse failed.",
+            service -> service.setSituationJson(payload.toString())
+        );
+    }
+
+    @PluginMethod
+    public void getHouseholdSituation(PluginCall call) {
+        runStringServiceCall(
+            call,
+            "Failed to get the household situation.",
+            "Native household situation JSON parse failed.",
+            ReticulumNodeService::getHouseholdSituationJson
+        );
+    }
+
+    @PluginMethod
+    public void setHouseholdMode(PluginCall call) {
+        final JSObject payload = new JSObject();
+        payload.put("mode", call.getString("mode", ""));
+        runStringServiceCall(
+            call,
+            "Failed to set the household mode.",
+            "Native household situation JSON parse failed.",
+            service -> service.setHouseholdModeJson(payload.toString())
+        );
+    }
+
+    @PluginMethod
     public void upsertEvent(PluginCall call) {
         final JSObject payload = call.getObject("event", new JSObject());
         runIntServiceCall(

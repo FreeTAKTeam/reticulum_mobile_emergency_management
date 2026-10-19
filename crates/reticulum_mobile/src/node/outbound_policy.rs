@@ -120,6 +120,9 @@ impl Node {
         }
         if publish_transition {
             let _ = self.publish_community_status();
+            if !state.saver_active {
+                self.release_held_situation_messages();
+            }
         }
         Ok(state)
     }

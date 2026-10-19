@@ -5,8 +5,7 @@ impl Node {
     }
 
     pub fn upsert_eam(&self, record: EamProjectionRecord) -> Result<(), NodeError> {
-        let mut scheduled_sends = Vec::<(String, Vec<u8>, Vec<u8>, SendMode)>::new();
-        let bus = {
+        let normalized_record = {
             let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             let status = inner
                 .status
@@ -28,7 +27,31 @@ impl Node {
                 Some("eam-upserted".to_string()),
             )?;
             emit_projection_invalidation(&inner.bus, summary);
+            normalized_record
+        };
+        self.replicate_eam(&normalized_record, true)
+    }
 
+    /// Plans and sends replication for an EAM that is already stored. With
+    /// `await_delivery` false the sends are only queued.
+    fn replicate_eam(
+        &self,
+        normalized_record: &EamProjectionRecord,
+        await_delivery: bool,
+    ) -> Result<(), NodeError> {
+        let mut scheduled_sends = Vec::<(String, Vec<u8>, Vec<u8>, SendMode)>::new();
+        let bus = {
+            let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
+            let status = inner
+                .status
+                .lock()
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
+                .clone();
+            let hub_directory_snapshot = inner
+                .hub_directory_snapshot
+                .lock()
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
+                .clone();
             if inner.cmd_tx.is_some() {
                 let peers = inner
                     .peers_snapshot
@@ -69,7 +92,7 @@ impl Node {
                     &route_hops,
                 );
                 for target in replication_targets {
-                    match build_eam_replication_payload(&status, &normalized_record, &target) {
+                    match build_eam_replication_payload(&status, normalized_record, &target) {
                         Ok((body, fields)) => {
                             scheduled_sends.push((
                                 target.app_destination_hex.clone(),
@@ -95,7 +118,7 @@ impl Node {
         };
 
         for (destination_hex, body, fields_bytes, send_mode) in scheduled_sends {
-            if let Err(err) =
+            let sent = if await_delivery {
                 self.send_bytes_with_class(
                     destination_hex.clone(),
                     body,
@@ -103,12 +126,22 @@ impl Node {
                     send_mode,
                     OutboundTrafficClass::Eam {},
                 )
-            {
+            } else {
+                self.queue_bytes_with_class(
+                    destination_hex.clone(),
+                    body,
+                    Some(fields_bytes),
+                    send_mode,
+                    OutboundTrafficClass::Eam {},
+                )
+                .map(drop)
+            };
+            if let Err(err) = sent {
                 bus.emit(NodeEvent::Error {
                     code: "NotRunning".to_string(),
                     message: format!(
                         "eam replication enqueue failed destination={} callsign={} reason={}",
-                        destination_hex, record.callsign, err
+                        destination_hex, normalized_record.callsign, err
                     ),
                 });
             }

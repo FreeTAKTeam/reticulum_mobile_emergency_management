@@ -1,8 +1,9 @@
-import type { BlockOnboardingDraft, BlockOnboardingImportRequest, BlockOnboardingImportResult, BlockOnboardingInspection, ChecklistDeleteOptions, ChecklistRecord, ChecklistTemplateRecord, CommunityStatusProjectionRecord, EamProjectionRecord, EamReadinessSummaryRecord, EamTeamSummaryRecord, EventProjectionRecord, NodeClientEvents, NodeStatus, PowerStateRecord, SignedBlockOnboardingEnvelope, SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord, SosSettingsRecord, SosStatusRecord, SosTriggerSource, TelemetryPositionRecord } from "./contracts";
+import type { BlockOnboardingDraft, BlockOnboardingImportRequest, BlockOnboardingImportResult, BlockOnboardingInspection, ChecklistDeleteOptions, ChecklistRecord, ChecklistTemplateRecord, CommunityStatusProjectionRecord, EamProjectionRecord, EamReadinessSummaryRecord, EamTeamSummaryRecord, EventProjectionRecord, HouseholdMode, HouseholdSituation, HouseholdSituationRecord, NodeClientEvents, NodeStatus, PowerStateRecord, SignedBlockOnboardingEnvelope, SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord, SosSettingsRecord, SosStatusRecord, SosTriggerSource, TelemetryPositionRecord } from "./contracts";
 import { DEFAULT_SOS_SETTINGS, DEFAULT_SOS_STATUS } from "./client-config-converters";
 import { cloneChecklistRecord, cloneChecklistTemplateRecord, createDefaultChecklistTemplates, createInMemoryChecklistTemplateFromCsv, type ChecklistCellInput, type ChecklistCreateInput, type ChecklistRowAddInput, type ChecklistRowDeleteInput, type ChecklistRowStyleInput, type ChecklistStatusInput, type ChecklistTemplateCsvInput, type ChecklistUpdateInput } from "./checklist-memory-templates";
 import { addInMemoryTaskRow, createInMemoryChecklistFromTemplate, deleteInMemoryTaskRow, emitChecklistInvalidations, findInMemoryChecklist, setInMemoryTaskCell, setInMemoryTaskRowStyle, setInMemoryTaskStatus, updateInMemoryChecklist } from "./checklist-memory-runtime";
 import { emptyEamReadinessSummary } from "./projection-converters";
+import { emptyHouseholdSituation } from "./situation-converters";
 import { TypedEmitter } from "./typed-emitter";
 import { InMemoryMapMarkers } from "./map-marker-memory";
 import type { MapMarkerCreateRequest, MapMarkerCreateResult, MapMarkerRecord, MapMarkerSymbolRecord, PluginMapSessionRecord } from "./contracts-map-markers";
@@ -53,6 +54,16 @@ export abstract class InMemoryProjectionClient {
 
   async publishCommunityStatus(): Promise<EventProjectionRecord> {
     throw new Error("Native community publishing is unavailable in this client mode.");
+  }
+
+  async setSituation(_situation: HouseholdSituation, _detail?: string): Promise<HouseholdSituationRecord> {
+    throw new Error("Household situations need the native runtime.");
+  }
+
+  async getHouseholdSituation(): Promise<HouseholdSituationRecord> { return emptyHouseholdSituation(); }
+
+  async setHouseholdMode(_mode: HouseholdMode): Promise<HouseholdSituationRecord> {
+    throw new Error("Household situations need the native runtime.");
   }
 
   async createBlockOnboardingCode(

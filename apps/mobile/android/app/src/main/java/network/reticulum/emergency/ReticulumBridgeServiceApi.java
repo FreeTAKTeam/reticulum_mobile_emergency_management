@@ -107,6 +107,18 @@ public abstract class ReticulumBridgeServiceApi extends Service {
         return ReticulumBridge.publishCommunityStatusJson();
     }
 
+    public String setSituationJson(String payloadJson) {
+        return ReticulumBridge.setSituationJson(payloadJson);
+    }
+
+    public String getHouseholdSituationJson() {
+        return ReticulumBridge.getHouseholdSituationJson();
+    }
+
+    public String setHouseholdModeJson(String payloadJson) {
+        return ReticulumBridge.setHouseholdModeJson(payloadJson);
+    }
+
     public String createBlockOnboardingCodeJson(String payloadJson) {
         return ReticulumBridge.createBlockOnboardingCodeJson(payloadJson);
     }

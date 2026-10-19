@@ -61,6 +61,76 @@ reported on the event bus and never blocks the SOS. Activation after a non-zero
 countdown runs on a background thread without a `Node` handle and does not post
 B01; release settings force the countdown to zero.
 
+### Household situation: one choice, three messages
+
+The operator picks one situation and Rust derives every message it implies
+(`docs/plans/household-situation.md`). The table has one owner,
+`node/household_situation.rs`; `node/household_situation_api.rs` exposes
+`set_situation(situation, detail)`, `get_household_situation()` and
+`set_household_mode(mode)` through UniFFI, JNI (`setSituationJson`,
+`getHouseholdSituationJson`, `setHouseholdModeJson`) and `packages/node-client`.
+The UI sends only the choice. No wire format changes: B04 stays `REMCS1` v1,
+the event is an ordinary MECP log entry and the EAM is a real EAM.
+
+| Situation | B04 status | MECP event | EAM factors set |
+|---|---|---|---|
+| `all_ok` | `all_home` | `MECP/2/R07` | restores what the previous situation set |
+| `sheltering_in_place` | `all_home` | `MECP/2/P03` | security Yellow |
+| `evacuating` | `evacuated` | `MECP/2/P02` (+ destination text) | security Yellow |
+| `someone_missing` | `one_missing` | `MECP/1/P07` | security Red |
+| `lost` | `needs_help` | `MECP/1/P06` | security Yellow |
+| `stranded` | `needs_help` | `MECP/1/P01` | mobility Red |
+| `threat_nearby` | `needs_help` | `MECP/1/X01` | security Red |
+| `need_supplies` | `needs_help` | `MECP/1/S01`–`S06` (detail: water, food, medication, power, fuel, tools) | preparedness Red |
+| `medical_help_needed` | `needs_help` | `MECP/0/M01` (detail: `M01`–`M09`) | medical Red |
+| `sos` | `needs_help` | none here: the SOS runtime posts B01 | medical Red, security Red |
+
+Flow of one `set_situation` call:
+
+1. SOS side effects run first. `sos` calls `trigger_sos(Manual)` (re-broadcasts
+   when already active). `all_ok` while an SOS is engaged calls
+   `deactivate_sos(detail)`: `detail` carries the cancel PIN, is never stored, and
+   a wrong PIN fails the call before anything changes.
+2. Under the node lock, Rust loads the stored situation, the household mode and
+   this device's own EAM (callsign = display name), builds the MECP event
+   (`rem-sit-v1:<identity>:<n>`, `n` advancing once per situation change, tagged
+   `#HH_<household-id>` unless the household is off), applies the EAM factors and,
+   only when this phone reports, the next B04 record.
+3. The situation state (metadata key `household_situation_v1`), settings,
+   EAM and both events are written in one AppState transaction.
+4. After the lock is released, replication is queued without waiting for
+   delivery: B04 with the `CommunityStatus` class to all saved peers, the event
+   with `Event` and the EAM with `Eam` to the team.
+5. The returned `HouseholdSituationRecord` lists each message's outcome:
+   `queued`, `held_by_power_saver`, `skipped_unchanged`,
+   `skipped_household_off`, `skipped_another_phone_reports` or `failed`.
+
+Choosing the current situation again sends nothing, except `sos`. A different
+`detail` (another supply kind, medical code or destination) counts as a change.
+Situations without a follow-up ignore `detail`; an unknown supply kind or
+medical code is rejected.
+
+EAM bookkeeping: the state remembers which factors the situation set and their
+earlier values. On the next change Rust restores a factor only if it still holds
+the value the situation set, so a hand edit wins. A situation never lowers a
+factor (a hand-set Red security stays Red under *Sheltering*).
+
+Power saver: a situation's B04 is always admitted (`CommunityStatus`), even after
+saver's single automatic transition publish. The event and EAM are stored and
+held; a newer situation replaces the held event, so the team never receives an
+outdated sequence. When saver ends, `update_battery_state` releases the newest
+held event and the current EAM through the normal queued paths.
+
+Household mode (`off`, `this_phone_reports` (default), `another_phone_reports`)
+is stored with the situation, outside `CommunitySettingsRecord`, so a Block Code
+import never changes it. Only `this_phone_reports` sends B04:
+`publish_community_status` refuses in the other modes. With
+`another_phone_reports` the event still carries the household tag; with `off` it
+carries none and reaches only the team. Changing the mode sends nothing. While
+this phone reports, `get_household_situation` returns `duplicate_reporter` when a
+B04 from another identity claims the same household ID; the runtime never
+resolves this by itself.
+
 ### Inner and Outer circles
 
 The runtime derives `circle_tier` from membership in any local team: members
@@ -114,8 +184,9 @@ threshold, keeps it active until the battery reaches threshold plus three
 percentage points, and disables it while charging. The native
 `PowerStateChanged` event is the UI source of truth.
 
-Saver mode admits only SOS, team telemetry, and one community
-status transition publish. It rejects chat (including retry), EAM, ordinary
+Saver mode admits only SOS, team telemetry, one community
+status transition publish and a household situation's B04 (the situation's MECP
+event and EAM are held until saver ends). It rejects chat (including retry), EAM, ordinary
 events, checklists, plugins, raw packets, and control traffic at native command
 admission. Announce and telemetry cadence becomes
 `max(configured_seconds, 300)`; capability changes are deferred until saver

@@ -1,10 +1,11 @@
-import type { AppSettingsRecord, BlockOnboardingDraft, BlockOnboardingImportRequest, BlockOnboardingImportResult, BlockOnboardingInspection, ChecklistDeleteOptions, ChecklistRecord, ChecklistTemplateRecord, ChecklistUserTaskStatus, CommunityStatusProjectionRecord, ConversationRecord, EamProjectionRecord, EamReadinessSummaryRecord, EamTeamSummaryRecord, EventProjectionRecord, InstalledPluginRecord, LegacyImportPayload, MessageRecord, OperationalSummary, PeerRecord, PluginCapabilityRecord, PluginSensorRecord, PowerStateRecord, SavedPeerRecord, SignedBlockOnboardingEnvelope, SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord, SosSettingsRecord, SosStatusRecord, SosTriggerSource, SyncStatus, TelemetryPositionRecord } from "./contracts";
+import type { AppSettingsRecord, BlockOnboardingDraft, BlockOnboardingImportRequest, BlockOnboardingImportResult, BlockOnboardingInspection, ChecklistDeleteOptions, ChecklistRecord, ChecklistTemplateRecord, ChecklistUserTaskStatus, CommunityStatusProjectionRecord, ConversationRecord, EamProjectionRecord, EamReadinessSummaryRecord, EamTeamSummaryRecord, EventProjectionRecord, HouseholdMode, HouseholdSituation, HouseholdSituationRecord, InstalledPluginRecord, LegacyImportPayload, MessageRecord, OperationalSummary, PeerRecord, PluginCapabilityRecord, PluginSensorRecord, PowerStateRecord, SavedPeerRecord, SignedBlockOnboardingEnvelope, SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord, SosSettingsRecord, SosStatusRecord, SosTriggerSource, SyncStatus, TelemetryPositionRecord } from "./contracts";
 import { type ReticulumNodePlugin } from "./capacitor-plugin";
 import { sosAudioToPlugin, sosSettingsToPlugin, toOperationalSummary, toSosAlertRecord, toSosAudioRecord, toSosLocationRecord, toSosSettingsRecord, toSosStatusRecord } from "./client-config-converters";
 import { toChecklistRecord, toChecklistTemplateRecord } from "./checklist-converters";
 import { toAppSettingsRecord, toBlockOnboardingImportResult, toBlockOnboardingInspection, toPowerStateRecord } from "./converters";
 import { toConversationRecord, toMessageRecord, toPeerRecord, toSyncStatus } from "./message-converters";
 import { eamProjectionRecordToPlugin, eventProjectionRecordToPlugin, legacyImportPayloadToPlugin, toCommunityStatusProjectionRecord, toEamProjectionRecord, toEamReadinessSummaryRecord, toEamTeamSummaryRecord, toEventProjectionRecord, toSavedPeerRecord, toTelemetryPositionRecord } from "./projection-converters";
+import { toHouseholdSituationRecord } from "./situation-converters";
 import { normalizeHex, pluginRecord, toInstalledPlugin, toPluginSensor } from "./runtime-converters";
 
 export abstract class CapacitorProjectionClient {
@@ -120,6 +121,21 @@ export abstract class CapacitorProjectionClient {
   async publishCommunityStatus(): Promise<EventProjectionRecord> {
     await this.ready();
     return toEventProjectionRecord(await this.plugin.publishCommunityStatus());
+  }
+
+  async setSituation(situation: HouseholdSituation, detail?: string): Promise<HouseholdSituationRecord> {
+    await this.ready();
+    return toHouseholdSituationRecord(await this.plugin.setSituation({ situation, detail }));
+  }
+
+  async getHouseholdSituation(): Promise<HouseholdSituationRecord> {
+    await this.ready();
+    return toHouseholdSituationRecord(await this.plugin.getHouseholdSituation());
+  }
+
+  async setHouseholdMode(mode: HouseholdMode): Promise<HouseholdSituationRecord> {
+    await this.ready();
+    return toHouseholdSituationRecord(await this.plugin.setHouseholdMode({ mode }));
   }
 
   async createBlockOnboardingCode(

@@ -14,6 +14,7 @@ include!("jni_bridge/delivery_api.rs");
 include!("jni_bridge/messaging_api.rs");
 include!("jni_bridge/state_api.rs");
 include!("jni_bridge/community_power_onboarding_api.rs");
+include!("jni_bridge/household_situation_api.rs");
 include!("jni_bridge/checklist_api.rs");
 include!("jni_bridge/mission_plugin_api.rs");
 include!("jni_bridge/hil_api.rs");

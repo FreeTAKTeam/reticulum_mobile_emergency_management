@@ -18,6 +18,7 @@ import type {
   NodeErrorEvent, NodeClientEvents,
   BlockOnboardingDraft, SignedBlockOnboardingEnvelope, BlockOnboardingInspection,
   BlockOnboardingImportRequest, BlockOnboardingImportResult, CommunityStatusProjectionRecord, PowerStateRecord,
+  HouseholdMode, HouseholdSituation, HouseholdSituationRecord,
 } from "./contracts-domain";
 import type { MapMarkerClient, PluginMapSessionClient } from "./contracts-map-markers";
 
@@ -73,6 +74,10 @@ export interface ReticulumNodeClient extends MapMarkerClient, PluginMapSessionCl
   setAppSettings(settings: AppSettingsRecord): Promise<void>;
   getPowerState(): Promise<PowerStateRecord>;
   publishCommunityStatus(): Promise<EventProjectionRecord>;
+  /** Stores one situation; the runtime queues B04, the MECP event and the EAM it implies. */
+  setSituation(situation: HouseholdSituation, detail?: string): Promise<HouseholdSituationRecord>;
+  getHouseholdSituation(): Promise<HouseholdSituationRecord>;
+  setHouseholdMode(mode: HouseholdMode): Promise<HouseholdSituationRecord>;
   createBlockOnboardingCode(draft: BlockOnboardingDraft): Promise<SignedBlockOnboardingEnvelope>;
   inspectBlockOnboardingCode(encodedText: string): Promise<BlockOnboardingInspection>;
   importBlockOnboardingCode(request: BlockOnboardingImportRequest): Promise<BlockOnboardingImportResult>;

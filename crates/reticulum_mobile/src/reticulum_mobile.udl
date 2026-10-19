@@ -13,6 +13,32 @@ enum CircleTier { "Inner", "Outer" };
 
 enum HouseholdStatus { "AllHome", "OneMissing", "Evacuated", "NeedsHelp" };
 
+enum HouseholdSituation {
+  "AllOk",
+  "ShelteringInPlace",
+  "Evacuating",
+  "SomeoneMissing",
+  "Lost",
+  "Stranded",
+  "ThreatNearby",
+  "NeedSupplies",
+  "MedicalHelpNeeded",
+  "Sos"
+};
+
+enum HouseholdMode { "Off", "ThisPhoneReports", "AnotherPhoneReports" };
+
+enum SituationMessageKind { "CommunityStatus", "Event", "Eam", "Sos" };
+
+enum SituationMessageOutcome {
+  "Queued",
+  "HeldByPowerSaver",
+  "SkippedUnchanged",
+  "SkippedHouseholdOff",
+  "SkippedAnotherPhoneReports",
+  "Failed"
+};
+
 enum PreferredMapLayer { "Base", "Satellite" };
 
 enum OutboundTrafficClass {
@@ -679,6 +705,33 @@ dictionary CommunityStatusProjectionRecord {
   string source_identity;
 };
 
+dictionary SituationMessageRecord {
+  SituationMessageKind kind;
+  SituationMessageOutcome outcome;
+  string? reference;
+};
+
+dictionary HouseholdReporterConflictRecord {
+  string source_identity;
+  string household_name;
+  u64 updated_at_ms;
+};
+
+dictionary HouseholdSituationRecord {
+  HouseholdSituation? situation;
+  string? detail;
+  string? mecp_code;
+  string? event_uid;
+  u64 sequence;
+  u64 updated_at_ms;
+  HouseholdMode household_mode;
+  string? household_id;
+  sequence<string> situation_eam_factors;
+  boolean held_by_power_saver;
+  HouseholdReporterConflictRecord? duplicate_reporter;
+  sequence<SituationMessageRecord> messages;
+};
+
 dictionary ChecklistStatusCounts {
   u32 pending_count;
   u32 late_count;
@@ -1135,6 +1188,12 @@ interface Node {
   void set_saved_peers(sequence<SavedPeerRecord> peers);
   [Throws=NodeError]
   EventProjectionRecord publish_community_status();
+  [Throws=NodeError]
+  HouseholdSituationRecord set_situation(HouseholdSituation situation, string? detail);
+  [Throws=NodeError]
+  HouseholdSituationRecord get_household_situation();
+  [Throws=NodeError]
+  HouseholdSituationRecord set_household_mode(HouseholdMode mode);
   [Throws=NodeError]
   PowerStateRecord update_battery_state(u8 battery_percent, boolean charging);
   [Throws=NodeError]
