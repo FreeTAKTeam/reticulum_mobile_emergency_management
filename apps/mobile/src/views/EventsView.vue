@@ -8,6 +8,12 @@ import { useListWindow } from "../composables/useListWindow";
 import { useEventsStore } from "../stores/eventsStore";
 import { useNodeStore } from "../stores/nodeStore";
 import {
+  communityEventDetails,
+  communityEventSourceIdentity,
+  statusLabel,
+  type CommunityStatusProjection,
+} from "../utils/communityStatus";
+import {
   MECP_CATEGORIES,
   MECP_EVENT_CODES,
   MECP_SEVERITIES,
@@ -17,6 +23,15 @@ import {
 } from "../utils/mecp";
 
 const eventsStore = useEventsStore();
+const communityBySource = computed(() => new Map(
+  eventsStore.communityRecords.map((record) => [record.sourceIdentity.toLowerCase(), record]),
+));
+
+/** Household status events show the runtime's decoded record (zero or one), not their wire text. */
+function communityForEvent(eventUid: string): CommunityStatusProjection[] {
+  const record = communityBySource.value.get(communityEventSourceIdentity(eventUid));
+  return record ? [record] : [];
+}
 const nodeStore = useNodeStore();
 
 type EventSeverityFilter = "All" | "Mayday" | "Urgent" | "Safety" | "Routine";
@@ -402,7 +417,19 @@ async function deleteEvent(uid: string): Promise<void> {
             </svg>
           </button>
         </div>
-        <template v-if="event.mecp">
+        <template v-if="communityEventSourceIdentity(event.uid)">
+          <template v-for="community in communityForEvent(event.uid)" :key="community.sourceIdentity">
+            <h3>Household status: {{ statusLabel(community.status) }}</h3>
+            <div class="mecp-extra-list" aria-label="Household details">
+              <span v-for="detail in communityEventDetails(community)" :key="detail">{{ detail }}</span>
+            </div>
+          </template>
+          <template v-if="communityForEvent(event.uid).length === 0">
+            <h3>Household status update</h3>
+            <p class="mecp-details">Details are not available: the update is older than 7 days or could not be read.</p>
+          </template>
+        </template>
+        <template v-else-if="event.mecp">
           <h3>{{ event.mecp.codeLabels.join(" + ") || event.summary }}</h3>
           <div v-if="event.mecp.extras.length > 0" class="mecp-extra-list" aria-label="Decoded MECP details">
             <span v-for="extra in event.mecp.extras" :key="extra">{{ extra }}</span>

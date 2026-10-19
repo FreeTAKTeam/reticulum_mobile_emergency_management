@@ -7,7 +7,7 @@ const emit = defineEmits<{ "update:modelValue": [value: HouseholdStatus] }>();
 </script>
 
 <template>
-  <div class="status-grid" role="group" aria-label="Publish household status">
+  <div class="status-grid" role="group" aria-label="Choose household status">
     <button
       v-for="option in COMMUNITY_STATUS_OPTIONS"
       :key="option.value"
@@ -26,7 +26,9 @@ const emit = defineEmits<{ "update:modelValue": [value: HouseholdStatus] }>();
 <style scoped>
 .status-grid { display: grid; gap: .6rem; grid-template-columns: repeat(4, minmax(0, 1fr)); }
 button { --btn-bg: rgb(7 25 52 / 82%); --btn-bg-pressed: rgb(209 241 255 / 94%); --btn-border: rgb(73 142 204 / 35%); --btn-border-pressed: #e3f6ff; --btn-color: #b8d9f3; --btn-color-pressed: #06233d; align-items: center; background: var(--btn-bg); border: 1px solid var(--btn-border); border-radius: 12px; box-shadow: inset 0 1px 0 rgb(209 244 255 / 7%); color: var(--btn-color); cursor: pointer; display: flex; font-family: var(--font-ui); font-size: .75rem; font-weight: 800; gap: .5rem; justify-content: center; letter-spacing: .04em; min-height: 46px; }
-button.selected { border-color: rgb(92 201 255 / 72%); box-shadow: inset 0 0 0 1px rgb(92 201 255 / 24%); }
+button.selected { --btn-bg: rgb(16 72 120 / 92%); --btn-border: rgb(125 211 252 / 90%); --btn-color: #f0f9ff; box-shadow: inset 0 0 0 2px rgb(125 211 252 / 45%); }
+/* Only the published status lights its dot; the other choices stay quiet. */
+button:not(.selected) .status-pulse { opacity: .35; }
 .status-pulse { background: #4ade80; border-radius: 50%; height: 8px; width: 8px; }
 .one_missing .status-pulse { background: #fbbf24; }.evacuated .status-pulse { background: #60a5fa; }.needs_help .status-pulse { background: #fb7185; }
 @media (max-width: 650px) { .status-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

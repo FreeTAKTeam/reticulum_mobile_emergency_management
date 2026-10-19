@@ -12,7 +12,7 @@ const { COMMUNITY_STATUS_OPTIONS, freshnessLabel, householdComposition, resolveH
 
 test("community status exposes the exact four operator actions", () => {
   assert.deepEqual(COMMUNITY_STATUS_OPTIONS.map(({ label }) => label), [
-    "All Home", "1 Missing", "Evacuated", "Needs Help",
+    "All Home", "Someone Missing", "Evacuated", "Needs Help",
   ]);
 });
 
@@ -35,4 +35,46 @@ test("a household profile without a typed ID falls back to the node's app destin
   assert.equal(resolveHouseholdId("FEDCBA9876543210", destination), "fedcba9876543210");
   assert.equal(resolveHouseholdId("", ""), "");
   assert.equal(resolveHouseholdId("", "not-a-destination"), "");
+});
+
+test("household status events are recognized by their uid", async () => {
+  const { communityEventSourceIdentity } = await import(moduleUrl);
+  assert.equal(
+    communityEventSourceIdentity("rem-community-status-v1:E6FCF8F02E290ED46F88A729460DFFFC"),
+    "e6fcf8f02e290ed46f88a729460dfffc",
+  );
+  assert.equal(communityEventSourceIdentity("evt-9e8e28fe"), "");
+});
+
+test("household status event details read as plain text", async () => {
+  const { communityEventDetails } = await import(moduleUrl);
+  assert.deepEqual(
+    communityEventDetails({ householdName: "Eliopoli", adults: 2, children: 1, pets: 0, roleBadges: ["Medic"], saverActive: true }),
+    ["Eliopoli", "3 people · 0 pets", "Medic", "Power saver on"],
+  );
+  assert.deepEqual(
+    communityEventDetails({ householdName: " ", adults: 1, children: 0, pets: 1, roleBadges: [], saverActive: false }),
+    ["1 person · 1 pet"],
+  );
+});
+
+test("a beacon that was never published says so instead of claiming it is fresh", () => {
+  assert.equal(freshnessLabel(0), "not published yet");
+});
+
+test("this node's own beacon is not counted as a nearby household", async () => {
+  const { splitOwnCommunityRecord } = await import(moduleUrl);
+  const own = { sourceIdentity: "E6FCF8F02E290ED46F88A729460DFFFC", status: "all_home" };
+  const other = { sourceIdentity: "11111111111111111111111111111111", status: "one_missing" };
+  assert.deepEqual(splitOwnCommunityRecord([own, other], "e6fcf8f02e290ed46f88a729460dfffc"), { own, others: [other] });
+  assert.deepEqual(splitOwnCommunityRecord([other], ""), { own: undefined, others: [other] });
+});
+
+test("dashboard share time reads as plain words", async () => {
+  const { sharedAgoLabel } = await import(moduleUrl);
+  const now = 1_710_000_000_000;
+  assert.equal(sharedAgoLabel(0, now), "Not shared yet");
+  assert.equal(sharedAgoLabel(now - 20_000, now), "Shared just now");
+  assert.equal(sharedAgoLabel(now - 30 * 60_000, now), "Shared 30m ago");
+  assert.equal(sharedAgoLabel(now - 3 * 3_600_000, now), "Shared 3h ago");
 });

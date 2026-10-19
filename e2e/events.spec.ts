@@ -5,7 +5,7 @@ import {
   encodeMecpMessage,
   parseMecpMessage,
 } from "../apps/mobile/src/utils/mecp";
-import { gotoApp, seedAppStorage } from "./support/app";
+import { defaultSettings, gotoApp, seedAppStorage } from "./support/app";
 
 const GREEK_CALLSIGN_PATTERN = /^(Alpha|Beta|Gamma|Delta|Epsilon|Zeta|Eta|Theta|Iota|Kappa|Lambda|Mu|Nu|Xi|Omicron|Pi|Rho|Sigma|Tau|Upsilon|Phi|Chi|Psi|Omega)\d{3}$/;
 
@@ -207,4 +207,60 @@ test("header shows the connected peer count", async ({ page }) => {
 
   await savedPeer.getByRole("button", { name: "Disconnect" }).click();
   await expect(connectedPeerCount).toHaveText("1/0/0");
+});
+
+test("household status events never show their raw REMCS1 code", async ({ page }) => {
+  const source = "e6fcf8f02e290ed46f88a729460dfffc";
+  const body = "MECP/2/B04 #HH_6521979f1165965b REMCS1:eyJhIjowLCJiIjpmYWxzZSwiYyI6MCwiaCI6IjY1MjE5NzlmMTE2NTk2NWIiLCJuIjoiRWxpb3BvbGkiLCJwIjowLCJyIjpbXSwicyI6ImFsbF9ob21lIiwidSI6MTc5MjQyMjU5MDA3NCwidiI6MX0";
+  await seedAppStorage(page, {
+    settings: defaultSettings,
+    events: [
+      {
+        uid: `rem-community-status-v1:${source}`,
+        entryUid: `rem-community-status-v1:${source}`,
+        missionUid: "rem-community",
+        callsign: "Eliopoli",
+        summary: body,
+        content: body,
+        updatedAt: Date.now(),
+      },
+    ],
+  });
+  await gotoApp(page, "/events");
+
+  const card = page.locator("article.event", { hasText: "Eliopoli" });
+  await expect(card.getByRole("heading", { name: /Household status/ })).toBeVisible();
+  await expect(card).not.toContainText("REMCS1");
+  await expect(card).not.toContainText("#HH_");
+});
+
+test("SOS beacon events read as MECP B01 and B03", async ({ page }) => {
+  const now = Date.now();
+  await seedAppStorage(page, {
+    settings: defaultSettings,
+    events: [
+      {
+        uid: "rem-sos-b01-v1:e6fcf8f02e290ed46f88a729460dfffc:sos-e6fcf8f0-1",
+        entryUid: "rem-sos-b01-v1:e6fcf8f02e290ed46f88a729460dfffc:sos-e6fcf8f0-1",
+        missionUid: "r3akt-default-mission",
+        callsign: "Pixelcorvo",
+        summary: "MECP/0/B01 #SOS_e6fcf8f0_1",
+        content: "MECP/0/B01 #SOS_e6fcf8f0_1",
+        updatedAt: now - 60_000,
+      },
+      {
+        uid: "rem-sos-b03-v1:e6fcf8f02e290ed46f88a729460dfffc:sos-e6fcf8f0-1",
+        entryUid: "rem-sos-b03-v1:e6fcf8f02e290ed46f88a729460dfffc:sos-e6fcf8f0-1",
+        missionUid: "r3akt-default-mission",
+        callsign: "Pixelcorvo",
+        summary: "MECP/2/B03 #SOS_e6fcf8f0_1",
+        content: "MECP/2/B03 #SOS_e6fcf8f0_1",
+        updatedAt: now,
+      },
+    ],
+  });
+  await gotoApp(page, "/events");
+
+  await expect(page.getByRole("heading", { name: /automated distress beacon active/i })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /cancel beacon - I am OK/i })).toBeVisible();
 });

@@ -232,6 +232,8 @@
   align-items: start;
   display: grid;
   gap: 0.65rem;
+  /* One column that never grows past the thread, so end-aligned (sent) bubbles stay on screen. */
+  grid-template-columns: minmax(0, 1fr);
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -243,6 +245,7 @@
   display: grid;
   gap: 0.34rem;
   max-width: min(38rem, 92%);
+  min-width: 0;
   padding: 0.78rem 0.9rem;
 }
 
@@ -283,6 +286,7 @@
   color: #f3f9ff;
   font-family: var(--font-body);
   line-height: 1.45;
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
 

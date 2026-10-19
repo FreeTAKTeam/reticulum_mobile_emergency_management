@@ -33,11 +33,22 @@ test("household profile, map preference, and power threshold persist", async ({ 
 test("dashboard presents exactly four native-backed household actions", async ({ page }) => {
   await seedAppStorage(page, { settings: { ...defaultSettings, community: { ...defaultSettings.community, householdName: "Harbour House" } } });
   await gotoApp(page, "/dashboard");
-  const group = page.getByRole("group", { name: "Publish household status" });
-  await expect(group.getByRole("button")).toHaveCount(4);
-  expect((await group.getByRole("button").allTextContents()).map((value) => value.trim())).toEqual(["All Home", "1 Missing", "Evacuated", "Needs Help"]);
-  await expect(page.getByRole("heading", { name: "Community status" })).toBeVisible();
   await expect(page.getByTestId("splash-screen")).toBeHidden({ timeout: 10_000 });
+  const panel = page.locator(".household-panel");
+  await expect(page.getByRole("heading", { name: "Household status" })).toBeVisible();
+  await expect(panel).toContainText("Not shared yet");
+  await expect(panel).not.toContainText("GPS-free");
+  const current = panel.getByRole("button", { name: /Household status: All Home/ });
+  await expect(current).toHaveAttribute("aria-expanded", "false");
+  const group = page.getByRole("group", { name: "Choose household status" });
+  await expect(group).toHaveCount(0);
+
+  await current.click();
+  await expect(group.getByRole("button")).toHaveCount(4);
+  expect((await group.getByRole("button").allTextContents()).map((value) => value.trim())).toEqual(["All Home", "Someone Missing", "Evacuated", "Needs Help"]);
+  await expect(group.getByRole("button", { name: "All Home" })).toHaveAttribute("aria-pressed", "true");
+  await current.click();
+  await expect(group).toHaveCount(0);
   await page.screenshot({ path: "output/playwright/community-dashboard.png", fullPage: true });
 });
 
