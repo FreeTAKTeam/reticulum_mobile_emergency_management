@@ -95,7 +95,8 @@ export function useSettingsRnode(form: SettingsRnodeForm) {
     return false;
   }
 
-  async function selectRnodeDevice(device: RnodeBluetoothDeviceRecord): Promise<void> {
+  /** Returns true only when `device` is now the selected RNode in the form. */
+  async function selectRnodeDevice(device: RnodeBluetoothDeviceRecord): Promise<boolean> {
     const deviceId = device.id || device.address;
     const supportedModes = device.supportedModes ?? ["ble"];
     const selectedMode = normalizeRnodeBluetoothMode(form.rnodeConnectionMode);
@@ -107,20 +108,20 @@ export function useSettingsRnode(form: SettingsRnodeForm) {
         const pairResult = await pairRnodeBluetoothDevice(deviceId, mode);
         if (!pairResult.paired && !pairResult.bondingStarted) {
           scanFeedback.value = "Android did not start Bluetooth pairing for this RNode.";
-          return;
+          return false;
         }
         if (!pairResult.paired) {
           form.rnodeEnabled = false;
           form.rnodePeripheralId = "";
           pairedDevices.value = await listPairedRnodeBluetoothDevices().catch(() => []);
           scanFeedback.value = "Bluetooth pairing started. Confirm the Android pairing prompt, then select the RNode from paired devices before saving.";
-          return;
+          return false;
         }
         scanFeedback.value = "RNode is already paired.";
         form.rnodePeripheralId = pairResult.id || pairResult.address || deviceId;
       } catch (error: unknown) {
         scanFeedback.value = error instanceof Error ? error.message : String(error);
-        return;
+        return false;
       }
     } else {
       scanFeedback.value = "";
@@ -129,6 +130,7 @@ export function useSettingsRnode(form: SettingsRnodeForm) {
     form.rnodeEnabled = true;
     form.rnodeConnectionMode = mode;
     form.rnodeDisplayName = device.name || device.address;
+    return true;
   }
 
   function selectRnodeUsbDevice(device: RnodeUsbDeviceRecord): void {

@@ -24,10 +24,9 @@ const {
   usbPairing,
 } = useSettingsRnode(props.draft);
 
-/** Picking a paired device writes it into the Network draft and finishes pairing. */
+/** Picking a device writes it into the Network draft; pairing finishes only if that worked. */
 async function useDevice(device: RnodeBluetoothDeviceRecord): Promise<void> {
-  await selectRnodeDevice(device);
-  if (props.draft.rnodeEnabled && props.draft.rnodePeripheralId.trim()) {
+  if (await selectRnodeDevice(device)) {
     emit("done");
   }
 }
