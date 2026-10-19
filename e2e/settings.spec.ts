@@ -27,23 +27,50 @@ async function seedHubDirectorySnapshot(
   }, snapshot);
 }
 
+async function storedSettings(page: import("@playwright/test").Page): Promise<Record<string, any>> {
+  return page.evaluate(() =>
+    JSON.parse(window.localStorage.getItem("reticulum.mobile.settings.v1") ?? "{}"),
+  );
+}
+
+async function openAdvanced(page: import("@playwright/test").Page): Promise<void> {
+  await page.locator("details.settings-advanced > summary", { hasText: "Advanced" }).click();
+}
+
+test("settings index groups pages by goal and remembers folded sections", async ({ page }) => {
+  await seedAppStorage(page, { settings: defaultSettings });
+  await gotoApp(page, "/settings");
+
+  for (const group of ["You", "Connectivity", "Sharing", "Emergency", "Device"]) {
+    await expect(page.getByRole("button", { name: new RegExp(`^${group}`) })).toBeVisible();
+  }
+  await expect(page.getByRole("link", { name: /Network interfaces/ })).toContainText("TCP · LoRa off");
+  await expect(page.getByRole("button", { name: "Save" })).toHaveCount(0);
+
+  const sharing = page.getByRole("button", { name: /^Sharing/ });
+  await sharing.click();
+  await expect(sharing).toHaveAttribute("aria-expanded", "false");
+  await expect(sharing).toContainText("Base map");
+  await expect(page.getByRole("link", { name: /Location sharing/ })).toBeHidden();
+
+  await page.reload();
+  await expect(page.getByRole("button", { name: /^Sharing/ })).toHaveAttribute("aria-expanded", "false");
+  await page.getByRole("button", { name: /^Sharing/ }).click();
+  await expect(page.getByRole("link", { name: /Location sharing/ })).toBeVisible();
+});
+
 test("fresh installs default to the first TCP community server", async ({ page }) => {
   await seedAppStorage(page, {});
 
-  await gotoApp(page, "/settings");
-
-  const runtimePanel = page.locator("details").filter({
-    has: page.getByRole("heading", { name: "Node Config" }),
-  });
-
-  await runtimePanel.locator("summary").click();
+  await gotoApp(page, "/settings/network");
 
   const firstServer = page
     .locator("label.server-option")
     .filter({ hasText: DEFAULT_TCP_COMMUNITY_ENDPOINT });
 
   await expect(firstServer.getByRole("checkbox")).toBeChecked();
-  await expect(runtimePanel.getByLabel("Transport node forwarding")).toBeChecked();
+  await openAdvanced(page);
+  await expect(page.getByLabel("Transport node forwarding")).toBeChecked();
   await expect(page.getByRole("button", { name: "Save" })).toBeDisabled();
 });
 
@@ -55,13 +82,7 @@ test("rmap TCP selection is preserved as a community server", async ({ page }) =
     },
   });
 
-  await gotoApp(page, "/settings");
-
-  const runtimePanel = page.locator("details").filter({
-    has: page.getByRole("heading", { name: "Node Config" }),
-  });
-
-  await runtimePanel.locator("summary").click();
+  await gotoApp(page, "/settings/network");
 
   const rmapServer = page.locator("label.server-option").filter({ hasText: "rmap.world:4242" });
 
@@ -74,12 +95,8 @@ test("rmap TCP selection is preserved as a community server", async ({ page }) =
     return mod.useNodeStore().settings;
   });
 
-  const storedSettings = await page.evaluate(() =>
-    JSON.parse(window.localStorage.getItem("reticulum.mobile.settings.v1") ?? "{}"),
-  );
-
   expect(runtimeSettings.tcpClients).toEqual(["rmap.world:4242"]);
-  expect(storedSettings.tcpClients).toEqual(["rmap.world:4242"]);
+  expect((await storedSettings(page)).tcpClients).toEqual(["rmap.world:4242"]);
 });
 
 test("operators can update runtime settings and persist TCP endpoints", async ({ page }) => {
@@ -90,31 +107,28 @@ test("operators can update runtime settings and persist TCP endpoints", async ({
     },
   });
 
-  await gotoApp(page, "/settings");
+  await gotoApp(page, "/settings/identity");
+  await page.getByLabel("Call sign").fill("Atlas-7");
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect.poll(async () => (await storedSettings(page)).displayName).toBe("Atlas-7");
 
-  const runtimePanel = page.locator("details").filter({
-    has: page.getByRole("heading", { name: "Node Config" }),
-  });
-
-  await runtimePanel.locator("summary").click();
-  await runtimePanel.getByLabel("Call Sign").fill("Atlas-7");
-  await runtimePanel.getByLabel("Transport node forwarding").uncheck();
-  await runtimePanel
+  await gotoApp(page, "/settings/network");
+  await openAdvanced(page);
+  await page.getByLabel("Transport node forwarding").uncheck();
+  await page
     .getByPlaceholder("Add custom endpoint (host:port or tcp://host:port)")
     .fill("mesh.example.org:5151");
-  await runtimePanel.getByRole("button", { name: "Add" }).click();
+  await page.getByRole("button", { name: "Add" }).click();
 
-  await expect(runtimePanel.getByText("mesh.example.org:5151")).toBeVisible();
+  await expect(page.locator(".active-endpoint").getByText("mesh.example.org:5151")).toBeVisible();
 
   await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByRole("button", { name: "Save" })).toBeDisabled();
 
-  const storedSettings = await page.evaluate(() =>
-    JSON.parse(window.localStorage.getItem("reticulum.mobile.settings.v1") ?? "{}"),
-  );
-
-  expect(storedSettings.displayName).toBe("Atlas-7");
-  expect(storedSettings.transportNodeEnabled).toBe(false);
-  expect(storedSettings.tcpClients).toContain("mesh.example.org:5151");
+  const stored = await storedSettings(page);
+  expect(stored.displayName).toBe("Atlas-7");
+  expect(stored.transportNodeEnabled).toBe(false);
+  expect(stored.tcpClients).toContain("mesh.example.org:5151");
 });
 
 test("operators can add Reticulum-style TCP URLs as custom endpoints", async ({ page }) => {
@@ -122,26 +136,16 @@ test("operators can add Reticulum-style TCP URLs as custom endpoints", async ({ 
     settings: defaultSettings,
   });
 
-  await gotoApp(page, "/settings");
-
-  const runtimePanel = page.locator("details").filter({
-    has: page.getByRole("heading", { name: "Node Config" }),
-  });
-
-  await runtimePanel.locator("summary").click();
-  await runtimePanel
+  await gotoApp(page, "/settings/network");
+  await page
     .getByPlaceholder("Add custom endpoint (host:port or tcp://host:port)")
     .fill("tcp://mesh.example.org:5151");
-  await runtimePanel.getByRole("button", { name: "Add" }).click();
+  await page.getByRole("button", { name: "Add" }).click();
 
-  await expect(runtimePanel.getByText("mesh.example.org:5151")).toBeVisible();
+  await expect(page.locator(".active-endpoint").getByText("mesh.example.org:5151")).toBeVisible();
   await page.getByRole("button", { name: "Save" }).click();
 
-  const storedSettings = await page.evaluate(() =>
-    JSON.parse(window.localStorage.getItem("reticulum.mobile.settings.v1") ?? "{}"),
-  );
-
-  expect(storedSettings.tcpClients).toContain("mesh.example.org:5151");
+  await expect.poll(async () => (await storedSettings(page)).tcpClients).toContain("mesh.example.org:5151");
 });
 
 test("operators can save manual RNode LoRa configuration", async ({ page }) => {
@@ -149,27 +153,23 @@ test("operators can save manual RNode LoRa configuration", async ({ page }) => {
     settings: defaultSettings,
   });
 
-  await gotoApp(page, "/settings");
+  await gotoApp(page, "/settings/network");
+  await page.getByLabel("Enable RNode Bluetooth LoRa").check();
+  await page.getByRole("link", { name: /Pair RNode device/ }).click();
+  await expect(page).toHaveURL(/\/settings\/network\/rnode-pairing$/);
+  await page.getByLabel("RNode device id").fill("AA:BB:CC:DD:EE:FF");
+  await page.getByLabel("RNode display name").fill("Field RNode");
+  await page.getByRole("button", { name: "Done" }).click();
 
-  const runtimePanel = page.locator("details").filter({
-    has: page.getByRole("heading", { name: "Node Config" }),
-  });
-
-  await runtimePanel.locator("summary").click();
-  await runtimePanel.getByLabel("Enable RNode Bluetooth LoRa").check();
-  await runtimePanel.getByLabel("RNode device id").fill("AA:BB:CC:DD:EE:FF");
-  await runtimePanel.getByLabel("RNode display name").fill("Field RNode");
-  await runtimePanel.getByLabel("Region").selectOption("EU868");
-  await runtimePanel.getByLabel("REM LoRa profile").selectOption("REM-LM-EXTREME-v1");
+  await expect(page).toHaveURL(/\/settings\/network$/);
+  await expect(page.getByRole("link", { name: /Pair RNode device/ })).toContainText("Field RNode");
+  await page.getByLabel("Region").selectOption("EU868");
+  await page.getByLabel("REM LoRa profile").selectOption("REM-LM-EXTREME-v1");
 
   await expect(page.getByRole("button", { name: "Save" })).toBeEnabled();
   await page.getByRole("button", { name: "Save" }).click();
 
-  const storedSettings = await page.evaluate(() =>
-    JSON.parse(window.localStorage.getItem("reticulum.mobile.settings.v1") ?? "{}"),
-  );
-
-  expect(storedSettings.rnode).toEqual({
+  await expect.poll(async () => (await storedSettings(page)).rnode).toEqual({
     enabled: true,
     connectionMode: "ble",
     peripheralId: "AA:BB:CC:DD:EE:FF",
@@ -185,25 +185,16 @@ test("out-of-range RNode LoRa frequency is not persisted", async ({ page }) => {
     settings: defaultSettings,
   });
 
-  await gotoApp(page, "/settings");
-
-  const runtimePanel = page.locator("details").filter({
-    has: page.getByRole("heading", { name: "Node Config" }),
-  });
-  const settingsBefore = await page.evaluate(() =>
-    JSON.parse(window.localStorage.getItem("reticulum.mobile.settings.v1") ?? "{}"),
-  );
-  await runtimePanel.locator("summary").click();
-  await runtimePanel.getByLabel("Frequency (Hz)").fill("1");
+  await gotoApp(page, "/settings/network");
+  const settingsBefore = await storedSettings(page);
+  await page.getByLabel("Enable RNode Bluetooth LoRa").check();
+  await page.getByLabel("Frequency (Hz)").fill("1");
   await page.getByRole("button", { name: "Save" }).click();
 
   await expect(page.getByText(
     "RNode LoRa frequency must be between 137000000 and 3000000000 Hz.",
   )).toBeVisible();
-  const storedSettings = await page.evaluate(() =>
-    JSON.parse(window.localStorage.getItem("reticulum.mobile.settings.v1") ?? "{}"),
-  );
-  expect(storedSettings).toEqual(settingsBefore);
+  expect(await storedSettings(page)).toEqual(settingsBefore);
 });
 
 test("telemetry publish interval above 60 seconds activates save and persists", async ({ page }) => {
@@ -217,23 +208,61 @@ test("telemetry publish interval above 60 seconds activates save and persists", 
     },
   });
 
-  await gotoApp(page, "/settings");
-
-  const telemetryPanel = page.locator("details").filter({
-    has: page.getByRole("heading", { name: "Telemetry" }),
-  });
-
-  await telemetryPanel.locator("summary").click();
-  await telemetryPanel.getByLabel("Telemetry publish interval (seconds)").fill("120");
+  await gotoApp(page, "/settings/location");
+  await page.getByLabel("Telemetry publish interval (seconds)").fill("120");
 
   await expect(page.getByRole("button", { name: "Save" })).toBeEnabled();
   await page.getByRole("button", { name: "Save" }).click();
 
-  const storedSettings = await page.evaluate(() =>
-    JSON.parse(window.localStorage.getItem("reticulum.mobile.settings.v1") ?? "{}"),
-  );
+  await expect.poll(async () => (await storedSettings(page)).telemetry.publishIntervalSeconds).toBe(120);
+});
 
-  expect(storedSettings.telemetry.publishIntervalSeconds).toBe(120);
+test("location sharing blocks a hide time shorter than the stale time", async ({ page }) => {
+  await seedAppStorage(page, { settings: defaultSettings });
+  await gotoApp(page, "/settings/location");
+
+  await page.getByLabel("Telemetry goes stale after (minutes)").fill("60");
+  await page.getByLabel("Telemetry disappears after (minutes)").fill("30");
+  await expect(page.getByRole("alert")).toContainText("Hide time must be the same as or longer");
+  await page.getByRole("button", { name: "Save" }).click();
+  expect((await storedSettings(page)).telemetry?.staleAfterMinutes).not.toBe(60);
+});
+
+test("leaving a form with unsaved changes asks to discard or keep editing", async ({ page }) => {
+  await seedAppStorage(page, { settings: { ...defaultSettings, displayName: "Atlas-1" } });
+  await gotoApp(page, "/settings/identity");
+
+  await page.getByLabel("Call sign").fill("Atlas-9");
+  await page.getByRole("button", { name: "Back to settings" }).click();
+  const dialog = page.getByRole("alertdialog", { name: "Discard unsaved changes?" });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Keep editing" }).click();
+  await expect(page).toHaveURL(/\/settings\/identity$/);
+  await expect(page.getByLabel("Call sign")).toHaveValue("Atlas-9");
+
+  await page.getByRole("button", { name: "Back to settings" }).click();
+  await dialog.getByRole("button", { name: "Discard" }).click();
+  await expect(page).toHaveURL(/\/settings$/);
+  expect((await storedSettings(page)).displayName).toBe("Atlas-1");
+});
+
+test("saving a restart field shows the restart banner until the node restarts", async ({ page }) => {
+  await seedAppStorage(page, { settings: { ...defaultSettings, displayName: "Atlas-1" } });
+  await gotoApp(page, "/settings/identity");
+  await expect.poll(() => page.evaluate(async () => {
+    const mod = await import("/src/stores/nodeStore.ts");
+    return mod.useNodeStore().status.running;
+  })).toBe(true);
+
+  await page.getByLabel("Call sign").fill("Atlas-2");
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.locator(".settings-save-bar")).toContainText("Restart the node");
+  await page.getByRole("button", { name: "Back to settings" }).click();
+
+  const banner = page.locator(".restart-banner");
+  await expect(banner).toContainText("Restart node to apply: call sign");
+  await banner.getByRole("button", { name: "Restart" }).click();
+  await expect(banner).toHaveCount(0);
 });
 
 test("persisted RCH mode does not block local runtime startup", async ({ page }) => {
@@ -248,16 +277,12 @@ test("persisted RCH mode does not block local runtime startup", async ({ page })
     },
   });
 
-  await gotoApp(page, "/settings");
-  const hubPanel = page.locator("details").filter({
-    has: page.getByRole("heading", { name: "RCH Hub Directory" }),
-  });
-  await hubPanel.locator("summary").click();
+  await gotoApp(page, "/settings/routing");
 
   await expect(page.getByText("Interfaces are loading")).toHaveCount(0);
-  await expect(hubPanel.getByLabel("Mode")).toBeEnabled();
-  await expect(hubPanel.getByLabel("Mode")).toHaveValue("SemiAutonomous");
-  await expect(hubPanel.getByLabel("Hub identity hash")).toHaveValue(
+  await expect(page.getByRole("radio", { name: /Semi-autonomous/ })).toBeChecked();
+  await expect(page.getByRole("radio", { name: /Semi-autonomous/ })).toBeEnabled();
+  await expect(page.getByLabel("Hub identity hash")).toHaveValue(
     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   );
 
@@ -270,18 +295,15 @@ test("persisted RCH mode does not block local runtime startup", async ({ page })
 
 test("stopping the node returns to the regular screen and reports stopped", async ({ page }) => {
   await seedAppStorage(page, { settings: defaultSettings });
-  await gotoApp(page, "/settings");
+  await gotoApp(page, "/settings/node");
 
-  const nodeControlPanel = page.locator("details").filter({
-    has: page.getByRole("heading", { name: "Node Control" }),
-  });
-  await nodeControlPanel.locator("summary").click();
-  await expect(nodeControlPanel).toContainText("Node is running");
+  const nodeControl = page.getByRole("region", { name: "Node Control" });
+  await expect(nodeControl).toContainText("Node is running");
 
-  await nodeControlPanel.getByRole("button", { name: "Stop", exact: true }).click();
+  await nodeControl.getByRole("button", { name: "Stop", exact: true }).click();
 
   await expect(page.getByTestId("splash-interface-loading")).toHaveCount(0);
-  await expect(nodeControlPanel).toContainText("Node is stopped");
+  await expect(nodeControl).toContainText("Node is stopped");
   await expect(page.locator(".running")).toHaveText("Stopped");
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
   await expect.poll(async () => page.evaluate(async () => {
@@ -302,11 +324,7 @@ test("semi-autonomous RCH exposes effective connected routing state", async ({ p
     },
   });
 
-  await gotoApp(page, "/settings");
-  const hubPanel = page.locator("details").filter({
-    has: page.getByRole("heading", { name: "RCH Hub Directory" }),
-  });
-  await hubPanel.locator("summary").click();
+  await gotoApp(page, "/settings/routing");
   await seedHubDirectorySnapshot(page, {
     effectiveConnectedMode: true,
     receivedAtMs: Date.now(),
@@ -324,21 +342,30 @@ test("semi-autonomous RCH exposes effective connected routing state", async ({ p
     ],
   });
 
-  await expect(hubPanel.getByLabel("Mode")).toBeEnabled();
-  await expect(hubPanel.getByLabel("Mode")).toHaveValue("SemiAutonomous");
-  await expect(hubPanel).toContainText("1 cached peers");
-  await expect(hubPanel).toContainText("server forcing connected routing");
-  await expect(hubPanel).not.toContainText("outbound blocked");
+  const status = page.locator(".status-rows");
+  await expect(page.getByRole("radio", { name: /Semi-autonomous/ })).toBeChecked();
+  await expect(status).toContainText("1 cached peers");
+  await expect(status).toContainText("server forcing connected routing");
+  await expect(status).not.toContainText("outbound blocked");
+});
+
+test("SOS trigger asks for confirmation before sending", async ({ page }) => {
+  await seedAppStorage(page, { settings: defaultSettings });
+  await gotoApp(page, "/settings/sos");
+
+  await page.getByRole("button", { name: "Trigger SOS" }).click();
+  await expect(page.getByRole("button", { name: "Send SOS to peers" })).toBeVisible();
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await expect(page.getByRole("button", { name: "Send SOS to peers" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /Deactivation PIN/ })).toBeVisible();
 });
 
 test("plugin management is present without storing plugin configuration in the web app", async ({ page }) => {
   await seedAppStorage(page, { settings: defaultSettings });
   await gotoApp(page, "/settings");
+  await page.getByRole("link", { name: /Plugins/ }).click();
 
   const pluginPanel = page.getByTestId("plugin-settings-panel");
-  await pluginPanel.locator("summary").click();
-
-  await expect(pluginPanel.locator("summary .summary-icon-svg")).toBeVisible();
   await expect(pluginPanel.getByRole("button", { name: "Refresh installed plugins" })).toBeVisible();
   await expect(pluginPanel).toContainText("No plugin APKs were discovered");
   const pluginSettingsKeys = await page.evaluate(() =>
@@ -347,18 +374,33 @@ test("plugin management is present without storing plugin configuration in the w
   expect(pluginSettingsKeys).toEqual([]);
 });
 
-test("Settings replaces Manage Peers with the Manage Teams page", async ({ page }) => {
+test("Settings links to the Manage Teams page", async ({ page }) => {
   await seedAppStorage(page, { settings: defaultSettings });
   await gotoApp(page, "/settings");
 
-  const teamEntry = page.locator(".settings-team-entry");
-  await expect(teamEntry.getByRole("heading", { name: "Manage Teams" })).toBeVisible();
   await expect(page.getByText("Manage Peers")).toHaveCount(0);
-  await teamEntry.getByRole("button", { name: "Open" }).click();
+  await page.getByRole("link", { name: /Teams/ }).click();
 
   await expect(page).toHaveURL(/\/settings\/teams$/);
   await expect(page.getByRole("heading", { name: "Manage Teams" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Add team", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Scan QR", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Back to settings" })).toBeVisible();
+});
+
+test("save feedback clears once the form is edited or discarded again", async ({ page }) => {
+  await seedAppStorage(page, { settings: { ...defaultSettings, displayName: "Atlas-1" } });
+  await gotoApp(page, "/settings/map");
+  const bar = page.locator(".settings-save-bar");
+
+  await page.getByRole("radio", { name: /Satellite/ }).check();
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(bar).toContainText("Saved");
+
+  await page.getByRole("radio", { name: /Base/ }).check();
+  await expect(bar).not.toContainText("Saved");
+  await expect(bar).toContainText("Unsaved changes");
+
+  await page.getByRole("button", { name: "Discard" }).click();
+  await expect(bar).toContainText("All changes saved");
 });

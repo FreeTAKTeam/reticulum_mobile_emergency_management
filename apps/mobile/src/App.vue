@@ -250,7 +250,7 @@ const pageTitle = computed(() => {
     case "telemetry":
       return "Map";
     default:
-      return "R.E.M.";
+      return typeof route.meta.title === "string" ? route.meta.title : "R.E.M.";
   }
 });
 const readinessError = computed(() => nodeStore.readinessError.trim());
@@ -301,7 +301,7 @@ const moreRouteNames = new Set([
   "peers", "settings", "manage-teams",
 ]);
 
-const moreActive = computed(() => menuOpen.value || moreRouteNames.has(String(route.name ?? "")));
+const moreActive = computed(() => menuOpen.value || moreRouteNames.has(String(route.name ?? "")) || route.path.startsWith("/settings/"));
 const setupActive = computed(() => route.name === "setup");
 
 function toggleMenu(): void {

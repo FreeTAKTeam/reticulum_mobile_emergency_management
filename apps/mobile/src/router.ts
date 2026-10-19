@@ -1,5 +1,7 @@
 import { createRouter, createWebHistory } from "vue-router";
 
+import { settingsRoutes } from "./settingsRoutes";
+
 const routes = [
   {
     path: "/",
@@ -55,6 +57,7 @@ const routes = [
     name: "manage-teams",
     component: () => import("./views/ManageTeamsView.vue"),
   },
+  ...settingsRoutes,
   {
     path: "/setup",
     name: "setup",

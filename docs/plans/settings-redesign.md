@@ -1,6 +1,14 @@
 # REM Settings redesign proposal
 
-Status: design only, nothing implemented. Written 2026-10-19 against `main` at 451f8d9.
+Status: phases 1–3 implemented on 2026-10-19 (branch `corvo/settings-redesign`); phase 4 (wizard reuse) not started. Written 2026-10-19 against `main` at 451f8d9.
+
+Implementation notes, where the build differs from the text below:
+
+- The SOS PIN row reads "Set" / "Not set" from the PIN hash stored in the SOS settings.
+- "Send a test SOS" is labelled **Trigger SOS** with a confirm step, because it sends a real alert, not a test. It uses the saved SOS settings.
+- The Routing hub picker and identity hash show only when mode is not Autonomous (open question 2).
+- The Location page blocks saving when the hide time is shorter than the stale time instead of silently raising it.
+- Restart reasons live in memory; after an app relaunch with a restart still pending, the banner reads "Restart node to apply saved changes".
 
 ## 1. What is confusing today
 
