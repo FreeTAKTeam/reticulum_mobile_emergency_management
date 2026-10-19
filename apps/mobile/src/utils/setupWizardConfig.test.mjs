@@ -11,36 +11,18 @@ const transpiled = ts.transpileModule(source, {
   },
 }).outputText;
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(transpiled).toString("base64")}`;
-const {
-  SETUP_STEPS,
-  permissionLabel,
-  normalizeWizardTcpEndpoint,
-  normalizeWizardTelemetryPublishIntervalSeconds,
-} = await import(moduleUrl);
+const { SETUP_STEPS } = await import(moduleUrl);
 
-test("setup wizard steps retain stable unique identifiers", () => {
+test("setup wizard steps follow the Settings index order", () => {
   assert.deepEqual(
     SETUP_STEPS.map((step) => step.id),
-    ["welcome", "callsign", "permissions", "tcp", "rnode", "telemetry", "sos", "review"],
+    ["welcome", "identity", "network", "routing", "location", "sos", "review"],
   );
 });
 
-test("setup wizard telemetry interval uses a positive default", () => {
-  assert.equal(normalizeWizardTelemetryPublishIntervalSeconds(undefined), 360);
-  assert.equal(normalizeWizardTelemetryPublishIntervalSeconds(0), 1);
-  assert.equal(normalizeWizardTelemetryPublishIntervalSeconds("42.9"), 42);
-});
-
-test("setup wizard validates IPv4, hostname, and bracketed IPv6 endpoints", () => {
-  assert.equal(normalizeWizardTcpEndpoint(" mesh.example:4242 "), "mesh.example:4242");
-  assert.equal(normalizeWizardTcpEndpoint("[2001:db8::1]:4242"), "[2001:db8::1]:4242");
-  assert.equal(normalizeWizardTcpEndpoint("missing-port"), undefined);
-  assert.equal(normalizeWizardTcpEndpoint("mesh.example:70000"), undefined);
-});
-
-test("permission states map to operator-facing labels", () => {
-  assert.equal(permissionLabel("granted"), "Granted");
-  assert.equal(permissionLabel("denied"), "Denied");
-  assert.equal(permissionLabel("unavailable"), "Unavailable");
-  assert.equal(permissionLabel("prompt"), "Not requested");
+test("only the routing step is optional", () => {
+  assert.deepEqual(
+    SETUP_STEPS.filter((step) => step.optional).map((step) => step.id),
+    ["routing"],
+  );
 });

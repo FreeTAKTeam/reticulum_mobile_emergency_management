@@ -367,7 +367,9 @@ different on narrow screens, but the sequence and recovery rules are the same.
 
 ### First Launch With TCP Or Autonomous Operation
 
-1. Open REM and complete the setup wizard. Enter a unique call sign.
+1. Open REM and complete the setup wizard. Its steps follow the Settings
+   index (Identity, Network, Routing, Location sharing, SOS, then Review) and
+   show the same forms as those Settings pages. Enter a unique call sign.
 2. For normal internet or LAN access, keep **TCP** enabled and select a
    community server or enter `host:port`. For an isolated team, remove TCP
    endpoints and choose **Autonomous** mode.

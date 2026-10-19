@@ -16,6 +16,7 @@ const {
   DEFAULT_TCP_COMMUNITY_ENDPOINTS,
   TCP_COMMUNITY_SERVERS,
   normalizeTcpCommunityClients,
+  normalizeTcpEndpointInput,
 } = await import(moduleUrl);
 
 test("R3AKT server is the default TCP community endpoint", () => {
@@ -42,4 +43,12 @@ test("explicitly empty TCP community clients remain empty", () => {
 
 test("rmap TCP community clients are preserved", () => {
   assert.deepEqual(normalizeTcpCommunityClients(["rmap.world:4242"]), ["rmap.world:4242"]);
+});
+
+test("custom TCP endpoints accept host:port, tcp:// URLs and bracketed IPv6", () => {
+  assert.equal(normalizeTcpEndpointInput(" mesh.example:4242 "), "mesh.example:4242");
+  assert.equal(normalizeTcpEndpointInput("tcp://mesh.example:4242"), "mesh.example:4242");
+  assert.equal(normalizeTcpEndpointInput("[2001:db8::1]:4242"), "[2001:db8::1]:4242");
+  assert.equal(normalizeTcpEndpointInput("missing-port"), undefined);
+  assert.equal(normalizeTcpEndpointInput("mesh.example:70000"), undefined);
 });

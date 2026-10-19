@@ -23,7 +23,8 @@ test("first start redirects to setup wizard", async ({ page }) => {
   expect(status.name).toBe("");
 
   await page.getByRole("button", { name: "Start Setup" }).click();
-  await expect(page.getByTestId("setup-callsign")).toHaveValue(GREEK_CALLSIGN_PATTERN);
+  await expect(page.getByRole("heading", { name: "Identity" })).toBeVisible();
+  await expect(page.getByLabel("Call sign")).toHaveValue(GREEK_CALLSIGN_PATTERN);
 
   const defaultSettings = await page.evaluate(async () => {
     const mod = await import("/src/stores/nodeStore.ts");
@@ -44,38 +45,46 @@ test("operators complete first-run setup and persist core choices", async ({ pag
   await gotoApp(page, "/setup");
 
   await page.getByRole("button", { name: "Start setup" }).click();
-  await page.getByTestId("setup-callsign").fill("Atlas-9");
+  await expect(page.getByRole("heading", { name: "Identity" })).toBeVisible();
+  await expect(page.getByText("Step 2 of 7")).toBeVisible();
+  await page.getByLabel("Call sign").fill("Atlas-9");
   await page.getByLabel("Household name").fill("Harbour House");
-  await expect(page.getByLabel("Household ID")).toHaveValue("");
-  await expect(page.getByLabel("Household ID")).toHaveAttribute("placeholder", /^[0-9a-f]{16}$/);
   await page.getByRole("button", { name: "Next" }).click();
 
-  await expect(page.getByRole("heading", { name: "Permissions" })).toBeVisible();
-  await expect(page.getByText("Step 3 of 8")).toBeVisible();
-  await expect(page.getByText("Required for RNode LoRa")).toBeVisible();
-  await page.getByRole("button", { name: "Next" }).click();
-
-  await expect(page.getByRole("heading", { name: "TCP Interfaces" })).toBeVisible();
-  await page.getByPlaceholder("host:port").fill("mesh.example.org:5151");
-  await page.getByRole("button", { name: "Add TCP endpoint" }).click();
+  await expect(page.getByRole("heading", { name: "Network interfaces" })).toBeVisible();
+  await expect(page.getByText("Step 3 of 7")).toBeVisible();
+  await page.getByPlaceholder("Add custom endpoint (host:port or tcp://host:port)").fill("mesh.example.org:5151");
+  await page.getByRole("button", { name: "Add", exact: true }).click();
   await expect(page.getByText("mesh.example.org:5151")).toBeVisible();
-  await page.getByRole("button", { name: "Next" }).click();
-
-  await expect(page.getByRole("heading", { name: "LoRa Interface" })).toBeVisible();
-  await expect(page.getByText("Step 5 of 8")).toBeVisible();
-  await page.getByLabel("Enable RNode LoRa").check();
-  await page.getByPlaceholder("RNode Bluetooth device id").fill("AA:BB:CC:DD:EE:FF");
+  await page.getByLabel("Enable RNode Bluetooth LoRa").check();
+  await page.getByRole("button", { name: /Pair RNode device/ }).click();
+  await expect(page.getByRole("heading", { name: "Pair RNode device" })).toBeVisible();
+  await page.getByLabel("RNode device id").fill("AA:BB:CC:DD:EE:FF");
+  await page.getByRole("button", { name: "Done" }).click();
+  await expect(page.getByRole("button", { name: /Pair RNode device/ })).toContainText("AA:BB:CC:DD:EE:FF");
   await page.getByLabel("Region").selectOption("EU868");
   await page.getByLabel("REM LoRa profile").selectOption("REM-MF-URBAN-v1");
   await page.getByRole("button", { name: "Next" }).click();
 
-  await expect(page.getByRole("heading", { name: "Telemetry" })).toBeVisible();
-  await page.getByLabel("Activate telemetry").check();
+  await expect(page.getByRole("heading", { name: "Routing & hubs" })).toBeVisible();
+  await expect(page.getByText("Optional", { exact: true })).toBeVisible();
+  await expect(page.getByLabel(/^Autonomous/)).toBeChecked();
+  await page.getByRole("button", { name: "Next" }).click();
+
+  await expect(page.getByRole("heading", { name: "Location sharing" })).toBeVisible();
+  await expect(page.getByText("Location permission")).toBeVisible();
+  await page.getByLabel("Enable telemetry sharing").check();
   await expect(page.getByLabel("Telemetry publish interval (seconds)")).toHaveValue("360");
   await page.getByLabel("Telemetry publish interval (seconds)").fill("420");
   await page.getByRole("button", { name: "Next" }).click();
+
+  await expect(page.getByRole("heading", { name: "SOS" })).toBeVisible();
   await page.getByLabel("Enable SOS").check();
+  await expect(page.getByLabel("Floating SOS button")).toBeChecked();
   await page.getByRole("button", { name: "Next" }).click();
+
+  await expect(page.getByRole("heading", { name: "Review setup" })).toBeVisible();
+  await expect(page.getByText('Atlas-9 · Household "Harbour House"')).toBeVisible();
   await page.getByTestId("setup-finish").click();
 
   await expect(page).toHaveURL(/\/dashboard$/);
@@ -122,6 +131,26 @@ test("operators complete first-run setup and persist core choices", async ({ pag
     floatingButton: true,
   });
   expect(setupState.completed).toBe(true);
+});
+
+test("setup steps use the Settings validation", async ({ page }) => {
+  await seedAppStorage(page, { setupWizardCompleted: false });
+  await gotoApp(page, "/setup");
+
+  await page.getByRole("button", { name: "Start setup" }).click();
+  await page.getByLabel("Call sign").fill("   ");
+  await expect(page.getByRole("alert")).toHaveText("Call sign is required.");
+  await expect(page.getByRole("button", { name: "Next" })).toBeDisabled();
+  await page.getByLabel("Call sign").fill("Atlas-3");
+  await page.getByRole("button", { name: "Next" }).click();
+  await page.getByRole("button", { name: "Next" }).click();
+  await page.getByRole("button", { name: "Next" }).click();
+
+  await expect(page.getByRole("heading", { name: "Location sharing" })).toBeVisible();
+  await page.getByLabel("Telemetry goes stale after (minutes)").fill("90");
+  await page.getByLabel("Telemetry disappears after (minutes)").fill("30");
+  await expect(page.getByRole("alert")).toHaveText("Hide time must be the same as or longer than the stale time.");
+  await expect(page.getByRole("button", { name: "Next" })).toBeDisabled();
 });
 
 test("settings can relaunch setup wizard", async ({ page }) => {

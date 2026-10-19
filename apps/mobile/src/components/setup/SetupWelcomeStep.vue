@@ -11,27 +11,23 @@ defineProps<{ logoUrl: string }>();
     <div class="mission-list">
       <div class="mission-row">
         <span class="row-icon">ID</span>
-        <div><strong>Identity</strong><small>Set call sign and operator identity.</small></div>
-      </div>
-      <div class="mission-row">
-        <span class="row-icon">OK</span>
-        <div><strong>Permissions</strong><small>Grant Android permissions required by selected features.</small></div>
+        <div><strong>Identity</strong><small>Set your call sign and household.</small></div>
       </div>
       <div class="mission-row">
         <span class="row-icon">NET</span>
-        <div><strong>Network</strong><small>Configure TCP interfaces for Reticulum access.</small></div>
+        <div><strong>Network</strong><small>Choose TCP servers and, optionally, an RNode LoRa radio.</small></div>
       </div>
       <div class="mission-row">
-        <span class="row-icon">RF</span>
-        <div><strong>LoRa</strong><small>Enable RNode Bluetooth LoRa after Bluetooth permission.</small></div>
+        <span class="row-icon">HUB</span>
+        <div><strong>Routing</strong><small>Optional. Stays Autonomous unless you use an RCH hub.</small></div>
       </div>
       <div class="mission-row">
         <span class="row-icon">GPS</span>
-        <div><strong>Telemetry</strong><small>Choose whether to publish position data.</small></div>
+        <div><strong>Location sharing</strong><small>Choose whether to share your position and allow location access.</small></div>
       </div>
       <div class="mission-row danger-row">
         <span class="row-icon">SOS</span>
-        <div><strong>SOS</strong><small>Enable emergency messaging and floating SOS access.</small></div>
+        <div><strong>SOS</strong><small>Set up emergency alerts and allow notifications.</small></div>
       </div>
     </div>
   </section>

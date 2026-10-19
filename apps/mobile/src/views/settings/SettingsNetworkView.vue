@@ -6,6 +6,7 @@ import SettingsLeaveDialog from "../../components/settings/SettingsLeaveDialog.v
 import SettingsPage from "../../components/settings/SettingsPage.vue";
 import SettingsSaveBar from "../../components/settings/SettingsSaveBar.vue";
 import { networkSlice } from "../../components/settings/settingsFormSlices";
+import { SETTINGS_PAGE_COPY } from "../../components/settings/settingsPageCopy";
 import { useNodeSettingsForm } from "../../components/settings/useNodeSettingsForm";
 import { useNodeStore } from "../../stores/nodeStore";
 import type { NodeUiSettings } from "../../types/domain";
@@ -14,6 +15,7 @@ import { normalizeRnodeSettings } from "../../utils/rnodeProfiles";
 const nodeStore = useNodeStore();
 const route = useRoute();
 const pairing = computed(() => route.name === "settings-rnode-pairing");
+const copy = computed(() => (pairing.value ? SETTINGS_PAGE_COPY.rnodePairing : SETTINGS_PAGE_COPY.network));
 
 /** A changed LoRa interface is applied right away, as the single Settings form did. */
 async function applyRnodeChange(before: NodeUiSettings): Promise<string | undefined> {
@@ -39,8 +41,8 @@ const form = useNodeSettingsForm(networkSlice, { afterSave: applyRnodeChange });
 
 <template>
   <SettingsPage
-    :title="pairing ? 'Pair RNode device' : 'Network interfaces'"
-    :description="pairing ? 'Find a LoRa radio over Bluetooth or USB and use it for this node.' : 'How this node reaches the mesh: TCP servers and LoRa radio.'"
+    :title="copy.title"
+    :description="copy.description"
     :back="pairing ? { name: 'settings-network' } : '/settings'"
     :back-label="pairing ? 'Back to network' : 'Back to settings'"
   >
