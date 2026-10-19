@@ -13,6 +13,12 @@ import WizardProgress from "../components/setup/WizardProgress.vue";
 import { useSetupWizard } from "../composables/useSetupWizard";
 import logoUrl from "../assets/rem-logo.png";
 
+// Shared, already prefixed with .settings-view: imported as plain CSS so no
+// component's scoped compilation can claim them in the production bundle.
+import "./styles/settings-layout.css";
+import "./styles/settings-content.css";
+import "./styles/settings-pages.css";
+
 const wizard = useSetupWizard();
 const stepId = computed(() => wizard.activeStep.value.id);
 const REVIEW_COPY: SettingsPageCopy = {
@@ -146,6 +152,3 @@ onMounted(() => { wizard.open(); });
 
 <style scoped src="./SetupWizardLayout.css"></style>
 <style scoped src="./SetupWizardControls.css"></style>
-<style src="./styles/settings-layout.css"></style>
-<style src="./styles/settings-content.css"></style>
-<style src="./styles/settings-pages.css"></style>

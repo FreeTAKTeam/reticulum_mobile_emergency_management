@@ -17,6 +17,12 @@ import { useSosStore } from "../stores/sosStore";
 import { appVersion } from "../utils/appVersion";
 import { restartBannerText } from "../utils/settingsRestartReasons";
 
+// Shared, already prefixed with .settings-view: imported as plain CSS so no
+// component's scoped compilation can claim them in the production bundle.
+import "./styles/settings-layout.css";
+import "./styles/settings-content.css";
+import "./styles/settings-pages.css";
+
 const nodeStore = useNodeStore();
 const sosStore = useSosStore();
 const restartNotice = useSettingsRestartNotice();
@@ -115,7 +121,3 @@ onMounted(() => {
     </nav>
   </section>
 </template>
-
-<style src="./styles/settings-layout.css"></style>
-<style src="./styles/settings-content.css"></style>
-<style src="./styles/settings-pages.css"></style>

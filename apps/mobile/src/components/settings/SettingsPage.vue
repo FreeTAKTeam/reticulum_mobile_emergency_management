@@ -2,6 +2,12 @@
 import { PhArrowLeft as ArrowLeft } from "@phosphor-icons/vue";
 import { useRouter, type RouteLocationRaw } from "vue-router";
 
+// Shared, already prefixed with .settings-view: imported as plain CSS so no
+// component's scoped compilation can claim them in the production bundle.
+import "../../views/styles/settings-layout.css";
+import "../../views/styles/settings-content.css";
+import "../../views/styles/settings-pages.css";
+
 const props = withDefaults(defineProps<{
   title: string;
   description?: string;
@@ -36,7 +42,3 @@ async function goBack(): Promise<void> {
     <slot name="footer" />
   </section>
 </template>
-
-<style src="../../views/styles/settings-layout.css"></style>
-<style src="../../views/styles/settings-content.css"></style>
-<style src="../../views/styles/settings-pages.css"></style>
