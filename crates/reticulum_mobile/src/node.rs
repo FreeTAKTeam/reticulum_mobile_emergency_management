@@ -309,6 +309,7 @@ include!("node/map_marker_replication.rs");
 include!("node/plugin_map.rs");
 include!("node/events_plugins_telemetry.rs");
 include!("node/sos.rs");
+include!("node/sos_events.rs");
 include!("node/team.rs");
 include!("node/event_subscription.rs");
 
@@ -321,6 +322,7 @@ mod tests {
     include!("node/tests/checklist_routing.rs");
     include!("node/tests/checklist_runtime.rs");
     include!("node/tests/core.rs");
+    include!("node/tests/sos_events.rs");
     include!("node/tests/eam_build_eam_replication_payload_emits_numeri.rs");
     include!("node/tests/eam_eam_replication_targets_include_saved_dire.rs");
     include!("node/tests/eam_repeated_eam_updates_with_same_callsign_re.rs");

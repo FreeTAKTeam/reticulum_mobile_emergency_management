@@ -25,6 +25,16 @@ impl Node {
         requested_destination_hex: Option<String>,
         traffic_class: OutboundTrafficClass,
     ) -> Result<(), NodeError> {
+        self.upsert_event_with_delivery(record, requested_destination_hex, traffic_class, true)
+    }
+
+    fn upsert_event_with_delivery(
+        &self,
+        record: EventProjectionRecord,
+        requested_destination_hex: Option<String>,
+        traffic_class: OutboundTrafficClass,
+        await_delivery: bool,
+    ) -> Result<(), NodeError> {
         let targeted_send = requested_destination_hex.is_some();
         let mut scheduled_sends = Vec::<(String, Vec<u8>, Vec<u8>, SendMode)>::new();
         let bus = {
@@ -134,7 +144,7 @@ impl Node {
         };
 
         for (destination_hex, body, fields_bytes, send_mode) in scheduled_sends {
-            if let Err(err) =
+            let sent = if await_delivery {
                 self.send_bytes_with_class(
                     destination_hex.clone(),
                     body,
@@ -142,7 +152,18 @@ impl Node {
                     send_mode,
                     traffic_class,
                 )
-            {
+            } else {
+                // Dropping the result channel leaves delivery to the runtime queue.
+                self.queue_bytes_with_class(
+                    destination_hex.clone(),
+                    body,
+                    Some(fields_bytes),
+                    send_mode,
+                    traffic_class,
+                )
+                .map(drop)
+            };
+            if let Err(err) = sent {
                 let message = format!(
                     "event replication delivery failed destination={} uid={} reason={}",
                     destination_hex, record.uid, err
