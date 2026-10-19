@@ -58,3 +58,28 @@ export function normalizeTcpCommunityClients(
   }
   return allowEmpty ? [] : [...fallback];
 }
+
+/** Parses a typed custom endpoint (host:port, tcp://host:port or [ipv6]:port). */
+export function normalizeTcpEndpointInput(value: string): string | undefined {
+  const candidate = value.trim().replace(/^tcp:\/\//i, "");
+  if (!candidate) {
+    return undefined;
+  }
+  if (candidate.startsWith("[")) {
+    const ipv6Match = candidate.match(/^\[[^\]]+\]:(\d{1,5})$/);
+    if (!ipv6Match) {
+      return undefined;
+    }
+    const port = Number(ipv6Match[1]);
+    return Number.isInteger(port) && port >= 1 && port <= 65_535 ? candidate : undefined;
+  }
+  const separatorIndex = candidate.lastIndexOf(":");
+  if (separatorIndex <= 0 || separatorIndex === candidate.length - 1) {
+    return undefined;
+  }
+  const host = candidate.slice(0, separatorIndex).trim();
+  const port = Number(candidate.slice(separatorIndex + 1).trim());
+  return host && Number.isInteger(port) && port >= 1 && port <= 65_535
+    ? `${host}:${port}`
+    : undefined;
+}

@@ -1,82 +1,29 @@
-import type { SetupPermissionState } from "../services/setupPermissions";
-
+/**
+ * Setup wizard steps, in the same order as the Settings index. Every step between
+ * Welcome and Review renders the form of the matching Settings page.
+ */
 export type SetupWizardStepId =
   | "welcome"
-  | "callsign"
-  | "tcp"
-  | "rnode"
-  | "telemetry"
-  | "permissions"
+  | "identity"
+  | "network"
+  | "routing"
+  | "location"
   | "sos"
   | "review";
 
 export interface SetupWizardStep {
   id: SetupWizardStepId;
   label: string;
-  title: string;
+  /** Optional steps can be passed with their defaults (Routing stays Autonomous). */
+  optional?: boolean;
 }
 
 export const SETUP_STEPS: SetupWizardStep[] = [
-  { id: "welcome", label: "Welcome", title: "Welcome to R.E.M." },
-  { id: "callsign", label: "Call Sign", title: "Set your call sign" },
-  { id: "permissions", label: "Permits", title: "Android permissions" },
-  { id: "tcp", label: "TCP", title: "Choose TCP interfaces" },
-  { id: "rnode", label: "LoRa", title: "Configure RNode LoRa" },
-  { id: "telemetry", label: "Telemetry", title: "Telemetry sharing" },
-  { id: "sos", label: "SOS", title: "SOS emergency access" },
-  { id: "review", label: "Review", title: "Review setup" },
+  { id: "welcome", label: "Welcome" },
+  { id: "identity", label: "Identity" },
+  { id: "network", label: "Network" },
+  { id: "routing", label: "Routing", optional: true },
+  { id: "location", label: "Location" },
+  { id: "sos", label: "SOS" },
+  { id: "review", label: "Review" },
 ];
-
-export const USB_BOND_POLL_ATTEMPTS = 15;
-export const USB_BOND_POLL_DELAY_MS = 2_000;
-
-export function permissionLabel(value: SetupPermissionState): string {
-  switch (value) {
-    case "granted":
-      return "Granted";
-    case "denied":
-      return "Denied";
-    case "unavailable":
-      return "Unavailable";
-    case "prompt":
-    default:
-      return "Not requested";
-  }
-}
-
-const DEFAULT_TELEMETRY_PUBLISH_INTERVAL_SECONDS = 360;
-
-export function normalizeWizardTelemetryPublishIntervalSeconds(
-  value: number | string | undefined | null,
-): number {
-  const parsed = Math.trunc(Number(value));
-  return Number.isFinite(parsed) ? Math.max(1, parsed) : DEFAULT_TELEMETRY_PUBLISH_INTERVAL_SECONDS;
-}
-
-export function normalizeWizardTcpEndpoint(value: string): string | undefined {
-  const candidate = value.trim();
-  if (!candidate) {
-    return undefined;
-  }
-
-  if (candidate.startsWith("[")) {
-    const ipv6Match = candidate.match(/^\[[^\]]+\]:(\d{1,5})$/);
-    if (!ipv6Match) {
-      return undefined;
-    }
-    const port = Number(ipv6Match[1]);
-    return Number.isInteger(port) && port >= 1 && port <= 65535 ? candidate : undefined;
-  }
-
-  const separatorIndex = candidate.lastIndexOf(":");
-  if (separatorIndex <= 0 || separatorIndex === candidate.length - 1) {
-    return undefined;
-  }
-
-  const host = candidate.slice(0, separatorIndex).trim();
-  const port = Number(candidate.slice(separatorIndex + 1).trim());
-  if (!host || !Number.isInteger(port) || port < 1 || port > 65535) {
-    return undefined;
-  }
-  return `${host}:${port}`;
-}

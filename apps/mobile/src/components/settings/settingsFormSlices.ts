@@ -2,7 +2,7 @@ import type { PreferredMapLayer, RnodeConnectionMode } from "@reticulum/node-cli
 
 import type { NodeUiSettings } from "../../types/domain";
 import { householdIdFromDestination } from "../../utils/communityStatus";
-import { ensureRequiredAnnounceCapabilities } from "../../utils/peers";
+import { ensureRequiredAnnounceCapabilities, normalizeDisplayName } from "../../utils/peers";
 import {
   RNODE_FREQUENCY_MAX_HZ,
   RNODE_FREQUENCY_MIN_HZ,
@@ -48,7 +48,7 @@ export const identitySlice: NodeSettingsSlice<IdentityDraft> = {
     announceIntervalSeconds: settings.announceIntervalSeconds,
   }),
   patch: (draft, settings) => ({
-    displayName: draft.displayName,
+    displayName: normalizeDisplayName(draft.displayName) ?? "",
     announceCapabilities: ensureRequiredAnnounceCapabilities(draft.announceCapabilities.trim()),
     announceIntervalSeconds: Math.max(60, Number(draft.announceIntervalSeconds || 1800)),
     community: {
@@ -61,6 +61,7 @@ export const identitySlice: NodeSettingsSlice<IdentityDraft> = {
       roleBadges: [...new Set([...draft.roleBadges, ...splitRoleBadges(draft.roleBadgeText)])].slice(0, 5),
     },
   }),
+  validate: (draft) => (normalizeDisplayName(draft.displayName) ? undefined : "Call sign is required."),
 };
 
 export interface NetworkDraft {
