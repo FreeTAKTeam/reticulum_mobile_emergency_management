@@ -37,6 +37,9 @@ public final class ReticulumBridge {
     public static native int updateBatteryState(int percent, boolean charging);
     public static native String getPowerStateJson();
     public static native String publishCommunityStatusJson();
+    public static native String setSituationJson(String payloadJson);
+    public static native String getHouseholdSituationJson();
+    public static native String setHouseholdModeJson(String payloadJson);
     public static native String createBlockOnboardingCodeJson(String payloadJson);
     public static native String inspectBlockOnboardingCodeJson(String payloadJson);
     public static native String importBlockOnboardingCodeJson(String payloadJson);

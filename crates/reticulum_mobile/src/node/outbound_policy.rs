@@ -121,6 +121,11 @@ impl Node {
         if publish_transition {
             let _ = self.publish_community_status();
         }
+        if !state.saver_active {
+            // Every update outside saver, not only the transition, so holds that
+            // survived a restart are sent on the first battery update.
+            self.release_held_situation_messages();
+        }
         Ok(state)
     }
 

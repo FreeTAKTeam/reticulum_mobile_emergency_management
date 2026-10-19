@@ -19,6 +19,7 @@ use tokio::sync::{mpsc, watch};
 use crate::announce_metadata::has_capability_token;
 use crate::app_state::{
     canonicalize_chat_message, current_timestamp_rfc3339, AppStateStore, ConversationPeerResolver,
+    HouseholdSituationWrite,
 };
 use crate::delivery_policy;
 use crate::delivery_policy::normalize_hex_32;
@@ -45,18 +46,21 @@ use crate::types::{
     ChecklistTemplateRecord, ChecklistUpdateRequest, CommunitySettingsRecord,
     CommunityStatusProjectionRecord, ConversationRecord, DiscoveredPluginRecord,
     EamProjectionRecord, EamReadinessSummaryRecord, EamSourceRecord, EamTeamSummaryRecord,
-    EventProjectionRecord, HouseholdStatus, HubDirectorySnapshot, HubMode, InstalledPluginRecord,
-    LegacyImportPayload, LogLevel, MapMarkerCreateRequest, MapMarkerCreateResult,
-    MapMarkerMoveRequest, MapMarkerRecord, MapMarkerRenameRequest, MapMarkerSymbolRecord,
-    MessageDirection, MessageMethod, MessageRecord, MessageState, NodeConfig, NodeError, NodeEvent,
-    NodeStatus, OperationalNotice, OperationalSummary, OutboundTrafficClass, PeerRecord,
-    PluginCapabilityRecord, PluginEventRecord, PluginLxmfSendRequest, PluginMapSessionRecord,
-    PluginSensorRecord, PluginSensorSampleRequest, PowerPolicyRecord, PowerStateRecord,
-    PreferredMapLayer, ProjectionInvalidation, ProjectionScope, RuntimeReadinessSnapshot,
-    SavedPeerRecord, SendLxmfRequest, SendMode, SignedBlockOnboardingEnvelope, SosAlertRecord,
-    SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord, SosMessageKind, SosSettingsRecord,
-    SosState, SosStatusRecord, SosTriggerSource, SyncStatus, TeamSettingsRecord,
-    TelemetryPositionRecord, TransportDeliveryState, HUB_DIRECTORY_SCHEMA_VERSION, YELLOW_TEAM_UID,
+    EventProjectionRecord, HouseholdMode, HouseholdReporterConflictRecord, HouseholdSituation,
+    HouseholdSituationRecord, HouseholdStatus, HubDirectorySnapshot, HubMode,
+    InstalledPluginRecord, LegacyImportPayload, LogLevel, MapMarkerCreateRequest,
+    MapMarkerCreateResult, MapMarkerMoveRequest, MapMarkerRecord, MapMarkerRenameRequest,
+    MapMarkerSymbolRecord, MessageDirection, MessageMethod, MessageRecord, MessageState,
+    NodeConfig, NodeError, NodeEvent, NodeStatus, OperationalNotice, OperationalSummary,
+    OutboundTrafficClass, PeerRecord, PluginCapabilityRecord, PluginEventRecord,
+    PluginLxmfSendRequest, PluginMapSessionRecord, PluginSensorRecord, PluginSensorSampleRequest,
+    PowerPolicyRecord, PowerStateRecord, PreferredMapLayer, ProjectionInvalidation,
+    ProjectionScope, RuntimeReadinessSnapshot, SavedPeerRecord, SendLxmfRequest, SendMode,
+    SignedBlockOnboardingEnvelope, SituationMessageKind, SituationMessageOutcome,
+    SituationMessageRecord, SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord,
+    SosLocationRecord, SosMessageKind, SosSettingsRecord, SosState, SosStatusRecord,
+    SosTriggerSource, SyncStatus, TeamSettingsRecord, TelemetryPositionRecord,
+    TransportDeliveryState, HUB_DIRECTORY_SCHEMA_VERSION, YELLOW_TEAM_UID,
 };
 
 const APP_DESTINATION_NAME: (&str, &str) = ("r3akt", "emergency");
@@ -284,6 +288,7 @@ include!("node/checklist_task_args.rs");
 include!("node/mission_payloads.rs");
 include!("node/sos_fanout.rs");
 include!("node/community.rs");
+include!("node/household_situation.rs");
 include!("node/outbound_policy.rs");
 include!("node/block_onboarding.rs");
 
@@ -308,8 +313,10 @@ include!("node/map_markers.rs");
 include!("node/map_marker_replication.rs");
 include!("node/plugin_map.rs");
 include!("node/events_plugins_telemetry.rs");
+include!("node/event_replication.rs");
 include!("node/sos.rs");
 include!("node/sos_events.rs");
+include!("node/household_situation_api.rs");
 include!("node/team.rs");
 include!("node/event_subscription.rs");
 
@@ -345,6 +352,9 @@ mod tests {
     include!("node/tests/telemetry_connected_telemetry_destinations_route_onl.rs");
     include!("node/tests/telemetry_telemetry_replication_payload_stays_under_.rs");
     include!("node/tests/community.rs");
+    include!("node/tests/household_situation_table.rs");
+    include!("node/tests/household_situation_runtime.rs");
+    include!("node/tests/household_situation_release.rs");
     include!("node/tests/outbound_policy.rs");
     include!("node/tests/team_policy.rs");
     include!("node/tests/team_review_policy.rs");

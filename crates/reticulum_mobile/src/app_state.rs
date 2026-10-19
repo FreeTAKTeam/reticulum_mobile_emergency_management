@@ -310,6 +310,7 @@ include!("app_state/hub_directory.rs");
 include!("app_state/peers.rs");
 include!("app_state/block_onboarding.rs");
 include!("app_state/mission.rs");
+include!("app_state/household_situation.rs");
 include!("app_state/checklist_lifecycle.rs");
 include!("app_state/checklist_tasks.rs");
 include!("app_state/messaging.rs");

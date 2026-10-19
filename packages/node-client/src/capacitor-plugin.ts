@@ -85,6 +85,9 @@ export interface ReticulumNodePlugin {
   setAppSettings(options: { settings: Record<string, unknown> }): Promise<void>;
   getPowerState(): Promise<Record<string, unknown>>;
   publishCommunityStatus(): Promise<Record<string, unknown>>;
+  setSituation(options: { situation: string; detail?: string }): Promise<Record<string, unknown>>;
+  getHouseholdSituation(): Promise<Record<string, unknown>>;
+  setHouseholdMode(options: { mode: string }): Promise<Record<string, unknown>>;
   createBlockOnboardingCode(options: { draft: BlockOnboardingDraft }): Promise<Record<string, unknown>>;
   inspectBlockOnboardingCode(options: { encodedText: string }): Promise<Record<string, unknown>>;
   importBlockOnboardingCode(options: { request: BlockOnboardingImportRequest }): Promise<Record<string, unknown>>;

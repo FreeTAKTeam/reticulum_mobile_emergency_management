@@ -1,6 +1,6 @@
 # Household situation: choose once, send everything
 
-Status: proposal accepted for implementation, nothing implemented yet. Written 2026-10-19 against `main` at 5a9196e
+Status: phase 1 (runtime command, table and household mode) implemented; phases 2 and 3 open. Written 2026-10-19 against `main` at 5a9196e
 plus the uncommitted field fixes on `corvo/field-ui-fixes` (SOS B01/B03 events,
 decoded B04 cards, compact household card).
 

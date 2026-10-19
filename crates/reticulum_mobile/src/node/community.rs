@@ -329,11 +329,14 @@ impl Node {
             .collect())
     }
 
+    /// Republishes this phone's B04 for the stored profile. Refused unless this
+    /// phone reports for the household, so one household has one B04 sender.
     pub fn publish_community_status(&self) -> Result<EventProjectionRecord, NodeError> {
         let (event, should_publish, traffic_class) = {
             let mut inner = self.inner.lock().map_err(|error| {
                 crate::error_context::contextual_node_error(NodeError::InternalError {}, error)
             })?;
+            ensure_this_phone_reports(&inner.app_state)?;
             let mut settings = inner
                 .app_state
                 .get_app_settings()?
@@ -343,54 +346,8 @@ impl Node {
                 &settings.display_name,
                 &local_app_destination_hex(&inner),
             );
-            let (identity_hex, node_name) = {
-                let status = inner.status.lock().map_err(|error| {
-                    crate::error_context::contextual_node_error(
-                        NodeError::InternalError {},
-                        error,
-                    )
-                })?;
-                (status.identity_hex.clone(), status.name.clone())
-            };
-            let existing = inner
-                .app_state
-                .get_events()?
-                .into_iter()
-                .find(|record| record.uid == format!("rem-community-status-v1:{identity_hex}"));
-            let current_time_ms = now_ms();
-            let updated_at_ms = existing
-                .as_ref()
-                .and_then(|record| {
-                    parse_community_status_body_with_staleness(
-                        &record.content,
-                        current_time_ms,
-                        true,
-                    )
-                    .ok()
-                })
-                .map_or(current_time_ms, |payload| {
-                    current_time_ms.max(payload.u.saturating_add(1))
-                });
-            let event = community_event_for(
-                &identity_hex,
-                Some(node_name),
-                &settings.community,
-                inner.power_state.saver_active,
-                updated_at_ms,
-            )?;
-            let should_publish = existing
-                .as_ref()
-                .map(|record| {
-                    community_payload_matches(
-                        record,
-                        &settings.community,
-                        inner.power_state.saver_active,
-                        current_time_ms,
-                    )
-                    .map(|matches| !matches)
-                })
-                .transpose()?
-                .unwrap_or(true);
+            let (event, should_publish) =
+                prepare_community_status_event(&inner, &settings.community)?;
             let traffic_class = if inner.power_state.saver_active
                 && inner.community_status_sent_in_saver
             {
@@ -408,4 +365,49 @@ impl Node {
         }
         Ok(event)
     }
+}
+
+/// Builds the next B04 record for `community`, timestamped after the stored one,
+/// and whether it differs from what peers already have.
+fn prepare_community_status_event(
+    inner: &NodeInner,
+    community: &CommunitySettingsRecord,
+) -> Result<(EventProjectionRecord, bool), NodeError> {
+    let (identity_hex, node_name) = {
+        let status = inner.status.lock().map_err(|error| {
+            crate::error_context::contextual_node_error(NodeError::InternalError {}, error)
+        })?;
+        (status.identity_hex.clone(), status.name.clone())
+    };
+    let existing = inner
+        .app_state
+        .get_events()?
+        .into_iter()
+        .find(|record| record.uid == format!("rem-community-status-v1:{identity_hex}"));
+    let current_time_ms = now_ms();
+    let updated_at_ms = existing
+        .as_ref()
+        .and_then(|record| {
+            parse_community_status_body_with_staleness(&record.content, current_time_ms, true).ok()
+        })
+        .map_or(current_time_ms, |payload| {
+            current_time_ms.max(payload.u.saturating_add(1))
+        });
+    let saver_active = inner.power_state.saver_active;
+    let event = community_event_for(
+        &identity_hex,
+        Some(node_name),
+        community,
+        saver_active,
+        updated_at_ms,
+    )?;
+    let should_publish = existing
+        .as_ref()
+        .map(|record| {
+            community_payload_matches(record, community, saver_active, current_time_ms)
+                .map(|matches| !matches)
+        })
+        .transpose()?
+        .unwrap_or(true);
+    Ok((event, should_publish))
 }
