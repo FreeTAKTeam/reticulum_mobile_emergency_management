@@ -48,19 +48,19 @@ is opened.
 ## Connect an Already Paired RNode
 
 1. Open REM.
-2. Open **More > Settings**.
-3. Expand **Node Config** and find **LoRa / RNode**.
+2. Open **More > Settings > Network interfaces**.
+3. Turn on **Enable RNode Bluetooth LoRa** and tap **Pair RNode device**.
 4. Select the correct **Bluetooth bearer**:
    - **Bluetooth Low Energy (BLE)** for an RNode that advertises NUS.
    - **Bluetooth Classic (SPP)** for a Classic serial RNode.
 5. Tap **Show paired Bluetooth**.
-6. Tap the correct RNode. Confirm that **RNode device id** is populated and the
-   displayed bearer matches the radio.
-7. Turn on **Enable RNode Bluetooth LoRa**.
+6. Tap the correct RNode. REM fills in **RNode device id** and returns to
+   **Network interfaces**, where the **Pair RNode device** row shows the radio.
+7. Confirm that the displayed bearer matches the radio.
 8. Select the correct **Region**, **Frequency (Hz)**, and **REM LoRa profile**.
-9. Tap **Save** at the bottom of Settings. REM automatically restarts a running
+9. Tap **Save** at the bottom of the page. REM automatically restarts a running
    node when its RNode settings change. If the app reports that restart failed,
-   expand **Node Control** and tap **Restart**.
+   open **Settings > Node & diagnostics** and tap **Restart**.
 10. Continue with [Verify the connection](#verify-the-connection).
 
 ## Scan and Pair in REM
@@ -69,7 +69,8 @@ Use REM's in-app scan for BLE on Android 15 and newer. Those Android versions
 can hide BLE peripherals from the system Bluetooth pairing screen.
 
 1. Put the RNode into pairing mode and keep its PIN visible.
-2. Open **More > Settings > Node Config > LoRa / RNode**.
+2. Open **More > Settings > Network interfaces**, turn on **Enable RNode
+   Bluetooth LoRa**, and tap **Pair RNode device**.
 3. Choose **Bluetooth Low Energy (BLE)** or **Bluetooth Classic (SPP)** before
    scanning.
 4. Tap **Scan RNode BLE** or **Scan RNode Classic**.
@@ -83,8 +84,8 @@ can hide BLE peripherals from the system Bluetooth pairing screen.
 8. If REM says pairing started but does not select the radio automatically,
    finish the Android prompt, tap **Show paired Bluetooth**, and select the
    RNode from that list.
-9. Turn on **Enable RNode Bluetooth LoRa**, select the correct region,
-   frequency, and profile, then tap **Save**.
+9. Back on **Network interfaces**, select the correct region, frequency, and
+   profile, then tap **Save**.
 10. Continue with [Verify the connection](#verify-the-connection).
 
 For Classic/SPP, the RNode must be discoverable and provide the standard SPP
@@ -99,7 +100,8 @@ it does not turn USB into the live REM transport.
 
 1. Connect the powered RNode directly to the Android phone with a USB data
    cable and any required OTG adapter.
-2. Open **More > Settings > Node Config > LoRa / RNode**.
+2. Open **More > Settings > Network interfaces**, turn on **Enable RNode
+   Bluetooth LoRa**, and tap **Pair RNode device**.
 3. Select **Bluetooth Low Energy (BLE)**.
 4. Tap **Pair via USB** and grant Android USB access to REM.
 5. If more than one USB device is listed, tap the intended RNode and then tap
@@ -108,15 +110,15 @@ it does not turn USB into the live REM transport.
    prompt and enter the PIN shown by REM or on the RNode when requested.
 7. Wait while REM checks the paired-device list. If it does not select the
    device automatically, tap **Show paired Bluetooth** and select it.
-8. Turn on **Enable RNode Bluetooth LoRa**, confirm the region, frequency, and
-   profile, then tap **Save**.
+8. Tap **Done**, then on **Network interfaces** confirm the region, frequency,
+   and profile and tap **Save**.
 9. After pairing, do not leave a desktop serial program connected to the
    RNode. The USB cable may provide power, but another open serial host can
    prevent the Bluetooth session.
 
 ## Verify the Connection
 
-1. Open **More > Settings > Node Control**.
+1. Open **More > Settings > Node & diagnostics**.
 2. Confirm the local node says **Node is running**. This only proves the local
    REM runtime started; it does not by itself prove the radio is connected.
 3. Find the RNode interface. Its label begins with `rnode-ble:` or
@@ -152,12 +154,12 @@ the local app usable while the RNode retries independently.
 | **RNode BLE is not paired** | Hold the RNode user button for more than five seconds, release it when the Bluetooth icon changes, and note the PIN on its display. In REM, scan for the RNode, select it, enter or confirm that PIN in Android's pairing prompt, then select the newly paired device and save. A power cycle alone does not enter secure pairing mode. |
 | **RNode BLE write timed out during startup** | First confirm the radio is bonded to this phone. RNode's BLE UART requires an encrypted paired connection, so an unpaired radio can appear in a scan but reject startup writes. Put it in pairing mode, pair again using the displayed PIN, and retry. |
 | **Bluetooth Classic connection timed out** | Confirm the radio is bonded, supports SPP, is powered and in range, and is not connected to another host. |
-| **Interface stays connecting, then fails after 30 seconds** | Check the selected device ID and bearer, power, pairing state, and whether another program owns the RNode. The error under **Node Control** is the authoritative failure detail. |
+| **Interface stays connecting, then fails after 30 seconds** | Check the selected device ID and bearer, power, pairing state, and whether another program owns the RNode. The error under **Node & diagnostics** is the authoritative failure detail. |
 | **Older RNode omits its startup radio-state response** | REM 1.3.0 accepts this one missing echo only after the probe and every reported radio parameter validate. The interface then connects with a compatibility warning. A real mismatch or hardware error still fails startup. Update the RNode firmware when practical. |
 | **BLE disconnects after sending an announce or large packet** | Confirm the app is REM 1.3.0 or later. It negotiates a large inbound MTU but preserves firmware-safe 20-byte outbound GATT chunks. Power-cycle a radio left unresponsive by an older build, toggle phone Bluetooth, and reconnect. |
 | **Short packets arrive, but announces, proofs, or messages time out** | Move the two RNodes several metres apart and keep both antennas attached. At REM's default 17 dBm transmit power, radios placed very close together can overload each other's receivers. Also confirm both phones run REM 1.3.0 or later; RNode-only mode avoids background saved-peer link warming and automatic propagation-relay polling so retries do not delay a proof past its activation deadline. |
 | **Connected, but no packets move** | Confirm both radios use the same frequency and REM profile, the frequency is legal for the region, antennas are attached, and the peer test is not being routed only through TCP. |
-| **Settings changed but the old connection remains** | Tap **Save** and wait for the automatic node restart. If REM reports a restart error, use **Node Control > Restart** or fully restart the app. |
+| **Settings changed but the old connection remains** | Tap **Save** and wait for the automatic node restart. If REM reports a restart error, use **Node & diagnostics > Restart** or fully restart the app. |
 
 ## REM Radio Defaults
 

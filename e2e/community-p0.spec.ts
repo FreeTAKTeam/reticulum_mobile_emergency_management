@@ -14,19 +14,29 @@ async function loadBlockFixedVector(): Promise<string> {
 
 test("household profile, map preference, and power threshold persist", async ({ page }) => {
   await seedAppStorage(page, { settings: defaultSettings });
-  await gotoApp(page, "/settings");
+  await gotoApp(page, "/settings/identity");
   await page.getByLabel("Household name").fill("Harbour House");
   await page.getByLabel("Household ID").fill("0123456789abcdef");
   await page.getByLabel("Adults").fill("2");
   await page.getByLabel("Children").fill("1");
   await page.getByLabel("Pets").fill("2");
   await page.getByLabel("Role badges").fill("Medic, Radio");
-  await page.getByLabel("Preferred map").selectOption("satellite");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
+
+  await page.goto("/settings/map");
+  await page.getByRole("radio", { name: /Satellite/ }).check();
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
+
+  await page.goto("/settings/power");
   await page.getByLabel("Automatic power saver").check();
   await page.getByLabel("Activate at").selectOption("30");
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem("reticulum.mobile.settings.v1") ?? "{}")?.community)).toMatchObject({ householdName: "Harbour House", householdId: "0123456789abcdef", adults: 2, children: 1, pets: 2, roleBadges: ["Medic", "Radio"], preferredMapLayer: "satellite" });
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem("reticulum.mobile.settings.v1") ?? "{}")?.power)).toMatchObject({ enabled: true, thresholdPercent: 30 });
   await expect(page.getByTestId("splash-screen")).toBeHidden({ timeout: 10_000 });
+  await page.goto("/settings/identity");
   await page.screenshot({ path: "output/playwright/community-settings.png", fullPage: true });
 });
 
@@ -82,7 +92,7 @@ test("peer Circle choice persists and legacy team sharing has no export action",
 
 test("browser explains that signed Block Code creation requires native identity", async ({ page }) => {
   await seedAppStorage(page, { settings: defaultSettings });
-  await gotoApp(page, "/settings");
+  await gotoApp(page, "/settings/share-setup");
   await page.getByRole("button", { name: "Create signed code" }).click();
   await expect(page.locator(".block-panel .feedback")).toContainText(/native|unavailable|supported/i);
 });
@@ -90,7 +100,7 @@ test("browser explains that signed Block Code creation requires native identity"
 test("signed Block Code review confirms fingerprint and submits the complete tier map", async ({ page }) => {
   const blockFixedVector = await loadBlockFixedVector();
   await seedAppStorage(page, { settings: defaultSettings });
-  await gotoApp(page, "/settings");
+  await gotoApp(page, "/settings/share-setup");
   await page.evaluate(({ encodedText, fingerprint }) => {
     return import("/src/stores/nodeStore.ts").then(({ useNodeStore }) => {
       const store = useNodeStore();

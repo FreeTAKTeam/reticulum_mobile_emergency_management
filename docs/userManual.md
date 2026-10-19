@@ -283,7 +283,7 @@ Legacy local-team QR codes are import-only. Open **Manage Teams**, tap
 **Scan legacy team QR**, and point the camera at an existing code. Import creates
 missing saved-peer records and merges the roster into the matching color; it
 does not replace an existing local alias. For new onboarding, use the signed
-Block Code flow in Settings. For a larger legacy roster, import its team JSON.
+Block Code flow in **Settings → Share this setup**. For a larger legacy roster, import its team JSON.
 
 If the selected roster is missing or empty, REM deliberately sends to nobody
 rather than falling back to every discovered peer. In Connected mode, non-Yellow
@@ -293,22 +293,26 @@ teams require an RCH that supports the version 2 TEAM directory contract.
 
 ![REM settings](screenshots/rem-settings.png)
 
-Settings is where you prepare the app before field use.
+Settings is where you prepare the app before field use. The main Settings
+screen is a short index grouped by what you want to do. Each row shows its
+current value and opens one focused page. Tap a group heading to fold it; a
+folded group shows a one-line summary, and the phone remembers the fold.
 
-Use it to configure:
+| Group | Pages |
+| --- | --- |
+| You | **Identity** (call sign, household, role badges, app hash; announce options under Advanced), **Teams** |
+| Connectivity | **Network interfaces** (TCP servers, LoRa / RNode, **Pair RNode device**), **Routing & hubs** (Autonomous, Semi-autonomous, Connected; hub actions) |
+| Sharing | **Location sharing** (telemetry interval, stale and hide times, location permission), **Map** |
+| Emergency | **SOS** (templates, triggers, deactivation PIN, Trigger SOS) |
+| Device | **Battery saver**, **Plugins**, **Share this setup** (Signed Block Code), **Node & diagnostics** (start, stop, restart, interfaces, log) |
 
-- call sign
-- household name, adult/child/pet counts, role badges, status, and map preference
-- Inner/Outer peer tiers
-- native battery-saver policy and its 10, 20, or 30 percent threshold
-- Reticulum network access
-- announce behavior
-- telemetry sharing
-- checklist timing defaults
-- RCH hub mode
-- peer list import and export
-- SOS emergency options
-- node start, stop, and restart controls
+**About** and **Run setup wizard again** sit at the bottom of the index.
+
+Pages that edit settings have a **Save** and **Discard** bar at the bottom. If
+you leave such a page with unsaved edits, REM asks whether to discard them.
+Buttons in a page's **Actions** or danger section run right away. Fields marked
+**restart** only take effect after a node restart: after saving one, the
+Settings index shows a banner naming what changed, with a **Restart** button.
 
 ### Signed Block Code onboarding
 
@@ -374,7 +378,7 @@ different on narrow screens, but the sequence and recovery rules are the same.
 4. Start or restart REM. The splash closes when the local Rust runtime is
    ready. A configured interface can still say **Pending**, **Failed**, or
    **Unsupported**; this is degraded network access, not a blocked app.
-5. Open **More > Settings > Node Control** to inspect each interface. Correct
+5. Open **More > Settings > Node & diagnostics** to inspect each interface. Correct
    the endpoint, radio selection, Android permission, or cable, then restart
    REM if needed.
 
@@ -386,17 +390,18 @@ must not keep the splash screen open.
 
 1. Update the RNode firmware, enable Bluetooth, and put the radio into pairing
    mode. Stop any other program that is using the RNode.
-2. Open **More > Settings > Node Config > LoRa / RNode**.
+2. Open **More > Settings > Network interfaces**, turn on **Enable RNode
+   Bluetooth LoRa**, and tap **Pair RNode device**.
 3. Select **Bluetooth Low Energy (BLE)** or **Bluetooth Classic (SPP)**.
 4. Tap **Show paired Bluetooth** for an existing bond, or use the matching
    **Scan RNode** button. On Android 15/16, prefer REM's in-app BLE scan.
-5. Select the RNode, accept the Android pairing prompt if shown, and turn on
-   **Enable RNode Bluetooth LoRa**.
+5. Select the RNode and accept the Android pairing prompt if shown. REM returns
+   to **Network interfaces** once the device is selected.
 6. Confirm the legal region, frequency, and shared REM LoRa profile, then tap
    **Save**. REM restarts the running node when RNode settings change.
-7. Open **Node Control** and wait up to 30 seconds for the RNode interface to
-   report `connected`. The local app saying **Ready** is not enough; verify the
-   RNode row and packet counters.
+7. Open **Node & diagnostics** and wait up to 30 seconds for the RNode
+   interface to report `connected`. The local app saying **Ready** is not
+   enough; verify the RNode row and packet counters.
 
 See [Connect an RNode to REM on Android](rnode-bluetooth-connectivity.md) for
 USB-assisted pairing, firmware guidance, verification, and troubleshooting.
