@@ -48,6 +48,19 @@ replays for the stable sender UID. Newer records replace older records. Because
 the projection is persisted as an event, the existing event replay/sync path
 also makes the latest accepted household state available to a late joiner.
 
+### SOS beacon events (B01 / B03)
+
+When an SOS becomes active, Rust (`node/sos_events.rs`) stores and replicates an
+ordinary `mission.registry.log_entry.upsert` event in the default mission with
+body `MECP/0/B01 #SOS_<incident>`. When an active SOS is deactivated it posts
+`MECP/2/B03 #SOS_<incident>`. The UIDs are `rem-sos-b01-v1:<identity>:<incident>`
+and `rem-sos-b03-v1:<identity>:<incident>`, both sent with the `Sos` traffic
+class so saver mode admits them. These events are a timeline record next to the
+LXMF SOS fan-out, which stays the emergency channel. A failed event publish is
+reported on the event bus and never blocks the SOS. Activation after a non-zero
+countdown runs on a background thread without a `Node` handle and does not post
+B01; release settings force the countdown to zero.
+
 ### Inner and Outer circles
 
 The runtime derives `circle_tier` from membership in any local team: members

@@ -43,11 +43,37 @@ test("household profile, map preference, and power threshold persist", async ({ 
 test("dashboard presents exactly four native-backed household actions", async ({ page }) => {
   await seedAppStorage(page, { settings: { ...defaultSettings, community: { ...defaultSettings.community, householdName: "Harbour House" } } });
   await gotoApp(page, "/dashboard");
-  const group = page.getByRole("group", { name: "Publish household status" });
-  await expect(group.getByRole("button")).toHaveCount(4);
-  expect((await group.getByRole("button").allTextContents()).map((value) => value.trim())).toEqual(["All Home", "1 Missing", "Evacuated", "Needs Help"]);
-  await expect(page.getByRole("heading", { name: "Community status" })).toBeVisible();
   await expect(page.getByTestId("splash-screen")).toBeHidden({ timeout: 10_000 });
+  const panel = page.locator(".household-panel");
+  await expect(page.getByRole("heading", { name: "Household status" })).toBeVisible();
+  await expect(panel).toContainText("Not shared yet");
+  await expect(panel).not.toContainText("GPS-free");
+  const current = panel.getByRole("button", { name: /Household status: All Home/ });
+  await expect(current).toHaveAttribute("aria-expanded", "false");
+  const group = page.getByRole("group", { name: "Choose household status" });
+  await expect(group).toHaveCount(0);
+
+  await current.click();
+  await expect(group.getByRole("button")).toHaveCount(4);
+  expect((await group.getByRole("button").allTextContents()).map((value) => value.trim())).toEqual(["All Home", "Someone Missing", "Evacuated", "Needs Help"]);
+  await expect(group.getByRole("button", { name: "All Home" })).toHaveAttribute("aria-pressed", "true");
+  await current.click();
+  await expect(group).toHaveCount(0);
+
+  // Choosing the highlighted status still shares it: a fresh device has nothing published yet.
+  const published = await page.evaluate(async () => {
+    const { useNodeStore } = await import("/src/stores/nodeStore.ts");
+    const store = useNodeStore();
+    const calls: string[] = [];
+    store.publishCommunityStatus = async (status: string) => { calls.push(status); };
+    (window as typeof window & { __householdShares?: string[] }).__householdShares = calls;
+    return true;
+  });
+  expect(published).toBe(true);
+  await current.click();
+  await group.getByRole("button", { name: "All Home" }).click();
+  await expect.poll(() => page.evaluate(() =>
+    (window as typeof window & { __householdShares?: string[] }).__householdShares ?? [])).toEqual(["all_home"]);
   await page.screenshot({ path: "output/playwright/community-dashboard.png", fullPage: true });
 });
 

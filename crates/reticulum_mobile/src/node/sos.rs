@@ -235,6 +235,7 @@ impl Node {
         } else {
             SosMessageKind::Active {}
         };
+        let beacon_incident_id = incident_id.clone();
         let active = run_sos_fanout(
             app_state,
             bus,
@@ -252,6 +253,9 @@ impl Node {
             kind,
         )
         .unwrap_or_else(idle_status);
+        if !rebroadcast_active && matches!(active.state, SosState::Active {}) {
+            self.publish_sos_beacon_event(&beacon_incident_id, SosBeaconEvent::Activated);
+        }
         Ok(active)
     }
 
@@ -328,6 +332,9 @@ impl Node {
             .incident_id
             .clone()
             .unwrap_or_else(|| new_incident_id(status.identity_hex.as_str()));
+        // Only an SOS that went out (B01 sent) gets a cancel beacon; a stopped countdown does not.
+        let beacon_incident_id =
+            matches!(current.state, SosState::Active {}).then(|| incident_id.clone());
         run_sos_fanout(
             app_state.clone(),
             bus.clone(),
@@ -346,6 +353,9 @@ impl Node {
         );
         let idle = idle_status();
         emit_sos_status(&app_state, &bus, &idle, "sos-deactivated")?;
+        if let Some(beacon_incident_id) = beacon_incident_id {
+            self.publish_sos_beacon_event(&beacon_incident_id, SosBeaconEvent::Cancelled);
+        }
         Ok(idle)
     }
 

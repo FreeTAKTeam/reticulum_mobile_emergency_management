@@ -351,6 +351,13 @@ When enabled, it can:
 
 - require a PIN to cancel, if configured
 
+Starting an SOS also posts an MECP **B01** event ("Automated distress beacon
+active", Mayday) to the team's Events timeline. Ending it posts a **B03** event
+("Cancel beacon - I am OK"). Both carry the same `#SOS_…` tag, so peers can match
+the start and the end of one incident. If a countdown is configured, the B01
+event is not posted when the countdown finishes; the SOS message itself still
+goes out.
+
 Before relying on SOS, test it with trusted peers in a safe setting.
 
 ## Examples
