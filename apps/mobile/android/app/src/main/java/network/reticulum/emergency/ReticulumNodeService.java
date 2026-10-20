@@ -36,7 +36,7 @@ public final class ReticulumNodeService extends ReticulumBridgeServiceApi {
     }
 
     private static final String TAG = "ReticulumNodeService";
-    private static final String PREFS_NAME = "reticulum-node-service";
+    static final String PREFS_NAME = "reticulum-node-service";
     static final String ACTION_START_RUNTIME = "network.reticulum.emergency.action.START_NODE";
     static final String ACTION_RESTORE_AFTER_BOOT = "network.reticulum.emergency.action.RESTORE_AFTER_BOOT";
     static final String ACTION_STOP_SERVICE = "network.reticulum.emergency.action.STOP_NODE";
@@ -154,10 +154,13 @@ public final class ReticulumNodeService extends ReticulumBridgeServiceApi {
                 stopNode();
                 return START_NOT_STICKY;
             case RESTORE_AFTER_BOOT:
-                runtimeController.scheduleRestore("boot");
+                if (!runtimeController.scheduleRestore("boot", true)) {
+                    stopSelf(startId);
+                    return START_NOT_STICKY;
+                }
                 break;
             case RESTORE_AFTER_PROCESS_RECREATION:
-                runtimeController.scheduleRestore("process recreation");
+                runtimeController.scheduleRestore("process recreation", false);
                 break;
             case KEEP_RUNNING:
                 break;

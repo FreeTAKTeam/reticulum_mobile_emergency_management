@@ -166,18 +166,14 @@ final class NodeRuntimeLifecycleController {
         }
     }
 
-    void scheduleRestore(String reason) {
-        if (!shouldBeRunning()) {
-            return;
+    boolean scheduleRestore(String reason, boolean afterBoot) {
+        if (!shouldRestore(preferences, afterBoot, configResolver.currentBootCount())) {
+            return false;
         }
 
         final String persistedConfig = preferences.getString(PREF_LAST_CONFIG, "");
-        if (persistedConfig == null || persistedConfig.trim().isEmpty()) {
-            return;
-        }
-
         if (!restoreRunning.compareAndSet(false, true)) {
-            return;
+            return true;
         }
 
         final long restoreGeneration = runtimeOperationGate.snapshot();
@@ -226,13 +222,30 @@ final class NodeRuntimeLifecycleController {
                 restoreRunning.set(false);
             }
         });
+        return true;
     }
 
     boolean shouldBeRunning() {
-        if (!preferences.getBoolean(PREF_DESIRED_RUNNING, false)) {
-            return false;
-        }
-        return preferences.getInt(PREF_LAST_BOOT_COUNT, -1) == configResolver.currentBootCount();
+        return shouldRestore(preferences, false, configResolver.currentBootCount());
+    }
+
+    static boolean shouldRestoreAfterBoot(SharedPreferences preferences) {
+        return shouldRestore(preferences, true, -1);
+    }
+
+    private static boolean shouldRestore(
+        SharedPreferences preferences,
+        boolean afterBoot,
+        int currentBootCount
+    ) {
+        final String persistedConfig = preferences.getString(PREF_LAST_CONFIG, "");
+        return RuntimeServiceStartDecision.shouldRestore(
+            afterBoot,
+            preferences.getBoolean(PREF_DESIRED_RUNNING, false),
+            persistedConfig != null && !persistedConfig.trim().isEmpty(),
+            preferences.getInt(PREF_LAST_BOOT_COUNT, -1),
+            currentBootCount
+        );
     }
 
     void handleForegroundServiceTimeout(int startId, int foregroundServiceType) {

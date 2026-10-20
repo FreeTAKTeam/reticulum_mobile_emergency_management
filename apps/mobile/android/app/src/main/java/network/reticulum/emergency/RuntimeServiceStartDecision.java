@@ -23,4 +23,18 @@ final class RuntimeServiceStartDecision {
         }
         return Command.KEEP_RUNNING;
     }
+
+    static boolean shouldRestore(
+        boolean afterBoot,
+        boolean desiredRunning,
+        boolean hasPersistedConfig,
+        int lastBootCount,
+        int currentBootCount
+    ) {
+        if (!desiredRunning || !hasPersistedConfig) {
+            return false;
+        }
+        // A reboot always changes the boot count, so only same-boot restores require a match.
+        return afterBoot || lastBootCount == currentBootCount;
+    }
 }
