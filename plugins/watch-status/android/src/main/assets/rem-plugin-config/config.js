@@ -45,7 +45,7 @@ document.getElementById("save").addEventListener("click", () => {
 });
 renewRadar.addEventListener("click", () => {
   status.textContent = "Renewing…";
-  send({ type: "renewRadar" });
+  send({ type: "action", action: "radar.renew" });
 });
 document.getElementById("revealRadarToken").addEventListener("change", (event) => {
   radarToken.type = event.target.checked ? "text" : "password";

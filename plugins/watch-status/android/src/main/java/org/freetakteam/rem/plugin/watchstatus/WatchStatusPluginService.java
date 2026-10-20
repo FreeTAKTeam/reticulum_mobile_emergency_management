@@ -108,7 +108,7 @@ public final class WatchStatusPluginService extends RemPluginService {
             if ("update".equals(request.optString("type"))) {
                 settings.update(request);
                 applySettings();
-            } else if ("renewRadar".equals(request.optString("type"))) {
+            } else if ("action".equals(request.optString("type")) && "radar.renew".equals(request.optString("action"))) {
                 if (host == null || !settings.enabled() || !settings.radarEnabled()) {
                     throw new IllegalStateException("Enable the server and radar access first");
                 }

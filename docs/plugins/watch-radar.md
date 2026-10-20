@@ -1,6 +1,6 @@
 # T-Rex radar adapter
 
-Watch Status plugin 1.1.1 provides a read-only radar endpoint for the REM Sync T-Rex 2 app, including nullable observer accuracy. Its existing `/info.json`, `/northbound/watch/status` and `/health` routes retain their payloads. Radar data is available only through the authenticated route below. Nothing is bound outside `127.0.0.1`.
+Watch Status plugin 1.1.3 provides a read-only radar endpoint for the REM Sync T-Rex 2 app, including nullable observer accuracy. Its existing `/info.json`, `/northbound/watch/status` and `/health` routes retain their payloads. Radar data is available only through the authenticated route below. Nothing is bound outside `127.0.0.1`.
 
 ## Enable and pair
 
@@ -9,6 +9,8 @@ The plugin declares API 1.3 and requires operator grants for `operationalRead`, 
 In the plugin's trusted configuration page, enable the server and **Allow radar access on this phone**, then save. Copy the 64-character radar pairing code to REM Sync's settings in Zepp on the same phone, enable Connect radar and enter the port (29863 by default). The phone Side Service retains this code; the watch does not receive it.
 
 Each process-local session is read-only, randomly generated with 256 bits of entropy, and expires after eight hours using Android's elapsed clock. Disable, save, renewal, host stop/restart and permission denial invalidate it, including in-flight reads. Renew and pair again after expiry or restart. The public snapshot session ID is independent of the bearer secret.
+
+The trusted configuration page renews through the host-supported envelope `{type:"action",action:"radar.renew"}`. Version 1.1.3 replaces the unsupported custom `renewRadar` message type, which the host never forwarded and left the page waiting. The host bridge allowlist and permissions are unchanged. Phone testing confirmed Renew completes and shows a 480-minute lifetime.
 
 The host currently enforces changed grants on the next operation and does not proactively notify this plugin of a grant-only change. Every radar success therefore depends on fresh authorized host operations; no radar location cache is served. `PermissionDenied` revokes the session. The phone/watch path must clear contacts for authentication/configuration denial, while temporary transport failures may retain a visibly aged snapshot.
 
@@ -61,5 +63,7 @@ From `apps/mobile/android`:
 ```
 
 Release builds additionally require the existing ignored `watch-status-keystore.properties`; secrets must not be committed. The APK is under `plugins/watch-status/android/build/outputs/apk/debug/`. Native tests emit a controlled 50-marker artifact under `build/outputs/radar-contract/snapshot.json`. In the watch repository, `node scripts/verify-radar-source.mjs <absolute-artifact-path>` validates that projection through the phone decoder and actual fragmented MessageBuilder transport.
+
+From the repository root, `node --test plugins/watch-status/test/config.test.cjs` checks the real configuration UI's Renew button against the host's accepted message types and the resulting configuration response. This supplements the 19 native unit tests.
 
 Local unit/contract tests and package builds do not prove installation, live REM grants, phone loopback access from Zepp, Bluetooth delivery while locked, heading reference/calibration, native clock availability, firmware touch/buttons or battery use. Those remain physical-device acceptance gates for issue #2.
