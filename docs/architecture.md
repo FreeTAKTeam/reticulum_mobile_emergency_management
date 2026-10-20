@@ -183,6 +183,18 @@ profile, team enrollment, and peers commit in one AppState transaction. A failed
 validation or persistence step commits nothing. Legacy team QR codes remain
 import-only and do not become trusted Block Codes.
 
+### Android service lifecycle and boot restore
+
+The Android node runs in `ReticulumNodeService` as a `connectedDevice`
+foreground service. Android 15+ forbids `dataSync` foreground services started
+from `BOOT_COMPLETED`, and also caps them at six hours a day. `CHANGE_NETWORK_STATE`
+satisfies the `connectedDevice` prerequisite even when Bluetooth permissions are
+denied. A running node persists its desired state and last config. After a
+reboot, `BootReceiver` starts the service only when both are present, and the
+restore ignores the boot-count match that same-boot sticky restarts still
+require. Location access remains while-in-use, so a boot-restored node gets
+location only after the UI is opened.
+
 ### Battery saver
 
 The Android foreground service observes battery percentage and charging state

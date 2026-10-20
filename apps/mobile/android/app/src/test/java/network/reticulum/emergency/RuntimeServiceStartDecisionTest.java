@@ -1,6 +1,8 @@
 package network.reticulum.emergency;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
 
@@ -48,5 +50,22 @@ public final class RuntimeServiceStartDecisionTest {
                 true
             )
         );
+    }
+
+    @Test
+    public void bootRestoreIgnoresBootCountChange() {
+        assertTrue(RuntimeServiceStartDecision.shouldRestore(true, true, true, 4, 5));
+    }
+
+    @Test
+    public void sameBootRestoreRequiresMatchingBootCount() {
+        assertTrue(RuntimeServiceStartDecision.shouldRestore(false, true, true, 5, 5));
+        assertFalse(RuntimeServiceStartDecision.shouldRestore(false, true, true, 4, 5));
+    }
+
+    @Test
+    public void restoreRequiresDesiredRuntimeAndPersistedConfig() {
+        assertFalse(RuntimeServiceStartDecision.shouldRestore(true, false, true, 5, 5));
+        assertFalse(RuntimeServiceStartDecision.shouldRestore(true, true, false, 5, 5));
     }
 }
