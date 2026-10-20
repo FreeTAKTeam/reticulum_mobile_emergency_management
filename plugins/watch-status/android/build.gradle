@@ -19,8 +19,8 @@ android {
         applicationId 'org.freetakteam.rem.plugin.watchstatus'
         minSdk rootProject.ext.minSdkVersion
         targetSdk rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName '1.0.0'
+        versionCode 4
+        versionName '1.1.2'
         manifestPlaceholders = [remHostPackage: hostPackage]
         buildConfigField 'String', 'REM_HOST_PACKAGE', '"' + hostPackage + '"'
         buildConfigField 'String', 'REM_HOST_FINGERPRINTS', '"' + hostFingerprints + '"'
@@ -45,6 +45,11 @@ android {
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
+    }
+    testOptions {
+        unitTests.all {
+            systemProperty 'radar.contract.output', project.layout.buildDirectory.file('outputs/radar-contract/snapshot.json').get().asFile.absolutePath
+        }
     }
 }
 
