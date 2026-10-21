@@ -7,10 +7,10 @@
             <intent-filter><action android:name="network.reticulum.emergency.PLUGIN_V1" /></intent-filter>
             <meta-data android:name="rem.plugin.id" android:value="org.freetakteam.rem.plugin.watch_status" />
             <meta-data android:name="rem.plugin.displayName" android:value="Watch Status Server" />
-            <meta-data android:name="rem.plugin.version" android:value="1.0.0" />
+            <meta-data android:name="rem.plugin.version" android:value="1.1.3" />
             <meta-data android:name="rem.plugin.apiMajor" android:value="1" />
-            <meta-data android:name="rem.plugin.apiMinor" android:value="1" />
-            <meta-data android:name="rem.plugin.capabilities" android:value="{&quot;operationalRead&quot;:true}" />
+            <meta-data android:name="rem.plugin.apiMinor" android:value="3" />
+            <meta-data android:name="rem.plugin.capabilities" android:value="{&quot;operationalRead&quot;:true,&quot;mapObserverRead&quot;:true,&quot;mapNearbyRead&quot;:true}" />
             <meta-data android:name="rem.plugin.messages" android:value="[]" />
             <meta-data android:name="rem.plugin.configurationEntrypoint" android:value="rem-plugin-config/index.html" />
         </service>

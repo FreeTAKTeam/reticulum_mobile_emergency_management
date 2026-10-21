@@ -3,17 +3,16 @@ package org.freetakteam.rem.plugin.watchstatus;
 import android.content.Intent;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.util.Log;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Locale;
 import java.util.Set;
-import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import network.reticulum.emergency.plugin.api.IRemPluginConfigurationCallback;
 import network.reticulum.emergency.plugin.api.IRemPluginHost;
-import network.reticulum.emergency.plugin.api.PluginProtocol;
 import network.reticulum.emergency.plugin.api.RemPluginService;
 import org.json.JSONObject;
 
@@ -24,8 +23,11 @@ public final class WatchStatusPluginService extends RemPluginService {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final AtomicBoolean requestPending = new AtomicBoolean(false);
     private final WatchStatusServer server = new WatchStatusServer();
+    private final HostRequestBroker requests = new HostRequestBroker();
+    private final RadarAccess radarAccess = new RadarAccess(SystemClock::elapsedRealtime);
+    private final RadarProvider radar = new RadarProvider(requests, radarAccess, System::currentTimeMillis, SystemClock::elapsedRealtime);
     private volatile IRemPluginHost host;
-    private volatile String pendingRequestId = "";
+    private volatile long generation;
     private volatile JSONObject latestSnapshot;
     private volatile long latestSnapshotAtMs;
     private WatchStatusSettings settings;
@@ -52,27 +54,32 @@ public final class WatchStatusPluginService extends RemPluginService {
     }
 
     @Override protected String getDescriptorJson() {
-        return "{\"pluginId\":\"org.freetakteam.rem.plugin.watch_status\",\"apiMajor\":1,\"apiMinor\":1}";
+        return "{\"pluginId\":\"org.freetakteam.rem.plugin.watch_status\",\"apiMajor\":1,\"apiMinor\":3}";
     }
 
-    @Override protected void onPluginStart(IRemPluginHost host, String sessionJson) {
+    @Override protected synchronized void onPluginStart(IRemPluginHost host, String sessionJson) {
         try {
-            if (new JSONObject(sessionJson).optInt("apiMinor", 0) < 1) {
-                throw new IllegalStateException("REM plugin API 1.1 is required");
+            if (new JSONObject(sessionJson).optInt("apiMinor", 0) < 3) {
+                throw new IllegalStateException("REM plugin API 1.3 is required");
             }
+            onPluginStop("host-restarted");
             this.host = host;
+            requests.start(host::submitRequest);
             applySettings();
             handler.removeCallbacks(refresh);
             handler.post(refresh);
         } catch (Exception error) {
-            this.host = null;
-            server.stop();
+            onPluginStop("start-failed");
         }
     }
 
-    @Override protected void onPluginStop(String reason) {
+    @Override protected synchronized void onPluginStop(String reason) {
         host = null;
-        pendingRequestId = "";
+        generation++;
+        radarAccess.revoke();
+        requests.stop();
+        latestSnapshot = null;
+        latestSnapshotAtMs = 0;
         requestPending.set(false);
         handler.removeCallbacks(refresh);
         server.stop();
@@ -81,27 +88,7 @@ public final class WatchStatusPluginService extends RemPluginService {
     @Override protected void onHostEvent(String eventJson) {}
 
     @Override protected void onHostResponse(String responseJson) {
-        boolean matchesPendingRequest = false;
-        try {
-            PluginProtocol.requireJsonSize(responseJson, "Operational snapshot response");
-            final JSONObject response = new JSONObject(responseJson);
-            if (!responseMatches(pendingRequestId, response)) return;
-            matchesPendingRequest = true;
-            if (response.optBoolean("ok")) {
-                final JSONObject result = response.optJSONObject("result");
-                if (result != null) {
-                    latestSnapshot = result;
-                    latestSnapshotAtMs = System.currentTimeMillis();
-                }
-            }
-        } catch (Exception error) {
-            Log.w(TAG, "Unable to apply the watch-status host response", error);
-        } finally {
-            if (matchesPendingRequest) {
-                pendingRequestId = "";
-                requestPending.set(false);
-            }
-        }
+        requests.accept(responseJson);
     }
 
     @Override public boolean onUnbind(Intent intent) {
@@ -111,17 +98,28 @@ public final class WatchStatusPluginService extends RemPluginService {
 
     @Override public void onDestroy() {
         onPluginStop("service-destroyed");
+        requests.close();
         super.onDestroy();
     }
 
-    @Override protected void onConfigurationRequest(String requestJson, IRemPluginConfigurationCallback callback) {
+    @Override protected synchronized void onConfigurationRequest(String requestJson, IRemPluginConfigurationCallback callback) {
         try {
             final JSONObject request = new JSONObject(requestJson);
             if ("update".equals(request.optString("type"))) {
                 settings.update(request);
                 applySettings();
+            } else if ("action".equals(request.optString("type")) && "radar.renew".equals(request.optString("action"))) {
+                if (host == null || !settings.enabled() || !settings.radarEnabled()) {
+                    throw new IllegalStateException("Enable the server and radar access first");
+                }
+                radarAccess.renew();
             }
-            callback.onResponse(settings.json(server.isRunning(), server.bindError(), snapshotAgeMs()).toString());
+            final JSONObject state = settings.json(server.isRunning(), server.bindError(), snapshotAgeMs());
+            final JSONObject session = radarAccess.configuration();
+            for (String key : new String[] { "radarToken", "radarSessionActive", "radarExpiresInMs" }) {
+                state.put(key, session.get(key));
+            }
+            callback.onResponse(state.toString());
         } catch (Exception error) {
             try {
                 callback.onResponse(new JSONObject().put("type", "validationError").put("message", error.getMessage()).toString());
@@ -132,24 +130,28 @@ public final class WatchStatusPluginService extends RemPluginService {
     }
 
     private void applySettings() {
-        server.apply(settings.enabled(), settings.port(), this::currentPayload);
+        radarAccess.revoke();
+        if (host != null && settings.enabled() && settings.radarEnabled()) radarAccess.renew();
+        server.apply(host != null && settings.enabled(), settings.port(), this::currentPayload, radar);
     }
 
-    private void requestSnapshot() {
+    private synchronized void requestSnapshot() {
         final IRemPluginHost activeHost = host;
         if (activeHost == null || !requestPending.compareAndSet(false, true)) return;
-        try {
-            pendingRequestId = UUID.randomUUID().toString();
-            activeHost.submitRequest(new JSONObject()
-                .put("protocolVersion", 1)
-                .put("requestId", pendingRequestId)
-                .put("operation", "operational.snapshot")
-                .put("payload", new JSONObject())
-                .toString());
-        } catch (Exception error) {
-            pendingRequestId = "";
-            requestPending.set(false);
-        }
+        final long requestGeneration = generation;
+        requests.request("operational.snapshot", new JSONObject()).whenComplete((snapshot, error) -> {
+            synchronized (WatchStatusPluginService.this) {
+                if (generation != requestGeneration || host != activeHost) return;
+                if (error == null) {
+                    latestSnapshot = snapshot;
+                    latestSnapshotAtMs = System.currentTimeMillis();
+                } else if (error instanceof RadarFailure && "PermissionDenied".equals(((RadarFailure) error).code)) {
+                    latestSnapshot = null;
+                    latestSnapshotAtMs = 0;
+                }
+                requestPending.set(false);
+            }
+        });
     }
 
     private String currentPayload() {
@@ -169,9 +171,4 @@ public final class WatchStatusPluginService extends RemPluginService {
         return latestSnapshotAtMs == 0L ? -1L : Math.max(0L, System.currentTimeMillis() - latestSnapshotAtMs);
     }
 
-    static boolean responseMatches(String pendingId, JSONObject response) {
-        return pendingId != null
-            && !pendingId.isEmpty()
-            && pendingId.equals(response.optString("requestId", ""));
-    }
 }

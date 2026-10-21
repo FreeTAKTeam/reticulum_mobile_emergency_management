@@ -44,18 +44,6 @@ public class WatchStatusPayloadTest {
         assertEquals("", WatchStatusServer.requestPath("POST /health HTTP/1.1"));
     }
 
-    @Test public void correlatesOnlyThePendingHostResponse() throws Exception {
-        assertTrue(WatchStatusPluginService.responseMatches(
-            "request-1",
-            new JSONObject().put("requestId", "request-1")
-        ));
-        assertFalse(WatchStatusPluginService.responseMatches(
-            "request-1",
-            new JSONObject().put("requestId", "request-2")
-        ));
-        assertFalse(WatchStatusPluginService.responseMatches("", new JSONObject()));
-    }
-
     @Test public void stoppingServerReleasesLifecycleResources() throws Exception {
         final int port;
         try (ServerSocket probe = new ServerSocket(0)) {

@@ -16,12 +16,15 @@ final class WatchStatusSettings {
 
     boolean enabled() { return preferences.getBoolean("enabled", true); }
     int port() { return normalizePort(preferences.getInt("port", DEFAULT_PORT)); }
+    boolean radarEnabled() { return preferences.getBoolean("radarEnabled", false); }
 
     void update(JSONObject request) throws JSONException {
         final boolean enabled = request.has("enabled") ? request.getBoolean("enabled") : enabled();
         final int requestedPort = request.has("port") ? request.getInt("port") : port();
         if (!isValidPort(requestedPort)) throw new JSONException("Port must be between 1024 and 65535");
-        preferences.edit().putBoolean("enabled", enabled).putInt("port", requestedPort).apply();
+        final boolean radar = request.has("radarEnabled") ? request.getBoolean("radarEnabled") : radarEnabled();
+        preferences.edit().putBoolean("enabled", enabled).putInt("port", requestedPort)
+            .putBoolean("radarEnabled", radar).apply();
     }
 
     JSONObject json(boolean running, String bindError, long snapshotAgeMs) throws JSONException {
@@ -29,6 +32,8 @@ final class WatchStatusSettings {
             .put("type", "state")
             .put("enabled", enabled())
             .put("port", port())
+            .put("radarEnabled", radarEnabled())
+            .put("radarUrl", "http://127.0.0.1:" + port() + "/northbound/watch/radar")
             .put("url", "http://localhost:" + port() + "/info.json")
             .put("running", running)
             .put("bindError", bindError == null ? "" : bindError)
