@@ -124,8 +124,9 @@ export const useSosStore = defineStore("sos", () => {
         status.value = event.status;
       }),
       nodeStore.onClientEvent("sosAlertChanged", (event) => {
+        const key = sosIdentityKey(event.alert.incidentId, event.alert.sourceHex);
         const next = alerts.value.filter((alert) =>
-          alert.incidentId !== event.alert.incidentId || alert.sourceHex !== event.alert.sourceHex,
+          sosIdentityKey(alert.incidentId, alert.sourceHex) !== key,
         );
         alerts.value = [event.alert, ...next];
         void refresh();
