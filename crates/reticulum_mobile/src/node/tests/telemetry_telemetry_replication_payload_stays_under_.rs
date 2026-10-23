@@ -445,7 +445,7 @@ async fn record_local_telemetry_fix_replicates_to_native_peer_projection() {
             .list_telemetry_destinations()
             .expect("list telemetry destinations")
             .into_iter()
-            .any(|destination| destination == node_b_status.app_destination_hex);
+            .any(|destination| destination == node_b_status.lxmf_destination_hex);
         if telemetry_ready {
             break;
         }

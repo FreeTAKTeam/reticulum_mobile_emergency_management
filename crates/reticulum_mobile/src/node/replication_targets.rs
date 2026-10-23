@@ -189,29 +189,25 @@ fn build_runtime_telemetry_destinations(
 ) -> Result<Vec<MissionReplicationTarget>, NodeError> {
     let self_destination_hex = normalize_hex_32(status.app_destination_hex.as_str());
     let local_peers = telemetry_peers_with_saved(peers, saved_peers, hub_directory_snapshot);
-    let Some(config) = active_config else {
-        return Ok(telemetry_targets_from_peers_with_relay(
+    let local_targets = canonicalize_telemetry_targets(status, telemetry_targets_from_peers_with_relay(
             &local_peers,
             self_destination_hex.as_deref(),
             active_propagation_node_hex,
-        ));
+        ), &local_peers, saved_peers);
+    let Some(config) = active_config else {
+        return Ok(local_targets);
     };
 
     let mode = effective_hub_mode(config.hub_mode, hub_directory_snapshot);
-    let local_targets = telemetry_targets_from_peers_with_relay(
-        &local_peers,
-        self_destination_hex.as_deref(),
-        active_propagation_node_hex,
-    );
     let Some(snapshot) = hub_directory_snapshot else {
         return Ok(local_targets);
     };
-    let directory_targets = build_transient_replication_targets(
+    let directory_targets = canonicalize_telemetry_targets(status, build_transient_replication_targets(
         status,
         peers,
         &telemetry_destinations_from_hub_snapshot(snapshot, self_destination_hex.as_deref()),
         active_propagation_node_hex,
-    );
+    ), peers, saved_peers);
     if matches!(mode, HubMode::Connected {}) {
         if active_team_has_caller_membership(snapshot)
             && !active_team_directory_destinations(snapshot, Some("telemetry")).is_empty()

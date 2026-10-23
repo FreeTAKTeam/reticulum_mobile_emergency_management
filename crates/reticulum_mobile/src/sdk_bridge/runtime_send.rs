@@ -11,6 +11,7 @@ impl RuntimeLxmfSdk {
         Self {
             client: Arc::new(Client::new(backend)),
             transport,
+            send_sequence: AtomicU64::new(0),
         }
     }
 
@@ -164,10 +165,15 @@ impl RuntimeLxmfSdk {
                 .then(|| value.tracking_key().map(ToOwned::to_owned))
                 .flatten()
         }) {
-            request = request.with_idempotency_key(idempotency_key_for_send_attempt(
+            let attempt_key = idempotency_key_for_send_attempt(
                 &idempotency_key,
                 send_mode,
                 direct_attempt,
+            );
+            // Command identity is stable; each intentional transport submission must run.
+            request = request.with_idempotency_key(format!(
+                "{attempt_key}:submission-{}",
+                self.send_sequence.fetch_add(1, Ordering::Relaxed)
             ));
         }
 

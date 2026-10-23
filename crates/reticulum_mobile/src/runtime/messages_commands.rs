@@ -183,6 +183,7 @@ pub enum Command {
 #[derive(Clone)]
 struct NodeRuntimeState {
     status: Arc<Mutex<NodeStatus>>,
+    receipt_tracker: ReceiptTracker,
     config: NodeConfig,
     app_state: AppStateStore,
     identity: PrivateIdentity,
@@ -232,7 +233,8 @@ fn prune_expired_receipt_tracking(
     let before = receipt_message_ids.len();
     receipt_message_ids.retain(|_, tracking| {
         let ttl = match tracking {
-            ReceiptMessageTracking::Pending { .. } => DEFAULT_RECEIPT_TRACKING_TTL,
+            ReceiptMessageTracking::Pending { .. }
+            | ReceiptMessageTracking::Awaited { .. } => DEFAULT_RECEIPT_TRACKING_TTL,
             ReceiptMessageTracking::Observed { .. } => RECEIPT_REGISTRATION_RACE_TTL,
         };
         now_ms.saturating_sub(tracking.recorded_at_ms())

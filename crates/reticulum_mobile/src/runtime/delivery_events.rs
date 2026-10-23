@@ -17,6 +17,10 @@ impl ReceiptHandler for RuntimeReceiptBridge {
             return;
         };
         match guard.remove(&packet_hash_hex) {
+            Some(ReceiptMessageTracking::Awaited { signal, .. }) => {
+                drop(guard);
+                signal.notify_one();
+            }
             Some(ReceiptMessageTracking::Pending { message_id_hex, .. }) => {
                 drop(guard);
                 let _ = self.tracker.tx.send(message_id_hex);
@@ -39,7 +43,8 @@ impl ReceiptHandler for RuntimeReceiptBridge {
                             ReceiptMessageTracking::Observed { recorded_at_ms } => {
                                 Some((hash.clone(), *recorded_at_ms))
                             }
-                            ReceiptMessageTracking::Pending { .. } => None,
+                            ReceiptMessageTracking::Pending { .. }
+                            | ReceiptMessageTracking::Awaited { .. } => None,
                         })
                         .min_by_key(|(_, recorded_at_ms)| *recorded_at_ms)
                         .map(|(hash, _)| hash)
@@ -71,7 +76,7 @@ fn register_receipt_tracking(
     let observed_before_registration = if let Ok(mut guard) = tracker.receipt_message_ids.lock() {
         match guard.remove(receipt_hash_hex) {
             Some(ReceiptMessageTracking::Observed { .. }) => true,
-            Some(existing @ ReceiptMessageTracking::Pending { .. }) => {
+            Some(existing @ (ReceiptMessageTracking::Pending { .. } | ReceiptMessageTracking::Awaited { .. })) => {
                 guard.insert(receipt_hash_hex.to_string(), existing);
                 false
             }

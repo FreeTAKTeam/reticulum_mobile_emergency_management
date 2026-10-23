@@ -12,6 +12,7 @@ include!("runtime/interfaces.rs");
 include!("runtime/sdk_conversions.rs");
 include!("runtime/scheduler.rs");
 include!("runtime/delivery_events.rs");
+include!("runtime/result_delivery.rs");
 include!("runtime/projections.rs");
 include!("runtime/delivery_health.rs");
 include!("runtime/destination_resolution.rs");
@@ -197,6 +198,7 @@ pub async fn run_node(
 
     let state = NodeRuntimeState {
         status: status.clone(),
+        receipt_tracker: receipt_tracker.clone(),
         config: config.clone(),
         app_state,
         identity: identity.clone(),

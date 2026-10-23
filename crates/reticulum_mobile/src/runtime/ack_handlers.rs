@@ -152,20 +152,7 @@ async fn send_operational_result_if_needed(
         }
     };
     let ack_metadata = parse_mission_sync_metadata(fields.as_slice());
-    match send_lxmf_with_delivery_policy(
-        state,
-        bus,
-        ack.destination_hex.as_str(),
-        &[],
-        None,
-        Some(fields),
-        ack_metadata,
-        SendMode::Auto {},
-        SendTaskClass::MissionAck,
-        false,
-    OutboundTrafficClass::Control {},
-)
-    .await
+    match send_operational_result_with_recovery(state, bus, &ack, fields, ack_metadata).await
     {
         Ok(report) => {
             info!(

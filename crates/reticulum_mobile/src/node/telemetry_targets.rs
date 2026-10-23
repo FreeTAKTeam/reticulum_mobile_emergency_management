@@ -27,9 +27,8 @@ fn telemetry_peers_with_saved(
                 peer.identity_hex.as_deref(),
             )
         });
-        let destination = live
-            .and_then(|peer| normalize_hex_32(&peer.destination_hex))
-            .or_else(|| normalize_hex_32(&saved.destination_hex));
+        let destination = normalize_hex_32(&saved.destination_hex)
+            .or_else(|| live.and_then(|peer| normalize_hex_32(&peer.destination_hex)));
         let Some(destination_hex) = destination else {
             continue;
         };
@@ -58,23 +57,103 @@ fn telemetry_peers_with_saved(
         });
         peer.destination_hex = destination_hex;
         peer.lxmf_destination_hex = lxmf;
+        if peer.identity_hex.is_none() {
+            peer.identity_hex = saved.identity_hex.clone();
+        }
         peer.saved = true;
         // A current explicit capability list overrides persisted capabilities, including revocation.
         if peer.app_data.is_none() {
             peer.app_data = saved.app_data.clone();
         }
-        if !crate::team_membership::destinations_include_peer(
+        let saved_member = crate::team_membership::destinations_include_peer(
             &members,
-            &peer.destination_hex,
-            peer.lxmf_destination_hex.as_deref(),
-            peer.identity_hex.as_deref(),
-        ) || !seen.insert(key)
-        {
+            &saved.destination_hex,
+            saved.lxmf_destination_hex.as_deref(),
+            saved.identity_hex.as_deref(),
+        );
+        let live_member = live.is_some_and(|peer| {
+            crate::team_membership::destinations_include_peer(
+                &members,
+                &peer.destination_hex,
+                peer.lxmf_destination_hex.as_deref(),
+                peer.identity_hex.as_deref(),
+            )
+        });
+        if !(saved_member || live_member) || !seen.insert(key) {
             continue;
         }
         merged.push(peer);
     }
     merged
+}
+
+fn canonicalize_telemetry_targets(
+    status: &NodeStatus,
+    targets: Vec<MissionReplicationTarget>,
+    peers: &[PeerRecord],
+    saved: &[SavedPeerRecord],
+) -> Vec<MissionReplicationTarget> {
+    let self_aliases = [
+        &status.app_destination_hex,
+        &status.lxmf_destination_hex,
+        &status.identity_hex,
+    ]
+    .into_iter()
+    .filter_map(|value| normalize_hex_32(value))
+    .collect::<Vec<_>>();
+    let mut seen = HashSet::new();
+    targets
+        .into_iter()
+        .filter_map(|mut target| {
+            if destination_matches_peer_set(
+                &target.app_destination_hex,
+                &self_aliases,
+                saved,
+                peers,
+            ) {
+                return None;
+            }
+            let aliases = [target.app_destination_hex.clone()];
+            let matches_peer = |destination: &str, lxmf: Option<&str>, identity: Option<&str>| {
+                crate::team_membership::destinations_include_peer(
+                    &aliases,
+                    destination,
+                    lxmf,
+                    identity,
+                )
+            };
+            // Authorize aliases first, then keep one delivery identity across discovery and restart.
+            target.app_destination_hex = peers
+                .iter()
+                .find(|peer| {
+                    matches_peer(
+                        &peer.destination_hex,
+                        peer.lxmf_destination_hex.as_deref(),
+                        peer.identity_hex.as_deref(),
+                    )
+                })
+                .and_then(|peer| {
+                    peer.lxmf_destination_hex
+                        .as_deref()
+                        .and_then(normalize_hex_32)
+                })
+                .or_else(|| {
+                    saved
+                        .iter()
+                        .find(|peer| {
+                            matches_peer(
+                                &peer.destination_hex,
+                                peer.lxmf_destination_hex.as_deref(),
+                                peer.identity_hex.as_deref(),
+                            )
+                        })
+                        .and_then(saved_peer_target_destination)
+                })
+                .unwrap_or(target.app_destination_hex);
+            seen.insert(target.app_destination_hex.clone())
+                .then_some(target)
+        })
+        .collect()
 }
 
 fn ensure_telemetry_destination_authorized(

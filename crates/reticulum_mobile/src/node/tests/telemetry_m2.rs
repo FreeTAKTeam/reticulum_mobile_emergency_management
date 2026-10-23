@@ -37,7 +37,9 @@ fn telemetry_m2_saved_only_and_cold_live_targets_preserve_trust() {
         team_uid: YELLOW_TEAM_UID.to_string(),
         member_destinations: vec![peer.destination_hex.clone()],
     }];
-    for live in [vec![], vec![peer.clone()]] {
+    let mut delivery_alias = peer.clone();
+    delivery_alias.destination_hex = peer.lxmf_destination_hex.clone().unwrap();
+    for live in [vec![], vec![peer.clone()], vec![delivery_alias]] {
         let targets = build_runtime_telemetry_destinations(
             &status,
             &live,
@@ -48,6 +50,7 @@ fn telemetry_m2_saved_only_and_cold_live_targets_preserve_trust() {
         )
         .unwrap();
         assert_eq!(targets.len(), 1);
+        assert_eq!(Some(&targets[0].app_destination_hex), peer.lxmf_destination_hex.as_ref());
         assert!(matches!(targets[0].send_mode, SendMode::Auto {}));
     }
     let mut revoked = peer.clone();
@@ -110,6 +113,13 @@ fn publication_test_node(name: &str) -> (Node, mpsc::Receiver<Command>, PeerReco
 #[test]
 fn telemetry_m2_coalesces_before_route_and_survives_reconstruction() {
     let (node, mut commands, peer) = publication_test_node("telemetry-m2-coalesce");
+    {
+        let inner = node.inner.lock().unwrap();
+        inner.peers_snapshot.lock().unwrap().clear();
+        let mut saved = inner.app_state.get_saved_peers().unwrap();
+        saved[0].last_route_seen_at_ms = None;
+        inner.app_state.set_saved_peers(&saved).unwrap();
+    }
     let mut position = build_telemetry();
     position.updated_at_ms = now_ms();
     node.record_local_telemetry_fix(position.clone()).unwrap();
@@ -128,6 +138,8 @@ fn telemetry_m2_coalesces_before_route_and_survives_reconstruction() {
             persisted.recipients[0].state,
             PublicationState::QueuedNoRoute
         );
+        assert!(inner.peers_snapshot.lock().unwrap().is_empty());
+        *inner.peers_snapshot.lock().unwrap() = vec![peer.clone()];
         inner
             .status
             .lock()
@@ -155,7 +167,7 @@ fn telemetry_m2_coalesces_before_route_and_survives_reconstruction() {
     else {
         panic!("telemetry send expected");
     };
-    assert_eq!(destination_hex, peer.destination_hex);
+    assert_eq!(Some(destination_hex), peer.lxmf_destination_hex.clone());
     assert_eq!(bytes, b"T");
     let fields = fields_bytes.unwrap();
     let metadata = parse_mission_sync_metadata(&fields).unwrap();
@@ -205,11 +217,13 @@ fn telemetry_m2_coalesces_before_route_and_survives_reconstruction() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn telemetry_m2_cold_start_first_workflow_persists_and_application_acks() {
     let _guard = test_lock().lock().await;
-    let (relay, node_a, node_b) = start_node_pair("telemetry-m2-first").await;
+    let (relay, node_a, node_b) = start_node_pair_with_profile("telemetry-m2-first", true).await;
+    for node in [&node_a, &node_b] {
+        let interfaces = node.get_status().interfaces;
+        assert!(!interfaces.is_empty());
+        assert!(interfaces.iter().all(|interface| interface.kind == "rnode_ble"));
+    }
     let status_b = node_b.get_status();
-    let mut settings = node_a.get_app_settings().unwrap().unwrap();
-    settings.auto_connect_saved = false;
-    node_a.set_app_settings(settings).unwrap();
     let mut saved = saved_telemetry_fixtures(&[build_peer_record(
         &status_b.app_destination_hex,
         &status_b.lxmf_destination_hex,
@@ -237,7 +251,7 @@ async fn telemetry_m2_cold_start_first_workflow_persists_and_application_acks() 
     };
     assert_eq!(
         update.representation,
-        crate::types::LxmfDeliveryRepresentation::Packet {}
+        crate::types::LxmfDeliveryRepresentation::Resource {}
     );
     assert!(!update.message_id_hex.is_empty());
     assert!(update.command_id.is_some());
@@ -338,7 +352,7 @@ fn telemetry_m2_zero_targets_is_local_and_old_ack_cannot_accept_new_fix() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn telemetry_m2_pending_fix_survives_node_restart_without_warmup() {
     let _guard = test_lock().lock().await;
-    let (relay, node_a, node_b) = start_node_pair("telemetry-m2-restart").await;
+    let (relay, node_a, node_b) = start_node_pair_with_profile("telemetry-m2-restart", true).await;
     let config = node_a
         .inner
         .lock()
@@ -357,11 +371,31 @@ async fn telemetry_m2_pending_fix_survives_node_restart_without_warmup() {
     )]);
     saved[0].identity_hex = Some(status_b.identity_hex.clone());
     node_a.set_saved_peers(saved).unwrap();
-    stop_node(node_a).await;
-    let node_a = Node::with_storage_dir(config.storage_dir.as_deref()).unwrap();
+    let initial_events = node_a.subscribe_events();
     let mut position = build_telemetry();
     position.updated_at_ms = now_ms();
     node_a.record_local_telemetry_fix(position.clone()).unwrap();
+    wait_for_event(&initial_events, Duration::from_secs(75), |event| matches!(event,
+        NodeEvent::LxmfDelivery { update }
+            if update.command_type.as_deref() == Some("mission.registry.telemetry.upsert")
+                && matches!(update.application_ack_state, ApplicationAckState::Accepted {})
+    )).expect("initial telemetry before losing the runtime link");
+    stop_node(node_a).await;
+    let node_a = Node::with_storage_dir(config.storage_dir.as_deref()).unwrap();
+    assert!(node_a.list_peers().unwrap().is_empty());
+    assert!(node_a.get_status().interfaces.is_empty());
+    position.updated_at_ms += 1;
+    position.lat += 0.01;
+    node_a.record_local_telemetry_fix(position.clone()).unwrap();
+    position.updated_at_ms += 1;
+    position.lat += 0.01;
+    node_a.record_local_telemetry_fix(position.clone()).unwrap();
+    drop(node_a);
+    let node_a = Node::with_storage_dir(config.storage_dir.as_deref()).unwrap();
+    let pending = node_a.inner.lock().unwrap().app_state.telemetry_publication().unwrap();
+    assert_eq!(pending.fix, Some(position.clone()));
+    assert_eq!(pending.recipients[0].state, PublicationState::QueuedNoRoute);
+    assert!(node_a.list_peers().unwrap().is_empty());
     let subscription = node_a.subscribe_events();
     node_a.start(config).unwrap();
     let event = wait_for_event(&subscription, Duration::from_secs(75), |event| matches!(event, NodeEvent::LxmfDelivery { update } if update.command_type.as_deref() == Some("mission.registry.telemetry.upsert") && matches!(update.application_ack_state, ApplicationAckState::Accepted {}))).expect("pending telemetry application acceptance after restart");
@@ -370,8 +404,12 @@ async fn telemetry_m2_pending_fix_survives_node_restart_without_warmup() {
     };
     assert_eq!(
         update.representation,
-        crate::types::LxmfDeliveryRepresentation::Packet {}
+        crate::types::LxmfDeliveryRepresentation::Resource {}
     );
+    assert!(node_b.get_telemetry_positions().unwrap().iter().any(|fix| {
+        fix.callsign == position.callsign && fix.lat == position.lat
+            && fix.updated_at_ms == position.updated_at_ms
+    }));
     assert_eq!(
         node_b
             .get_telemetry_positions()

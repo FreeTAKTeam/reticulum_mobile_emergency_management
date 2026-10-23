@@ -77,12 +77,18 @@ enum ReceiptMessageTracking {
     Observed {
         recorded_at_ms: u64,
     },
+    Awaited {
+        signal: Arc<tokio::sync::Notify>,
+        recorded_at_ms: u64,
+    },
 }
 
 impl ReceiptMessageTracking {
     fn recorded_at_ms(&self) -> u64 {
         match self {
-            Self::Pending { recorded_at_ms, .. } | Self::Observed { recorded_at_ms } => {
+            Self::Pending { recorded_at_ms, .. }
+            | Self::Observed { recorded_at_ms }
+            | Self::Awaited { recorded_at_ms, .. } => {
                 *recorded_at_ms
             }
         }

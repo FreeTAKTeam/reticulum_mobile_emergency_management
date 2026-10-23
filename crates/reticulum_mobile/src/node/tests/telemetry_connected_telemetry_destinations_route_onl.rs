@@ -118,7 +118,7 @@ fn semi_autonomous_telemetry_destinations_use_hub_snapshot() {
     assert_eq!(destinations.len(), 1);
     assert_eq!(
         destinations[0].app_destination_hex,
-        "abababababababababababababababab"
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     );
     assert!(matches!(destinations[0].send_mode, SendMode::Auto {}));
 }
@@ -165,7 +165,7 @@ fn semi_autonomous_telemetry_destinations_use_propagation_for_unsaved_snapshot_p
     assert_eq!(destinations.len(), 1);
     assert_eq!(
         destinations[0].app_destination_hex,
-        "abababababababababababababababab"
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     );
     assert!(matches!(destinations[0].send_mode, SendMode::PropagationOnly {}));
 }
@@ -232,7 +232,7 @@ fn telemetry_targets_keep_direct_peer_before_lxmf_announce_is_current() {
     assert_eq!(destinations.len(), 1);
     assert_eq!(
         destinations[0].app_destination_hex,
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     );
     assert!(matches!(destinations[0].send_mode, SendMode::Auto {}));
 }
@@ -261,7 +261,7 @@ fn telemetry_targets_use_direct_for_saved_peers_when_relay_is_active() {
     assert_eq!(destinations.len(), 1);
     assert_eq!(
         destinations[0].app_destination_hex,
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     );
     assert!(matches!(destinations[0].send_mode, SendMode::Auto {}));
 }
@@ -298,12 +298,12 @@ fn telemetry_targets_include_direct_and_propagation_fanout() {
     assert_eq!(destinations.len(), 2);
     assert_eq!(
         destinations[0].app_destination_hex,
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     );
     assert!(matches!(destinations[0].send_mode, SendMode::Auto {}));
     assert_eq!(
         destinations[1].app_destination_hex,
-        "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+        "efefefefefefefefefefefefefefefef"
     );
     assert!(matches!(
         destinations[1].send_mode,
@@ -415,7 +415,7 @@ fn telemetry_targets_use_relay_for_fresh_route_without_active_link_when_relay_ex
     assert_eq!(destinations.len(), 1);
     assert_eq!(
         destinations[0].app_destination_hex,
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     );
     assert!(matches!(
         destinations[0].send_mode,

@@ -1,4 +1,85 @@
 #[test]
+fn telemetry_m2_aliases_preserve_membership_and_one_delivery_identity() {
+    let status = build_status_for_tests();
+    let peer = build_peer_record(&"a".repeat(32), &"b".repeat(32), true, true, true);
+    let mut saved = saved_telemetry_fixtures(&[peer.clone()]);
+    let snapshot = test_team_snapshot(&[&peer.destination_hex]);
+    let mut fix = build_telemetry();
+    fix.updated_at_ms = 123;
+    let mut command_ids = HashSet::new();
+    for saved_under_lxmf in [false, true] {
+        if saved_under_lxmf {
+            saved[0].destination_hex = peer.lxmf_destination_hex.clone().unwrap();
+        }
+        let targets = build_runtime_telemetry_destinations(
+            &status,
+            &[peer.clone()],
+            &saved,
+            None,
+            None,
+            Some(&snapshot),
+        )
+        .unwrap();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            Some(&targets[0].app_destination_hex),
+            peer.lxmf_destination_hex.as_ref()
+        );
+        let (_, fields) = build_telemetry_replication_payload(&fix, &targets[0]).unwrap();
+        command_ids.insert(parse_mission_sync_metadata(&fields).unwrap().command_id);
+    }
+    assert_eq!(command_ids.len(), 1);
+    for self_alias in [
+        &status.app_destination_hex,
+        &status.lxmf_destination_hex,
+        &status.identity_hex,
+    ] {
+        let mut self_peer = peer.clone();
+        self_peer.destination_hex = self_alias.clone();
+        let self_saved = saved_telemetry_fixtures(&[self_peer.clone()]);
+        let self_snapshot = test_team_snapshot(&[self_alias]);
+        assert!(
+            build_runtime_telemetry_destinations(
+                &status,
+                &[self_peer],
+                &self_saved,
+                None,
+                None,
+                Some(&self_snapshot)
+            )
+            .unwrap()
+            .is_empty()
+        );
+    }
+    let mut directory_snapshot = snapshot;
+    directory_snapshot.items = vec![crate::types::HubDirectoryPeerRecord {
+        identity: "c".repeat(32),
+        destination_hash: peer.destination_hex.clone(),
+        display_name: None,
+        announce_capabilities: vec!["r3akt".to_string(), "telemetry".to_string()],
+        client_type: None,
+        registered_mode: None,
+        last_seen: None,
+        status: None,
+    }];
+    let config = build_config_fingerprint_for_tests(HubMode::Autonomous {}, None);
+    let targets = build_runtime_telemetry_destinations(
+        &status,
+        &[peer.clone()],
+        &saved,
+        None,
+        Some(&config),
+        Some(&directory_snapshot),
+    )
+    .unwrap();
+    assert_eq!(targets.len(), 1);
+    assert_eq!(
+        Some(&targets[0].app_destination_hex),
+        peer.lxmf_destination_hex.as_ref()
+    );
+}
+
+#[test]
 fn telemetry_m2_replayed_older_fix_cannot_regress_receiver_projection() {
     let store = AppStateStore::new(prepare_storage_dir("telemetry-m2-monotonic").to_str()).unwrap();
     let mut fix = build_telemetry();
@@ -245,15 +326,17 @@ fn telemetry_m2_retry_authorization_rechecks_current_fix_and_contact() {
         .unwrap()
         .clone()
         .unwrap();
-    assert!(telemetry_delivery_is_current(
-        &app_state,
-        &status,
-        &config,
-        &[peer.clone()],
-        Some(&snapshot),
-        (&peer.destination_hex, &command)
-    )
-    .unwrap());
+    assert!(
+        telemetry_delivery_is_current(
+            &app_state,
+            &status,
+            &config,
+            &[peer.clone()],
+            Some(&snapshot),
+            (&peer.destination_hex, &command)
+        )
+        .unwrap()
+    );
     // Same peer/interface, newly available propagation route must release a failed direct attempt.
     resp.send(Err(NodeError::NetworkError {})).unwrap();
     node.flush_pending_telemetry(&mut inflight).unwrap();
@@ -274,38 +357,96 @@ fn telemetry_m2_retry_authorization_rechecks_current_fix_and_contact() {
         }
     ));
     app_state.set_saved_peers(&[]).unwrap();
-    assert!(!telemetry_delivery_is_current(
-        &app_state,
-        &status,
-        &config,
-        &[peer.clone()],
-        Some(&snapshot),
-        (&peer.destination_hex, &command)
-    )
-    .unwrap());
+    assert!(
+        !telemetry_delivery_is_current(
+            &app_state,
+            &status,
+            &config,
+            &[peer.clone()],
+            Some(&snapshot),
+            (&peer.destination_hex, &command)
+        )
+        .unwrap()
+    );
     app_state
         .set_saved_peers(&saved_telemetry_fixtures(&[peer.clone()]))
         .unwrap();
     fix.updated_at_ms += 1;
     node.record_local_telemetry_fix(fix).unwrap();
-    assert!(!telemetry_delivery_is_current(
-        &app_state,
-        &status,
-        &config,
-        &[peer.clone()],
-        Some(&snapshot),
-        (&peer.destination_hex, &command)
-    )
-    .unwrap());
+    assert!(
+        !telemetry_delivery_is_current(
+            &app_state,
+            &status,
+            &config,
+            &[peer.clone()],
+            Some(&snapshot),
+            (&peer.destination_hex, &command)
+        )
+        .unwrap()
+    );
     node.delete_local_telemetry("POCO".to_string()).unwrap();
-    assert!(!telemetry_delivery_is_current(
-        &app_state,
-        &status,
-        &config,
-        &[peer.clone()],
-        Some(&snapshot),
-        (&peer.destination_hex, &command)
-    )
-    .unwrap());
+    assert!(
+        !telemetry_delivery_is_current(
+            &app_state,
+            &status,
+            &config,
+            &[peer.clone()],
+            Some(&snapshot),
+            (&peer.destination_hex, &command)
+        )
+        .unwrap()
+    );
     drop(retry);
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn telemetry_m2_repeated_command_retransmits_wire_and_result() {
+    let _guard = test_lock().lock().await;
+    let (relay, node_a, node_b) = start_node_pair_with_profile("telemetry-m2-repeat", true).await;
+    let target = MissionReplicationTarget {
+        app_destination_hex: node_b.get_status().lxmf_destination_hex,
+        send_mode: SendMode::Auto {},
+    };
+    let mut position = build_telemetry();
+    position.updated_at_ms = now_ms();
+    let (body, fields) = build_telemetry_replication_payload(&position, &target).unwrap();
+    let events = node_a.subscribe_events();
+    let mut message_ids = Vec::new();
+    for _ in 0..2 {
+        node_a
+            .send_bytes(
+                target.app_destination_hex.clone(),
+                body.clone(),
+                Some(fields.clone()),
+                SendMode::Auto {},
+            )
+            .unwrap();
+        let event = wait_for_event(&events, Duration::from_secs(75), |event| {
+            matches!(event,
+                NodeEvent::LxmfDelivery { update }
+                    if update.command_type.as_deref() == Some("mission.registry.telemetry.upsert")
+                        && matches!(update.application_ack_state, ApplicationAckState::Accepted {})
+            )
+        })
+        .expect("each intentional retransmission receives an application result");
+        let NodeEvent::LxmfDelivery { update } = event else {
+            unreachable!()
+        };
+        message_ids.push(update.message_id_hex);
+    }
+    assert_ne!(
+        message_ids[0], message_ids[1],
+        "SDK must not return a cached send report"
+    );
+    assert_eq!(
+        node_b
+            .get_telemetry_positions()
+            .unwrap()
+            .iter()
+            .filter(|fix| fix.callsign == position.callsign)
+            .count(),
+        1
+    );
+    stop_node(node_a).await;
+    stop_node(node_b).await;
+    relay.shutdown().await;
 }

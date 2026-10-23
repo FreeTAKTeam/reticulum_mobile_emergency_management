@@ -12,7 +12,7 @@ positions from normal logs and exported summaries.
 
 | Case | Required observation | Result |
 | --- | --- | --- |
-| A → B, cold LoRa only | No TCP, chat/SOS/manual connect/Resource warm-up. First telemetry selects the saved team peer, creates its route/link, reaches receiver persistence/map, and returns correlated application acceptance. Record command/message ID, Packet representation and RNode interface. | Pending |
+| A → B, cold LoRa only | No TCP, chat/SOS/manual connect/Resource warm-up. First telemetry selects the saved team peer, creates its route/link, reaches receiver persistence/map, and returns correlated application acceptance. Record command/message ID, selected Packet/Resource representation and RNode interface. | Pending |
 | B → A, cold LoRa only | Repeat from clean process startup, with the opposite sender and the same evidence. | Pending |
 | Enable before radio ready | Local fix is visible as local/pending; the newest fix flushes when radio/path becomes ready, before the full periodic interval. | Pending |
 | Multiple offline fixes | One latest pending fix per destination/callsign; older fixes do not replay or regress the receiver map. | Pending |

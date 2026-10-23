@@ -269,26 +269,38 @@ fn checklist_cell_subject_includes_task_and_column() {
 }
 
 async fn start_node_pair(test_name: &str) -> (TcpRelayHandle, Node, Node) {
+    start_node_pair_with_profile(test_name, false).await
+}
+
+async fn start_node_pair_with_profile(
+    test_name: &str,
+    rnode_policy: bool,
+) -> (TcpRelayHandle, Node, Node) {
     let relay = TcpRelayHandle::start().await;
+    let endpoint = if rnode_policy {
+        format!("rnode-ble:test-loopback:{}", relay.address())
+    } else {
+        relay.address()
+    };
 
     let node_a_storage = prepare_storage_dir(&format!("{test_name}_a"));
     let node_b_storage = prepare_storage_dir(&format!("{test_name}_b"));
 
-    let node_a = Node::new().expect("node a storage");
+    let node_a = Node::with_storage_dir(node_a_storage.to_str()).expect("node a storage");
     node_a
         .start(build_config(
             &format!("{test_name}-a"),
             node_a_storage.as_path(),
-            relay.address().as_str(),
+            endpoint.as_str(),
         ))
         .expect("start node a");
 
-    let node_b = Node::new().expect("node b storage");
+    let node_b = Node::with_storage_dir(node_b_storage.to_str()).expect("node b storage");
     node_b
         .start(build_config(
             &format!("{test_name}-b"),
             node_b_storage.as_path(),
-            relay.address().as_str(),
+            endpoint.as_str(),
         ))
         .expect("start node b");
 

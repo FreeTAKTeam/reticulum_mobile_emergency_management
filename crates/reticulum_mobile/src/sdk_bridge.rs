@@ -1,6 +1,9 @@
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -139,6 +142,7 @@ pub(crate) struct PropagationFetchResult {
 pub(crate) struct RuntimeLxmfSdk {
     client: Arc<Client<InProcessBackend>>,
     transport: SdkTransportState,
+    send_sequence: AtomicU64,
 }
 
 include!("sdk_bridge/runtime_send.rs");
