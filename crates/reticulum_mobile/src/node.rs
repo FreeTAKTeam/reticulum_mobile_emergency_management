@@ -72,14 +72,18 @@ const COMMAND_QUEUE_CAPACITY: usize = 256;
 const PRIORITY_COMMAND_QUEUE_CAPACITY: usize = 1_024;
 fn dispatch_command(tx: &mpsc::Sender<Command>, command: Command) -> Result<(), NodeError> {
     if tokio::runtime::Handle::try_current().is_ok() {
-        return tx.try_send(command).map_err(|error| match error {
-            mpsc::error::TrySendError::Full(_) => NodeError::Timeout {},
-            mpsc::error::TrySendError::Closed(_) => NodeError::NotRunning {},
-        });
+        return try_dispatch_command(tx, command);
     }
 
     tx.blocking_send(command).map_err(|error| {
         crate::error_context::contextual_node_error(NodeError::NotRunning {}, error)
+    })
+}
+
+fn try_dispatch_command(tx: &mpsc::Sender<Command>, command: Command) -> Result<(), NodeError> {
+    tx.try_send(command).map_err(|error| match error {
+        mpsc::error::TrySendError::Full(_) => NodeError::Timeout {},
+        mpsc::error::TrySendError::Closed(_) => NodeError::NotRunning {},
     })
 }
 

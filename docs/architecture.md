@@ -204,6 +204,13 @@ threshold, keeps it active until the battery reaches threshold plus three
 percentage points, and disables it while charging. The native
 `PowerStateChanged` event is the UI source of truth.
 
+Automatic community status replication stores the event and queues its sends;
+battery callbacks never wait for radio delivery. Byte-send queue admission is
+nonblocking and reports `Timeout` when full, preserving per-recipient failure
+events instead of blocking Android's main thread.
+Deferred capability updates also enqueue without awaiting a response; rejected
+admission retains the latest value for the next battery update outside saver.
+
 Saver mode admits only SOS, team telemetry, one community
 status transition publish and a household situation's B04 (the situation's MECP
 event and EAM are held until saver ends). It rejects chat (including retry), EAM, ordinary

@@ -384,7 +384,8 @@ impl Node {
             .transpose()?;
 
         let (resp_tx, resp_rx) = cb::bounded(1);
-        dispatch_command(
+        // Queue admission must not block platform callbacks when the runtime is busy.
+        try_dispatch_command(
             &tx,
             Command::SendBytes {
                 destination_hex,

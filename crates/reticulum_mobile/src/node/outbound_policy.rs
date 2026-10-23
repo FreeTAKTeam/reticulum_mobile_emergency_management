@@ -68,7 +68,7 @@ impl Node {
         if battery_percent > 100 {
             return Err(NodeError::InvalidConfig {});
         }
-        let (state, publish_transition, deferred_capabilities) = {
+        let (state, publish_transition) = {
             let mut inner = self.inner.lock().map_err(|error| {
                 crate::error_context::contextual_node_error(NodeError::InternalError {}, error)
             })?;
@@ -104,20 +104,25 @@ impl Node {
             inner.bus.emit(NodeEvent::PowerStateChanged {
                 state: inner.power_state.clone(),
             });
-            let deferred_capabilities = if publish_transition && !saver_active {
-                inner.deferred_announce_capabilities.take()
-            } else {
-                None
-            };
-            (
-                inner.power_state.clone(),
-                publish_transition,
-                deferred_capabilities,
-            )
+            if !saver_active {
+                if let (Some(capability_string), Some(tx)) =
+                    (&inner.deferred_announce_capabilities, &inner.cmd_tx)
+                {
+                    let (resp, _) = cb::bounded(1);
+                    match try_dispatch_command(tx, Command::SetAnnounceCapabilities {
+                        capability_string: capability_string.clone(), resp,
+                    }) {
+                        Ok(()) => inner.deferred_announce_capabilities = None,
+                        Err(error) => emit_replication_delivery_failure(
+                            &inner.bus,
+                            format!("deferred announce capabilities enqueue failed reason={error}"),
+                            &error,
+                        ),
+                    }
+                }
+            }
+            (inner.power_state.clone(), publish_transition)
         };
-        if let Some(capabilities) = deferred_capabilities {
-            let _ = self.set_announce_capabilities(capabilities);
-        }
         if publish_transition {
             let _ = self.publish_community_status();
         }

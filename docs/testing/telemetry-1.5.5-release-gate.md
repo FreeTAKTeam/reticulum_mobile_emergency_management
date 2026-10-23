@@ -1,8 +1,19 @@
 # REM 1.5.5 telemetry final release gate
 
-Status: **pending physical run**. The user deferred LoRa testing until all software
-and signed-candidate preparation is complete. Do not publish, close milestone 13,
-or claim field qualification from host/browser tests.
+Status: **partial physical evidence; release held**. The signed `3d443b4`
+candidate demonstrated bidirectional LoRa Resource delivery and correlated
+application acceptance on 23 October 2026. Xiaomi used a real Android location;
+Pixel used a labelled Android mock location because indoor GNSS was unavailable.
+Pixel receiver map persistence survived restart. Reverse delivery required a
+controlled retry after an earlier Resource transfer timed out. Do not describe
+that as first-attempt acceptance.
+
+The Poco has been returned to the user and is no longer attached to USB. Leave
+it untouched. Android battery checks exposed a synchronous community fan-out
+ANR; the corrected candidate must repeat those affected checks. Firmware queue
+clearing, pre-readiness recovery, malformed two-phone telemetry and remaining
+Android cases still need explicit evidence. Do not publish, close milestone 13,
+or claim full field qualification from software tests or partial radio results.
 
 Record the candidate APK/AAB SHA-256, REM commit, LXMF-rs commit, RCH commit/version when participating,
 phone model/OS, RNode identity/firmware, RF band/frequency/bandwidth/spreading factor/

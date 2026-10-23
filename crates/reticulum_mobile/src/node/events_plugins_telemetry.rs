@@ -1,12 +1,4 @@
 impl Node {
-    fn upsert_event_with_class(
-        &self,
-        record: EventProjectionRecord,
-        traffic_class: OutboundTrafficClass,
-    ) -> Result<(), NodeError> {
-        self.upsert_event_with_destination_and_class(record, None, traffic_class)
-    }
-
     fn upsert_event_with_destination(
         &self,
         record: EventProjectionRecord,
