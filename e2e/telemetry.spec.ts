@@ -260,6 +260,7 @@ test("telemetry map hides locations for cancelled SOS emergencies", async ({ pag
   await page.evaluate(async ({ timestamp }) => {
     const mod = await import("/src/stores/sosStore.ts");
     const store = mod.useSosStore();
+    await store.init();
     const activeSource = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const cancelledSource = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     store.alerts = [
@@ -290,10 +291,11 @@ test("telemetry map hides locations for cancelled SOS emergencies", async ({ pag
         updatedAtMs: timestamp - 45_000,
       },
     ];
+    // Location matching uses the same normalized identity as alert replacement.
     store.locations = [
       {
-        incidentId: "active-incident",
-        sourceHex: activeSource,
+        incidentId: " ACTIVE-INCIDENT ",
+        sourceHex: activeSource.toUpperCase(),
         lat: 44.6488,
         lon: -63.5752,
         recordedAtMs: timestamp - 55_000,
