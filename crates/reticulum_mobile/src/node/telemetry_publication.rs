@@ -76,16 +76,18 @@ impl Node {
             {
                 return;
             }
+            let fix_changed = publication.fix.as_ref() != Some(&position);
             publication.fix = Some(position.clone());
             publication
                 .recipients
                 .retain(|recipient| recipient.callsign == position.callsign);
             for recipient in &mut publication.recipients {
                 if due
-                    || matches!(
-                        recipient.state,
-                        PublicationState::QueuedNoRoute | PublicationState::QueuedForDelivery
-                    )
+                    || fix_changed
+                        && !matches!(
+                            recipient.state,
+                            PublicationState::Acknowledged | PublicationState::Rejected
+                        )
                 {
                     recipient.fix_updated_at_ms = position.updated_at_ms;
                     recipient.command_id.clear();

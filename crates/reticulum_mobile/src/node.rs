@@ -344,6 +344,7 @@ mod tests {
     include!("node/tests/core.rs");
     include!("node/tests/telemetry_m2.rs");
     include!("node/tests/telemetry_m2_receive.rs");
+    include!("node/tests/telemetry_m2_coalescing.rs");
     include!("node/tests/sos_events.rs");
     include!("node/tests/eam_build_eam_replication_payload_emits_numeri.rs");
     include!("node/tests/eam_eam_replication_targets_include_saved_dire.rs");

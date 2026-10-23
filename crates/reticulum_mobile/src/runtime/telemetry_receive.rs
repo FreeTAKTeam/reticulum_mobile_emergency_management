@@ -40,7 +40,7 @@ fn decode_telemetry_position(
                 Err(Error::CorruptMessagePack)
             } else {
                 Ok(None)
-            }
+            };
         }
     };
     let Some(entries) = msgpack_map_entries(&fields) else {
@@ -250,6 +250,28 @@ mod telemetry_decode_tests {
             .unwrap();
         assert_eq!(record.callsign, "Alpha");
         assert_eq!(record.updated_at_ms, 123);
+        let legacy = rmp_serde::to_vec(&MsgPackValue::Map(vec![(
+            MsgPackValue::from(FIELD_COMMANDS),
+            MsgPackValue::Array(vec![MsgPackValue::Map(vec![
+                (
+                    MsgPackValue::from("command_type"),
+                    MsgPackValue::from("mission.registry.telemetry.upsert"),
+                ),
+                (
+                    MsgPackValue::from("args"),
+                    MsgPackValue::Map(vec![
+                        (MsgPackValue::from("callsign"), MsgPackValue::from("Alpha")),
+                        (MsgPackValue::from("lat"), MsgPackValue::from(44.1)),
+                        (MsgPackValue::from("lon"), MsgPackValue::from(-63.1)),
+                    ]),
+                ),
+            ])]),
+        )]))
+        .unwrap();
+        assert_eq!(
+            decode_telemetry_position(Some(&legacy), true, 123).unwrap(),
+            Some(record)
+        );
         for (key, reason) in [
             ("cs", Error::MissingCallsign),
             ("la", Error::MissingLatitude),
@@ -282,21 +304,122 @@ mod telemetry_decode_tests {
             assert!(!error.code().contains("secret-position"));
         }
         assert_eq!(
-            decode_telemetry_position(Some(&fields(valid, Some(2))), true, 123).unwrap_err(),
+            decode_telemetry_position(Some(&fields(valid.clone(), Some(2))), true, 123)
+                .unwrap_err(),
             Error::UnsupportedVersion
         );
         assert_eq!(
             decode_telemetry_position(Some(&[0xc1]), true, 123).unwrap_err(),
             Error::CorruptMessagePack
         );
-        assert!(decode_telemetry_position(Some(&[0xc1]), false, 123)
+        assert!(
+            decode_telemetry_position(Some(&[0xc1]), false, 123)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            decode_telemetry_position(None, false, 123)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            decode_telemetry_position(None, true, 123)
+                .unwrap()
+                .is_none()
+        );
+        for callsign in [
+            MsgPackValue::from(""),
+            MsgPackValue::from("  "),
+            MsgPackValue::from(42),
+        ] {
+            let mut args = valid.clone();
+            args[0].1 = callsign;
+            assert_eq!(
+                decode_telemetry_position(Some(&fields(args, None)), true, 123).unwrap_err(),
+                Error::InvalidCallsign
+            );
+        }
+        let encode_commands = |commands| {
+            rmp_serde::to_vec(&MsgPackValue::Map(vec![(
+                MsgPackValue::from(FIELD_COMMANDS),
+                commands,
+            )]))
             .unwrap()
-            .is_none());
-        assert!(decode_telemetry_position(None, false, 123)
-            .unwrap()
-            .is_none());
-        assert!(decode_telemetry_position(None, true, 123)
-            .unwrap()
-            .is_none());
+        };
+        let telemetry_type = (
+            MsgPackValue::from("t"),
+            MsgPackValue::from("mission.registry.telemetry.upsert"),
+        );
+        for (commands, reason) in [
+            (MsgPackValue::Nil, Error::UnsupportedEncoding),
+            (MsgPackValue::Array(vec![]), Error::MissingCommandType),
+            (
+                MsgPackValue::Array(vec![MsgPackValue::from("wrong-command-shape")]),
+                Error::UnsupportedEncoding,
+            ),
+            (
+                MsgPackValue::Array(vec![MsgPackValue::Map(vec![])]),
+                Error::MissingCommandType,
+            ),
+            (
+                MsgPackValue::Array(vec![MsgPackValue::Map(vec![telemetry_type.clone()])]),
+                Error::MissingArgs,
+            ),
+            (
+                MsgPackValue::Array(vec![MsgPackValue::Map(vec![
+                    telemetry_type,
+                    (MsgPackValue::from("a"), MsgPackValue::Array(vec![])),
+                ])]),
+                Error::MissingArgs,
+            ),
+        ] {
+            assert_eq!(
+                decode_telemetry_position(Some(&encode_commands(commands)), true, 123).unwrap_err(),
+                reason
+            );
+        }
+        let non_map = rmp_serde::to_vec(&MsgPackValue::Array(vec![])).unwrap();
+        assert_eq!(
+            decode_telemetry_position(Some(&non_map), true, 123).unwrap_err(),
+            Error::UnsupportedEncoding
+        );
+        assert!(
+            decode_telemetry_position(Some(&non_map), false, 123)
+                .unwrap()
+                .is_none()
+        );
+        for command_type in ["unknown.command", "mission.event.upsert"] {
+            let unrelated = encode_commands(MsgPackValue::Array(vec![MsgPackValue::Map(vec![
+                (MsgPackValue::from("t"), MsgPackValue::from(command_type)),
+                (
+                    MsgPackValue::from("a"),
+                    MsgPackValue::Map(
+                        valid
+                            .iter()
+                            .cloned()
+                            .map(|(key, value)| (MsgPackValue::from(key), value))
+                            .collect(),
+                    ),
+                ),
+            ])]));
+            for telemetry_body in [false, true] {
+                assert!(
+                    decode_telemetry_position(Some(&unrelated), telemetry_body, 123)
+                        .unwrap()
+                        .is_none()
+                );
+            }
+        }
+        for entries in [
+            vec![],
+            vec![(MsgPackValue::from("GROUP"), MsgPackValue::from("Alpha"))],
+        ] {
+            let no_commands = rmp_serde::to_vec(&MsgPackValue::Map(entries)).unwrap();
+            assert!(
+                decode_telemetry_position(Some(&no_commands), true, 123)
+                    .unwrap()
+                    .is_none()
+            );
+        }
     }
 }
