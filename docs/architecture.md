@@ -913,3 +913,47 @@ marker-as-telemetry command is ignored so markers stay out of the telemetry
 layer. Hub sync requires `mission.content.write` for the REM user on RCH.
 Deletes have no tombstones. The wire contract is documented in RCH's
 `docs/rem-southbound-interface.md`.
+
+### Telemetry publication recovery (1.5.5)
+
+The native Node owns telemetry recipient intent and delivery recovery. Planning
+merges current peer observations with persisted saved contacts under the active
+local team, capability and hub privacy rules. A current LXMF route can initiate a
+direct attempt without an active link. A stored route remains an intended target
+while discovery catches up; Connected mode never redirects exact positions to the
+hub. Current capability evidence overrides older saved capabilities. Send admission
+rechecks the selected recipient against current saved/team state.
+
+`record_local_telemetry_fix` persists acquisition separately from network outcome.
+A durable native publication contains this device's latest publishable fix and at
+most one recipient row per selected destination/callsign. New offline fixes replace
+older pending fixes; this is not a position history queue. The lifecycle worker
+replans and queues through the existing native send admission and compiled LXMF-rs
+path when interfaces/routes become available. It does not subscribe to a second
+unbounded event stream or wait for network sends. Existing native cadence and power
+policy still apply. Disabled/expired sharing and revoked recipients stop dispatch.
+
+The publication distinguishes local-only, waiting for route, queued, transmitted,
+transport delivered, application accepted/rejected, failed and timed-out outcomes.
+Transport receipts keep application acknowledgement pending. Existing sender and
+command/correlation checks determine application results; stale results cannot
+accept a superseding fix. Command identity is stable for one fix and destination.
+On restart, an uncertain in-flight row is retried with that identity; accepted and
+rejected rows are retained without replay. Receiver telemetry upserts ignore older
+timestamps, so retransmission cannot regress the map or create duplicate positions.
+A crash between remote persistence and local acknowledgement remains an uncertain
+network result until reconciled.
+
+Inbound telemetry decoding returns typed reasons for missing fields, invalid
+numeric types/values, unsupported encoding/version and persistence failure.
+Recognized failures emit identifiers and reason codes, retain the latest diagnostic,
+and send a correlated rejected result when command metadata permits. Coordinates
+and callsigns are excluded from those diagnostics. Unrelated mission messages,
+marker telemetry and a plain chat containing `T` remain outside this path.
+
+The existing JNI telemetry projection JSON adds a `publication` snapshot. The
+node-client validates/maps it and Vue renders acquisition separately from remote
+delivery. Older native bridges without the snapshot explicitly report unavailable
+status. UniFFI and LXMF wire contracts are unchanged. Host tests prove the direct
+application flow and state transitions; physical RNode/LoRa qualification uses the
+exact signed candidate and remains a separate release gate.

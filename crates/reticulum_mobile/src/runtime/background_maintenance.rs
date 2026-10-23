@@ -184,7 +184,7 @@ fn spawn_receipt_listener(
                     Some("transport receipt"),
                 );
                 emit_lxmf_delivery_with_source(
-                    &bus,
+                    &state.app_state, &bus,
                     &pending,
                     None,
                     LxmfDeliveryStatus::Delivered {},

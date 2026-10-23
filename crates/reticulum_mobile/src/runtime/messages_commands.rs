@@ -182,6 +182,8 @@ pub enum Command {
 
 #[derive(Clone)]
 struct NodeRuntimeState {
+    status: Arc<Mutex<NodeStatus>>,
+    config: NodeConfig,
     app_state: AppStateStore,
     identity: PrivateIdentity,
     app_destination_hex: String,

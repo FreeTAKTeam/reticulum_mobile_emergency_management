@@ -124,6 +124,17 @@ struct NodeInner {
     priority_cmd_tx: Option<mpsc::Sender<Command>>,
 }
 
+impl Drop for NodeInner {
+    fn drop(&mut self) {
+        // The recovery worker may release the last reference from inside Tokio.
+        if tokio::runtime::Handle::try_current().is_ok() {
+            if let Some(runtime) = self.runtime.take() {
+                runtime.shutdown_background();
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct NodeConfigFingerprint {
     name: String,
@@ -279,6 +290,7 @@ fn fields_with_active_team(
 
 include!("node/local_team_routing.rs");
 include!("node/replication_targets.rs");
+include!("node/telemetry_targets.rs");
 include!("node/chat_routing.rs");
 include!("node/replication_planning.rs");
 include!("node/replication_routing.rs");
@@ -293,7 +305,7 @@ include!("node/outbound_policy.rs");
 include!("node/block_onboarding.rs");
 
 pub struct Node {
-    inner: Mutex<NodeInner>,
+    inner: Arc<Mutex<NodeInner>>,
 }
 
 include!("node/lifecycle.rs");
@@ -313,6 +325,7 @@ include!("node/map_markers.rs");
 include!("node/map_marker_replication.rs");
 include!("node/plugin_map.rs");
 include!("node/events_plugins_telemetry.rs");
+include!("node/telemetry_publication.rs");
 include!("node/event_replication.rs");
 include!("node/sos.rs");
 include!("node/sos_events.rs");
@@ -329,6 +342,8 @@ mod tests {
     include!("node/tests/checklist_routing.rs");
     include!("node/tests/checklist_runtime.rs");
     include!("node/tests/core.rs");
+    include!("node/tests/telemetry_m2.rs");
+    include!("node/tests/telemetry_m2_receive.rs");
     include!("node/tests/sos_events.rs");
     include!("node/tests/eam_build_eam_replication_payload_emits_numeri.rs");
     include!("node/tests/eam_eam_replication_targets_include_saved_dire.rs");

@@ -18,7 +18,7 @@ impl Node {
         };
 
         Ok(Self {
-            inner: Mutex::new(NodeInner {
+            inner: Arc::new(Mutex::new(NodeInner {
                 app_state: create_app_state_store(storage_dir)?,
                 bus: EventBus::new(),
                 status: Arc::new(Mutex::new(initial)),
@@ -43,7 +43,7 @@ impl Node {
                 runtime: None,
                 cmd_tx: None,
                 priority_cmd_tx: None,
-            }),
+            })),
         })
     }
 
@@ -159,6 +159,7 @@ impl Node {
             priority_cmd_rx,
         ));
 
+        spawn_telemetry_publication_worker(&runtime, Arc::downgrade(&self.inner));
         inner.runtime = Some(runtime);
         inner.cmd_tx = Some(cmd_tx);
         inner.priority_cmd_tx = Some(priority_cmd_tx);
@@ -359,6 +360,7 @@ impl Node {
             let peers = inner.peers_snapshot.lock().map_err(|error| {
                 crate::error_context::contextual_node_error(NodeError::InternalError {}, error)
             })?;
+            ensure_telemetry_destination_authorized(&inner, traffic_class, &destination_hex, &peers, &saved_peers, hub_directory_snapshot.as_ref())?;
             let local_target = destination_is_active_local_member(
                 &destination_hex, hub_directory_snapshot.as_ref(), &saved_peers, &peers,
             );

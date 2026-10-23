@@ -4,6 +4,7 @@ import { computed } from "vue";
 import SettingsLeaveDialog from "../../components/settings/SettingsLeaveDialog.vue";
 import SettingsPage from "../../components/settings/SettingsPage.vue";
 import SettingsSaveBar from "../../components/settings/SettingsSaveBar.vue";
+import TelemetryDeliveryStatus from "../../components/settings/TelemetryDeliveryStatus.vue";
 import LocationFields from "../../components/settings/forms/LocationFields.vue";
 import { locationSlice } from "../../components/settings/settingsFormSlices";
 import { SETTINGS_PAGE_COPY } from "../../components/settings/settingsPageCopy";
@@ -25,9 +26,10 @@ const status = computed(() =>
   <SettingsPage :title="SETTINGS_PAGE_COPY.location.title" :description="SETTINGS_PAGE_COPY.location.description">
     <LocationFields :draft="draft" :validation-error="form.validationError.value">
       <template #status>
-        <div class="status-row"><dt>Telemetry status</dt><dd>{{ status }}</dd></div>
+        <div class="status-row"><dt>Local location</dt><dd>{{ status }}</dd></div>
       </template>
       <template #after-status>
+        <TelemetryDeliveryStatus :publication="telemetryStore.publication" />
         <p v-if="telemetryStore.telemetryError" class="feedback">{{ telemetryStore.telemetryError }}</p>
       </template>
     </LocationFields>

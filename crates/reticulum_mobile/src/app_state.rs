@@ -337,3 +337,5 @@ mod tests {
     include!("app_state/tests/map_markers.rs");
     include!("app_state/tests/plugin_map_sessions.rs");
 }
+
+include!("app_state/telemetry_publication.rs");

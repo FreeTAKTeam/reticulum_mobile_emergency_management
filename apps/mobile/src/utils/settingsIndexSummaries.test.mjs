@@ -29,7 +29,7 @@ test("network and routing summaries", () => {
 
 test("location summary reports the loop state only when sharing", () => {
   assert.equal(summaries.locationSummary(false, 60, "running"), "Off");
-  assert.equal(summaries.locationSummary(true, 60, "running"), "Every 60 s · publishing");
+  assert.equal(summaries.locationSummary(true, 60, "running"), "Every 60 s · acquiring location");
   assert.equal(summaries.locationSummary(true, 120, "permission_denied"), "Every 120 s · permission denied");
 });
 

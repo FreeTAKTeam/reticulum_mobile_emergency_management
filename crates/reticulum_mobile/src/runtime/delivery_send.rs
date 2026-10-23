@@ -13,6 +13,7 @@ async fn send_lxmf_with_delivery_policy(
     send_mode: SendMode,
     send_task_class: SendTaskClass,
     allow_inbound_correspondent_route: bool,
+    traffic_class: OutboundTrafficClass,
 ) -> Result<LxmfSendReport, NodeError> {
     const RETRY_DELAY: Duration = Duration::from_secs(10);
     const ACCEPTED_RESULT_RETRY_DELAY: Duration = Duration::from_secs(1);
@@ -167,7 +168,7 @@ async fn send_lxmf_with_delivery_policy(
         return send_lxmf_via_propagation_candidates(
             state,
             destination,
-            requested_destination_hex,
+            (requested_destination_hex, traffic_class),
             body,
             title,
             fields_bytes,
@@ -184,6 +185,7 @@ async fn send_lxmf_with_delivery_policy(
     let mut last_resolved_destination_hex: Option<String> = None;
 
     for attempt in 1..=direct_attempts {
+        ensure_current_telemetry_delivery(state, traffic_class, requested_destination_hex, metadata.as_ref())?;
         let resolved_destination_hex = match resolve_lxmf_destination_for_send(
             state,
             requested_destination_hex,
@@ -245,6 +247,7 @@ async fn send_lxmf_with_delivery_policy(
                     send_mode,
                 ),
             );
+            ensure_current_telemetry_delivery(state, traffic_class, requested_destination_hex, metadata.as_ref())?;
             state
                 .sdk
                 .send_lxmf_with_direct_attempt(
@@ -402,7 +405,7 @@ async fn send_lxmf_with_delivery_policy(
     let mut report = send_lxmf_via_propagation_candidates(
         state,
         destination,
-        requested_destination_hex,
+        (requested_destination_hex, traffic_class),
         body,
         title,
         fields_bytes,
@@ -416,12 +419,13 @@ async fn send_lxmf_with_delivery_policy(
 async fn send_lxmf_via_propagation_candidates(
     state: &NodeRuntimeState,
     destination: AddressHash,
-    requested_destination_hex: &str,
+    request: (&str, OutboundTrafficClass),
     body: &[u8],
     title: Option<String>,
     fields_bytes: Option<Vec<u8>>,
     metadata: Option<MissionSyncMetadata>,
 ) -> Result<LxmfSendReport, NodeError> {
+    let (requested_destination_hex, traffic_class) = request;
     let active_relay = state.active_propagation_node_hex.lock().await.clone();
     let active_relay_hex = active_relay.as_deref().unwrap_or("");
     let announces = state.messaging.lock().await.list_announces();
@@ -436,6 +440,7 @@ async fn send_lxmf_via_propagation_candidates(
 
     let mut last_error = None;
     for (index, relay_candidate) in relay_candidates.drain(..).enumerate() {
+        ensure_current_telemetry_delivery(state, traffic_class, requested_destination_hex, metadata.as_ref())?;
         let attempt_number = index + 1;
         info!(
             "[lxmf][mission] propagation send relay attempt relay={relay_candidate} attempt={attempt_number}/{PROPAGATION_SYNC_MAX_RELAY_ATTEMPTS} destination={requested_destination_hex}",

@@ -78,10 +78,14 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getTelem
         }
     };
     let node = ensure_node_or_return!(&mut guard);
+    let publication = match node.telemetry_publication_json() {
+        Ok(value) => value,
+        Err(error) => { set_last_node_error(error); return ptr::null_mut(); }
+    };
     match node.get_telemetry_positions() {
         Ok(items) => ok_json_result(
             &mut env,
-            &json!({ "items": items.iter().map(telemetry_position_json).collect::<Vec<_>>() }),
+            &json!({ "items": items.iter().map(telemetry_position_json).collect::<Vec<_>>(), "publication": publication }),
         ),
         Err(err) => {
             set_last_node_error(err);

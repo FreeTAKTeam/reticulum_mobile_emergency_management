@@ -200,7 +200,7 @@ fn spawn_delivery_tracking_tasks(
                         Ok(true) => continue,
                         Ok(false) => {
                             record_pending_delivery_timed_out(
-                                state.sdk.as_ref(),
+                                &state.app_state,                                state.sdk.as_ref(),
                                 &bus,
                                 &pending,
                                 "ack timeout",
@@ -209,7 +209,7 @@ fn spawn_delivery_tracking_tasks(
                         Err(err) => {
                             let detail = format!("ack timeout; propagation retry failed: {err}");
                             record_pending_delivery_timed_out(
-                                state.sdk.as_ref(),
+                                &state.app_state,                                state.sdk.as_ref(),
                                 &bus,
                                 &pending,
                                 detail.as_str(),

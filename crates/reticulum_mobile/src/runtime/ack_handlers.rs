@@ -82,7 +82,7 @@ async fn ack_pending_lxmf_delivery(
         detail.as_deref(),
     );
     emit_lxmf_delivery_with_source(
-        bus,
+        &state.app_state, bus,
         &pending,
         Some(source_hex.to_string()),
         LxmfDeliveryStatus::Acknowledged {},
@@ -112,6 +112,14 @@ async fn send_operational_ack_if_needed(
     if *state.power_saver_rx.borrow() {
         return;
     }
+    send_operational_result_if_needed(state, bus, source_hex, metadata, None).await;
+}
+
+async fn send_operational_result_if_needed(
+    state: &NodeRuntimeState, bus: &EventBus, source_hex: Option<&str>,
+    metadata: Option<&MissionSyncMetadata>, rejection: Option<&str>,
+) {
+    if *state.power_saver_rx.borrow() { return; }
     let Some(ack) = operational_ack_from_metadata(source_hex, metadata) else {
         return;
     };
@@ -122,7 +130,15 @@ async fn send_operational_ack_if_needed(
     if ack.destination_hex == local_lxmf_hex {
         return;
     }
-    let fields = match build_compact_operational_ack_fields(&ack) {
+    let built_fields = if let Some(reason) = rejection {
+        let fields = MsgPackValue::Map(vec![(MsgPackValue::from(FIELD_RESULTS), MsgPackValue::Map(vec![
+            (MsgPackValue::from("i"), MsgPackValue::from(ack.command_id.as_str())),
+            (MsgPackValue::from("s"), MsgPackValue::from("rejected")),
+            (MsgPackValue::from("reason"), MsgPackValue::from(reason)),
+        ]))]);
+        rmp_serde::to_vec(&fields).map_err(|_| NodeError::InternalError {})
+    } else { build_compact_operational_ack_fields(&ack) };
+    let fields = match built_fields {
         Ok(fields) => fields,
         Err(err) => {
             bus.emit(NodeEvent::Error {
@@ -147,7 +163,8 @@ async fn send_operational_ack_if_needed(
         SendMode::Auto {},
         SendTaskClass::MissionAck,
         false,
-    )
+    OutboundTrafficClass::Control {},
+)
     .await
     {
         Ok(report) => {
@@ -278,7 +295,8 @@ async fn send_chat_delivery_ack_if_needed(
         SendMode::Auto {},
         SendTaskClass::General,
         false,
-    )
+    OutboundTrafficClass::Control {},
+)
     .await
     {
         Ok(report) => {

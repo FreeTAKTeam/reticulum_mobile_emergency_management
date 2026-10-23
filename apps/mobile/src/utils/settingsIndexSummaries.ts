@@ -43,7 +43,7 @@ export function telemetryStatusLabel(enabled: boolean, loopStatus: TelemetryLoop
   if (loopStatus === "permission_denied") return "Permission denied";
   if (loopStatus === "gps_unavailable") return "GPS unavailable";
   if (loopStatus === "error") return "Error";
-  if (loopStatus === "running") return "Publishing";
+  if (loopStatus === "running") return "Acquiring location";
   return "Idle";
 }
 

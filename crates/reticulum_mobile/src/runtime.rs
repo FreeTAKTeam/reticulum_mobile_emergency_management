@@ -2,6 +2,8 @@ include!("runtime/core.rs");
 include!("runtime/operational_ack.rs");
 include!("runtime/eam_parsing.rs");
 include!("runtime/eam_persistence.rs");
+include!("runtime/telemetry_receive.rs");
+include!("runtime/telemetry_admission.rs");
 include!("runtime/checklist_merge.rs");
 include!("runtime/checklist_wire.rs");
 include!("runtime/checklist_dispatch.rs");
@@ -194,6 +196,8 @@ pub async fn run_node(
     );
 
     let state = NodeRuntimeState {
+        status: status.clone(),
+        config: config.clone(),
         app_state,
         identity: identity.clone(),
         app_destination_hex,

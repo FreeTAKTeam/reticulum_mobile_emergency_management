@@ -30,7 +30,8 @@ async fn retry_pending_ack_timeout_via_propagation(
             SendMode::DirectOnly {},
             resend.send_task_class.direct_recovery_equivalent(),
             false,
-        )
+        resend.traffic_class,
+)
         .await
         {
             Ok(report) if lxmf_send_succeeded(report.outcome) => {
@@ -55,7 +56,7 @@ async fn retry_pending_ack_timeout_via_propagation(
                     retry_pending.mission_uid.as_deref(),
                 );
                 emit_lxmf_delivery(
-                    bus,
+                    &state.app_state, bus,
                     retry_pending,
                     LxmfDeliveryStatus::Sent {},
                     Some("ack timeout; retrying direct delivery".to_string()),
@@ -116,7 +117,8 @@ async fn retry_pending_ack_timeout_via_propagation(
         SendMode::PropagationOnly {},
         resend.send_task_class.direct_recovery_equivalent(),
         false,
-    )
+    resend.traffic_class,
+)
     .await
     .map_err(|err| err.to_string())?;
 
@@ -145,7 +147,7 @@ async fn retry_pending_ack_timeout_via_propagation(
         retry_pending.mission_uid.as_deref(),
     );
     emit_lxmf_delivery(
-        bus,
+        &state.app_state, bus,
         retry_pending,
         LxmfDeliveryStatus::SentToPropagation {},
         Some("ack timeout; retrying via propagation".to_string()),

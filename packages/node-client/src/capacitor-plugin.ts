@@ -174,7 +174,7 @@ export interface ReticulumNodePlugin {
   getCommunityStatuses(): Promise<{ items: Record<string, unknown>[] }>;
   upsertEvent(options: { event: Record<string, unknown> }): Promise<void>;
   deleteEvent(options: { uid: string; deletedAtMs?: number }): Promise<void>;
-  getTelemetryPositions(): Promise<{ items: Record<string, unknown>[] }>;
+  getTelemetryPositions(): Promise<{ items: Record<string, unknown>[]; publication?: unknown }>;
   recordLocalTelemetryFix(options: { position: Record<string, unknown> }): Promise<void>;
   deleteLocalTelemetry(options: { callsign: string }): Promise<void>;
   getSosSettings(): Promise<Record<string, unknown>>;

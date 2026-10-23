@@ -8,6 +8,7 @@ impl Node {
         Ok(build_runtime_telemetry_destinations(
             &status,
             peers.as_slice(),
+                    &inner.app_state.get_saved_peers()?,
             sync_status.active_propagation_node_hex.as_deref(),
             inner.active_config.as_ref(),
             hub_directory_snapshot.as_ref(),

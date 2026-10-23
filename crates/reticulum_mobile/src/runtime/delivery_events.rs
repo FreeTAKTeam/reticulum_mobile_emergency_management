@@ -168,14 +168,14 @@ fn transport_state_for_message_state(state: MessageState) -> TransportDeliverySt
 }
 
 fn emit_lxmf_delivery(
+    app_state: &AppStateStore,
     bus: &EventBus,
     pending: &PendingLxmfDelivery,
     status: LxmfDeliveryStatus,
     detail: Option<String>,
 ) {
     let now = now_ms();
-    bus.emit(NodeEvent::LxmfDelivery {
-        update: LxmfDeliveryUpdate {
+    let update = LxmfDeliveryUpdate {
             message_id_hex: pending.message_id_hex.clone(),
             destination_hex: pending.destination_hex.clone(),
             source_hex: None,
@@ -194,11 +194,17 @@ fn emit_lxmf_delivery(
             detail,
             sent_at_ms: pending.sent_at_ms,
             updated_at_ms: now,
-        },
-    });
+    };
+    match app_state.record_telemetry_delivery(&update) {
+        Ok(Some(invalidation)) => bus.emit(NodeEvent::ProjectionInvalidated { invalidation }),
+        Ok(None) => {},
+        Err(error) => bus.emit(NodeEvent::Error { code: "IoError".to_string(), message: format!("telemetry delivery projection failed: {error}") }),
+    }
+    bus.emit(NodeEvent::LxmfDelivery { update });
 }
 
 fn emit_lxmf_delivery_with_source(
+    app_state: &AppStateStore,
     bus: &EventBus,
     pending: &PendingLxmfDelivery,
     source_hex: Option<String>,
@@ -207,8 +213,7 @@ fn emit_lxmf_delivery_with_source(
     detail: Option<String>,
 ) {
     let now = now_ms();
-    bus.emit(NodeEvent::LxmfDelivery {
-        update: LxmfDeliveryUpdate {
+    let update = LxmfDeliveryUpdate {
             message_id_hex: pending.message_id_hex.clone(),
             destination_hex: pending.destination_hex.clone(),
             source_hex,
@@ -227,8 +232,13 @@ fn emit_lxmf_delivery_with_source(
             detail,
             sent_at_ms: pending.sent_at_ms,
             updated_at_ms: now,
-        },
-    });
+    };
+    match app_state.record_telemetry_delivery(&update) {
+        Ok(Some(invalidation)) => bus.emit(NodeEvent::ProjectionInvalidated { invalidation }),
+        Ok(None) => {},
+        Err(error) => bus.emit(NodeEvent::Error { code: "IoError".to_string(), message: format!("telemetry delivery projection failed: {error}") }),
+    }
+    bus.emit(NodeEvent::LxmfDelivery { update });
 }
 
 fn create_transport_data_packet(destination: AddressHash, bytes: &[u8]) -> Packet {
