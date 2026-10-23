@@ -210,6 +210,8 @@ nonblocking and reports `Timeout` when full, preserving per-recipient failure
 events instead of blocking Android's main thread.
 Deferred capability updates also enqueue without awaiting a response; rejected
 admission retains the latest value for the next battery update outside saver.
+On WebView reattachment the service replays the current native power state, so
+battery changes made in the background replace the dashboard's previous badge.
 
 Saver mode admits only SOS, team telemetry, one community
 status transition publish and a household situation's B04 (the situation's MECP

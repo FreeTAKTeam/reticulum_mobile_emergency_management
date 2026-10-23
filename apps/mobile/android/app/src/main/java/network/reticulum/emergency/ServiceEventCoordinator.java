@@ -321,6 +321,16 @@ final class ServiceEventCoordinator {
             listener.onNodeEvent("sosStatusChanged", new JSObject());
         }
 
+        // Battery events can occur while the WebView listener is detached.
+        try {
+            listener.onNodeEvent(
+                "powerStateChanged",
+                new JSObject(JsonPayloads.orFallback(ReticulumBridge.getPowerStateJson(), "{}"))
+            );
+        } catch (JSONException error) {
+            Log.w(TAG, "Unable to replay the current power state", error);
+        }
+
         if (latestRuntimeErrorJson != null && !latestRuntimeErrorJson.trim().isEmpty()) {
             try {
                 listener.onNodeEvent("error", new JSObject(latestRuntimeErrorJson));
