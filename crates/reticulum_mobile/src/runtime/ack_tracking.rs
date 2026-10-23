@@ -171,6 +171,7 @@ fn pending_ack_timeout_elapsed(pending: &PendingLxmfDelivery, now: u64) -> bool 
 }
 
 fn record_pending_delivery_timed_out(
+    app_state: &AppStateStore,
     sdk: &RuntimeLxmfSdk,
     bus: &EventBus,
     pending: &PendingLxmfDelivery,
@@ -187,7 +188,7 @@ fn record_pending_delivery_timed_out(
         Some(detail),
     );
     emit_lxmf_delivery(
-        bus,
+        app_state, bus,
         pending,
         LxmfDeliveryStatus::TimedOut {},
         Some(detail.to_string()),
@@ -244,7 +245,7 @@ async fn acknowledge_pending_with_buffered_ack(
             buffered_ack.detail.as_deref(),
         );
         emit_lxmf_delivery_with_source(
-            bus,
+            &state.app_state, bus,
             pending,
             Some(buffered_ack.source_hex.clone()),
             LxmfDeliveryStatus::Acknowledged {},

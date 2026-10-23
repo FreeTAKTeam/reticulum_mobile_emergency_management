@@ -18,12 +18,26 @@ fn configured_tcp_client_endpoints(endpoints: &[String]) -> Vec<String> {
 }
 
 fn tcp_endpoint_host(connect_addr: &str) -> &str {
+    #[cfg(test)]
+    let connect_addr = test_loopback_socket_addr(connect_addr);
     connect_addr
         .rsplit_once(':')
         .map(|(host, _)| host)
         .unwrap_or(connect_addr)
         .trim_matches(['[', ']'])
         .trim()
+}
+
+#[cfg(test)]
+fn test_loopback_socket_addr(endpoint: &str) -> &str {
+    let Some(address) = endpoint.strip_prefix("rnode-ble:test-loopback:") else {
+        return endpoint;
+    };
+    assert!(
+        address.parse::<std::net::SocketAddr>().is_ok_and(|address| address.ip().is_loopback()),
+        "RNode policy fixtures must use a loopback byte bearer"
+    );
+    address
 }
 
 fn tcp_endpoint_is_loopback(connect_addr: &str) -> bool {

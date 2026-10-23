@@ -11,6 +11,9 @@ async fn connect_tcp_endpoint(connect_addr: &str) -> Option<TcpStream> {
 }
 
 async fn connect_tcp_endpoint_with_error(connect_addr: &str) -> Result<TcpStream, String> {
+    // Host fixtures retain the RNode interface label/policy over a loopback byte bearer.
+    #[cfg(test)]
+    let connect_addr = test_loopback_socket_addr(connect_addr);
     let addresses = tokio::time::timeout(TCP_CLIENT_CONNECT_TIMEOUT, lookup_host(connect_addr))
         .await
         .map_err(|_| format!("DNS lookup timed out after {TCP_CLIENT_CONNECT_TIMEOUT:?}"))?
@@ -116,8 +119,11 @@ fn spawn_tcp_client_interface_manager(
                 let registry_for_task = active_interface_registry.clone();
                 let status_for_task = status.clone();
                 let bus_for_task = bus.clone();
+                let socket_addr = connect_addr.clone();
+                #[cfg(test)]
+                let socket_addr = test_loopback_socket_addr(&socket_addr).to_string();
                 let iface = transport.iface_manager().lock().await.spawn(
-                    TcpClient::new_from_stream(connect_addr.clone(), stream),
+                    TcpClient::new_from_stream(socket_addr, stream),
                     move |context| async move {
                         TcpClient::spawn(context).await;
                         unregister_tcp_client_endpoint(

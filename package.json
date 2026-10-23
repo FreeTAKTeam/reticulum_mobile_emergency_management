@@ -1,7 +1,7 @@
 {
   "name": "reticulum_mobile_emergency_management",
   "private": true,
-  "version": "1.5.4",
+  "version": "1.5.5",
   "workspaces": [
     "apps/*",
     "packages/*"
@@ -23,6 +23,6 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   }
 }

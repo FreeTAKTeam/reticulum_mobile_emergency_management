@@ -159,10 +159,9 @@ fn build_telemetry_replication_payload(
         return Err(NodeError::InvalidConfig {});
     }
 
-    let send_ts_ms = now_ms();
-    let send_token = compact_u64_token(send_ts_ms);
-    let command_id = format!("t:{}:{send_token}", &target.app_destination_hex[..4]);
-    let correlation_id = format!("t:{}:{send_token}", &target.app_destination_hex[..8]);
+    let digest = hex::encode(Sha256::digest(format!("{}:{}", target.app_destination_hex, serde_json::to_string(position).map_err(|_| NodeError::InvalidConfig {})?).as_bytes()));
+    let command_id = format!("t:{}", &digest[..16]);
+    let correlation_id = command_id.clone();
     let body = b"T".to_vec();
     let fields = MsgPackValue::Map(vec![(
         MsgPackValue::from(FIELD_COMMANDS),

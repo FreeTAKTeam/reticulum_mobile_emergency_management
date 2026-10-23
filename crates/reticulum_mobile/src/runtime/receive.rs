@@ -49,6 +49,9 @@ async fn emit_received_payload(
             let metadata = fields_bytes
                 .as_deref()
                 .and_then(parse_mission_sync_metadata);
+            let persisted_telemetry = if !is_sos_message {
+                persist_received_telemetry_if_present(state, bus, TelemetryReceiveContext { metadata: metadata.as_ref(), fields_bytes: fields_bytes.as_deref(), body: message.content.as_slice(), source_hex: source_hex.as_deref(), destination_hex: &destination_hex, message_id_hex: wire_message_id_hex.as_deref() }).await
+            } else { false };
             if let Some(metadata) = metadata.as_ref().filter(|_| !is_sos_message) {
                 if metadata.is_mission_related() {
                     info!(
@@ -79,13 +82,6 @@ async fn emit_received_payload(
                     fields_bytes.as_deref(),
                     Some(message.content.as_slice()),
                     source_hex.as_deref(),
-                )
-                .await;
-                let persisted_telemetry = persist_received_telemetry_if_present(
-                    state,
-                    bus,
-                    Some(metadata),
-                    fields_bytes.as_deref(),
                 )
                 .await;
                 let persisted_checklist = persist_received_checklist_if_present(

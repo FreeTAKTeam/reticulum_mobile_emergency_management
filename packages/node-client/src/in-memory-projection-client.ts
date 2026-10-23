@@ -1,3 +1,4 @@
+import type { TelemetryPublicationSnapshot } from "./contracts-telemetry";
 import type { BlockOnboardingDraft, BlockOnboardingImportRequest, BlockOnboardingImportResult, BlockOnboardingInspection, ChecklistDeleteOptions, ChecklistRecord, ChecklistTemplateRecord, CommunityStatusProjectionRecord, EamProjectionRecord, EamReadinessSummaryRecord, EamTeamSummaryRecord, EventProjectionRecord, HouseholdMode, HouseholdSituation, HouseholdSituationRecord, NodeClientEvents, NodeStatus, PowerStateRecord, SignedBlockOnboardingEnvelope, SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord, SosSettingsRecord, SosStatusRecord, SosTriggerSource, TelemetryPositionRecord } from "./contracts";
 import { DEFAULT_SOS_SETTINGS, DEFAULT_SOS_STATUS } from "./client-config-converters";
 import { cloneChecklistRecord, cloneChecklistTemplateRecord, createDefaultChecklistTemplates, createInMemoryChecklistTemplateFromCsv, type ChecklistCellInput, type ChecklistCreateInput, type ChecklistRowAddInput, type ChecklistRowDeleteInput, type ChecklistRowStyleInput, type ChecklistStatusInput, type ChecklistTemplateCsvInput, type ChecklistUpdateInput } from "./checklist-memory-templates";
@@ -92,6 +93,7 @@ export abstract class InMemoryProjectionClient {
   async getCommunityStatuses(): Promise<CommunityStatusProjectionRecord[]> { return []; }
   async upsertEvent(_event: EventProjectionRecord): Promise<void> {}
   async deleteEvent(_uid: string, _deletedAtMs?: number): Promise<void> {}
+  async getTelemetryPublication(): Promise<TelemetryPublicationSnapshot | null> { return null; }
   async getTelemetryPositions(): Promise<TelemetryPositionRecord[]> { return []; }
   async recordLocalTelemetryFix(_position: TelemetryPositionRecord): Promise<void> {}
   async deleteLocalTelemetry(_callsign: string): Promise<void> {}

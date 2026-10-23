@@ -74,6 +74,7 @@ fn configured_tcp_client_endpoints_trim_strip_and_deduplicate() {
 fn tcp_readiness_monitor_skips_loopback_test_relays() {
     let endpoints = tcp_readiness_monitor_endpoints(&[
         "127.0.0.1:4242".to_string(),
+        "rnode-ble:test-loopback:127.0.0.1:4242".to_string(),
         "localhost:4242".to_string(),
         "[::1]:4242".to_string(),
         "rns.beleth.net:4242".to_string(),

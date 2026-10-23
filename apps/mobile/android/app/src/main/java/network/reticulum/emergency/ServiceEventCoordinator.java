@@ -230,8 +230,22 @@ final class ServiceEventCoordinator {
                 || "messageReceived".equals(eventName)
                 || "sosAlertChanged".equals(eventName)
         ) {
-            Log.i(TAG, "[" + eventName + "] " + abbreviate(payload.toString()));
+            Log.i(TAG, "[" + eventName + "] " + abbreviate(eventPayloadForLog(eventName, payload)));
         }
+    }
+
+    static String eventPayloadForLog(String eventName, JSObject payload) {
+        if (!"packetReceived".equals(eventName) && !"packetSent".equals(eventName)) {
+            return payload.toString();
+        }
+        // Packet fields can encode precise positions; log only routing and outcome metadata.
+        final JSObject metadata = new JSObject();
+        for (String key : new String[] { "sourceHex", "destinationHex", "outcome" }) {
+            if (payload.has(key)) {
+                metadata.put(key, payload.opt(key));
+            }
+        }
+        return metadata.toString();
     }
 
     private void updateCachedState(String eventName, JSObject payload) {
@@ -305,6 +319,16 @@ final class ServiceEventCoordinator {
         } catch (JSONException error) {
             Log.w(TAG, "Unable to replay the cached SOS status event", error);
             listener.onNodeEvent("sosStatusChanged", new JSObject());
+        }
+
+        // Battery events can occur while the WebView listener is detached.
+        try {
+            listener.onNodeEvent(
+                "powerStateChanged",
+                new JSObject(JsonPayloads.orFallback(ReticulumBridge.getPowerStateJson(), "{}"))
+            );
+        } catch (JSONException error) {
+            Log.w(TAG, "Unable to replay the current power state", error);
         }
 
         if (latestRuntimeErrorJson != null && !latestRuntimeErrorJson.trim().isEmpty()) {

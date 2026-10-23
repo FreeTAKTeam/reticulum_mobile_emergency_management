@@ -389,3 +389,29 @@ test("telemetry map clusters close positions into a count bubble when zoomed out
   await expect(page.locator(".telemetry-cluster")).toHaveCount(0);
   await expect(page.locator(".telemetry-marker")).toHaveCount(3);
 });
+
+test("location settings separates acquisition, transport receipts and application results", async ({ page }, testInfo) => {
+  await seedAppStorage(page, { settings: { ...defaultSettings, telemetry: { ...defaultSettings.telemetry, enabled: true } } });
+  await gotoApp(page, "/settings/location");
+  await page.evaluate(async () => {
+    const { useTelemetryStore } = await import("/src/stores/telemetryStore.ts");
+    useTelemetryStore().publication = {
+      localFixUpdatedAt: Date.now(), callsign: "Acceptance fixture",
+      recipients: [{ destinationHex: "a".repeat(32), callsign: "Acceptance fixture", fixUpdatedAt: Date.now(),
+        commandId: "t:fixture", state: "TransportDelivered", messageIdHex: "b".repeat(64),
+        representation: "Packet", detail: null, updatedAt: Date.now() }],
+      lastReceiveFailure: { sourceHex: "c".repeat(32), destinationHex: "d".repeat(32), messageIdHex: null,
+        commandId: "t:rejected", reason: "MissingLatitude", receivedAt: Date.now() },
+    };
+  });
+  await expect(page.getByText("Transport delivered · Awaiting application acknowledgement")).toBeVisible();
+  await expect(page.getByText(/Last receive failure: MissingLatitude/)).toBeVisible();
+  await expect(page.getByText("Receiver accepted")).toHaveCount(0);
+  await expect(page.getByTestId("splash-screen")).toBeHidden();
+  await page.getByRole("region", { name: "Remote telemetry delivery" }).screenshot({ path: testInfo.outputPath("telemetry-publication.png") });
+  await page.evaluate(async () => {
+    const { useTelemetryStore } = await import("/src/stores/telemetryStore.ts");
+    useTelemetryStore().publication!.recipients[0].state = "Acknowledged";
+  });
+  await expect(page.getByText("Receiver accepted")).toBeVisible();
+});

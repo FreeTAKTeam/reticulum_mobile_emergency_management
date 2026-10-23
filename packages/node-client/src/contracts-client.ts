@@ -1,3 +1,4 @@
+import type { TelemetryPublicationSnapshot } from "./contracts-telemetry";
 import type {
   LogLevel, HubMode, RnodeRegion, RnodeProfileId, RnodeConnectionMode, RuntimeReadinessState, PeerState, AnnounceDestinationKind,
   AnnounceClass, SendOutcome, LxmfDeliveryStatus, TransportDeliveryState, ApplicationAckState, SendMode, LxmfDeliveryMethod, LxmfDeliveryRepresentation,
@@ -170,6 +171,7 @@ export interface ReticulumNodeClient extends MapMarkerClient, PluginMapSessionCl
   getCommunityStatuses(): Promise<CommunityStatusProjectionRecord[]>;
   upsertEvent(event: EventProjectionRecord): Promise<void>;
   deleteEvent(uid: string, deletedAtMs?: number): Promise<void>;
+  getTelemetryPublication(): Promise<TelemetryPublicationSnapshot | null>;
   getTelemetryPositions(): Promise<TelemetryPositionRecord[]>;
   recordLocalTelemetryFix(position: TelemetryPositionRecord): Promise<void>;
   deleteLocalTelemetry(callsign: string): Promise<void>;

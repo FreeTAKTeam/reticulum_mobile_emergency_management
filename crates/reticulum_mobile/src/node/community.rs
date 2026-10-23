@@ -361,7 +361,8 @@ impl Node {
             (event, should_publish, traffic_class)
         };
         if should_publish {
-            self.upsert_event_with_class(event.clone(), traffic_class)?;
+            // Battery broadcasts run on Android's main thread; only enqueue the fan-out.
+            self.upsert_event_queued(event.clone(), traffic_class)?;
         }
         Ok(event)
     }

@@ -60,7 +60,8 @@ fn spawn_send_bytes_command(
                         send_mode,
                         send_task_class,
                         false,
-                    )
+                    traffic_class,
+)
                     .await?,
                 )
             } else {
@@ -159,7 +160,7 @@ fn spawn_send_bytes_command(
                                 Some("resource transfer completed"),
                             );
                         }
-                        emit_lxmf_delivery(&bus, pending, delivery_status, None);
+                        emit_lxmf_delivery(&state.app_state, &bus, pending, delivery_status, None);
                         info!(
                             "[lxmf][mission] sent message_id={} destination={} command={} correlation={}",
                             pending.message_id_hex,
@@ -196,7 +197,7 @@ fn spawn_send_bytes_command(
                             Some(failure_detail.as_str()),
                         );
                         emit_lxmf_delivery(
-                            &bus,
+                            &state.app_state, &bus,
                             pending,
                             LxmfDeliveryStatus::Failed {},
                             Some(failure_detail),

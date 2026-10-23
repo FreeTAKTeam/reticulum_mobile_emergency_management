@@ -109,3 +109,5 @@ pub fn healthcheck() -> String {
 
 // UniFFI generates the required unmangled C ABI exports from the UDL.
 uniffi::include_scaffolding!("reticulum_mobile");
+
+mod telemetry_publication;

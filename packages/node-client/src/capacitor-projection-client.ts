@@ -1,3 +1,5 @@
+import { toTelemetryPublication } from "./telemetry-converters";
+import type { TelemetryPublicationSnapshot } from "./contracts-telemetry";
 import type { AppSettingsRecord, BlockOnboardingDraft, BlockOnboardingImportRequest, BlockOnboardingImportResult, BlockOnboardingInspection, ChecklistDeleteOptions, ChecklistRecord, ChecklistTemplateRecord, ChecklistUserTaskStatus, CommunityStatusProjectionRecord, ConversationRecord, EamProjectionRecord, EamReadinessSummaryRecord, EamTeamSummaryRecord, EventProjectionRecord, HouseholdMode, HouseholdSituation, HouseholdSituationRecord, InstalledPluginRecord, LegacyImportPayload, MessageRecord, OperationalSummary, PeerRecord, PluginCapabilityRecord, PluginSensorRecord, PowerStateRecord, SavedPeerRecord, SignedBlockOnboardingEnvelope, SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord, SosSettingsRecord, SosStatusRecord, SosTriggerSource, SyncStatus, TelemetryPositionRecord } from "./contracts";
 import { type ReticulumNodePlugin } from "./capacitor-plugin";
 import { sosAudioToPlugin, sosSettingsToPlugin, toOperationalSummary, toSosAlertRecord, toSosAudioRecord, toSosLocationRecord, toSosSettingsRecord, toSosStatusRecord } from "./client-config-converters";
@@ -379,6 +381,11 @@ export abstract class CapacitorProjectionClient {
   async deleteEvent(uid: string, deletedAtMs?: number): Promise<void> {
     await this.ready();
     await this.plugin.deleteEvent({ uid, deletedAtMs });
+  }
+
+  async getTelemetryPublication(): Promise<TelemetryPublicationSnapshot | null> {
+    await this.ready();
+    return toTelemetryPublication((await this.plugin.getTelemetryPositions()).publication);
   }
 
   async getTelemetryPositions(): Promise<TelemetryPositionRecord[]> {

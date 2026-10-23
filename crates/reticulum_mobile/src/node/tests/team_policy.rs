@@ -147,7 +147,7 @@ fn event_and_telemetry_targets_follow_active_team_without_tier_gate() {
         assert_eq!(targets.len(), members.len());
         let telemetry = build_runtime_telemetry_destinations(
             &build_status_for_tests(),
-            &[peer.clone()],
+            &[peer.clone()], &saved_telemetry_fixtures(&[peer.clone()]),
             None,
             None,
             Some(&snapshot),
@@ -183,7 +183,7 @@ fn telemetry_never_sends_exact_position_through_hub() {
     }];
     let targets = build_runtime_telemetry_destinations(
         &build_status_for_tests(),
-        &peers,
+        &peers, &saved_telemetry_fixtures(&peers),
         None,
         Some(&config),
         Some(&snapshot),

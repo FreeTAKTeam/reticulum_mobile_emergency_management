@@ -17,6 +17,10 @@ impl ReceiptHandler for RuntimeReceiptBridge {
             return;
         };
         match guard.remove(&packet_hash_hex) {
+            Some(ReceiptMessageTracking::Awaited { signal, .. }) => {
+                drop(guard);
+                signal.notify_one();
+            }
             Some(ReceiptMessageTracking::Pending { message_id_hex, .. }) => {
                 drop(guard);
                 let _ = self.tracker.tx.send(message_id_hex);
@@ -39,7 +43,8 @@ impl ReceiptHandler for RuntimeReceiptBridge {
                             ReceiptMessageTracking::Observed { recorded_at_ms } => {
                                 Some((hash.clone(), *recorded_at_ms))
                             }
-                            ReceiptMessageTracking::Pending { .. } => None,
+                            ReceiptMessageTracking::Pending { .. }
+                            | ReceiptMessageTracking::Awaited { .. } => None,
                         })
                         .min_by_key(|(_, recorded_at_ms)| *recorded_at_ms)
                         .map(|(hash, _)| hash)
@@ -71,7 +76,7 @@ fn register_receipt_tracking(
     let observed_before_registration = if let Ok(mut guard) = tracker.receipt_message_ids.lock() {
         match guard.remove(receipt_hash_hex) {
             Some(ReceiptMessageTracking::Observed { .. }) => true,
-            Some(existing @ ReceiptMessageTracking::Pending { .. }) => {
+            Some(existing @ (ReceiptMessageTracking::Pending { .. } | ReceiptMessageTracking::Awaited { .. })) => {
                 guard.insert(receipt_hash_hex.to_string(), existing);
                 false
             }
@@ -168,14 +173,14 @@ fn transport_state_for_message_state(state: MessageState) -> TransportDeliverySt
 }
 
 fn emit_lxmf_delivery(
+    app_state: &AppStateStore,
     bus: &EventBus,
     pending: &PendingLxmfDelivery,
     status: LxmfDeliveryStatus,
     detail: Option<String>,
 ) {
     let now = now_ms();
-    bus.emit(NodeEvent::LxmfDelivery {
-        update: LxmfDeliveryUpdate {
+    let update = LxmfDeliveryUpdate {
             message_id_hex: pending.message_id_hex.clone(),
             destination_hex: pending.destination_hex.clone(),
             source_hex: None,
@@ -194,11 +199,17 @@ fn emit_lxmf_delivery(
             detail,
             sent_at_ms: pending.sent_at_ms,
             updated_at_ms: now,
-        },
-    });
+    };
+    match app_state.record_telemetry_delivery(&update) {
+        Ok(Some(invalidation)) => bus.emit(NodeEvent::ProjectionInvalidated { invalidation }),
+        Ok(None) => {},
+        Err(error) => bus.emit(NodeEvent::Error { code: "IoError".to_string(), message: format!("telemetry delivery projection failed: {error}") }),
+    }
+    bus.emit(NodeEvent::LxmfDelivery { update });
 }
 
 fn emit_lxmf_delivery_with_source(
+    app_state: &AppStateStore,
     bus: &EventBus,
     pending: &PendingLxmfDelivery,
     source_hex: Option<String>,
@@ -207,8 +218,7 @@ fn emit_lxmf_delivery_with_source(
     detail: Option<String>,
 ) {
     let now = now_ms();
-    bus.emit(NodeEvent::LxmfDelivery {
-        update: LxmfDeliveryUpdate {
+    let update = LxmfDeliveryUpdate {
             message_id_hex: pending.message_id_hex.clone(),
             destination_hex: pending.destination_hex.clone(),
             source_hex,
@@ -227,8 +237,13 @@ fn emit_lxmf_delivery_with_source(
             detail,
             sent_at_ms: pending.sent_at_ms,
             updated_at_ms: now,
-        },
-    });
+    };
+    match app_state.record_telemetry_delivery(&update) {
+        Ok(Some(invalidation)) => bus.emit(NodeEvent::ProjectionInvalidated { invalidation }),
+        Ok(None) => {},
+        Err(error) => bus.emit(NodeEvent::Error { code: "IoError".to_string(), message: format!("telemetry delivery projection failed: {error}") }),
+    }
+    bus.emit(NodeEvent::LxmfDelivery { update });
 }
 
 fn create_transport_data_packet(destination: AddressHash, bytes: &[u8]) -> Packet {

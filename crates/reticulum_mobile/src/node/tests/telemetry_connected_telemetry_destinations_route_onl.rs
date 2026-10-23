@@ -28,7 +28,7 @@ fn connected_telemetry_destinations_exclude_the_hub() {
 
     let destinations = build_runtime_telemetry_destinations(
         &status,
-        peers.as_slice(),
+        peers.as_slice(), &saved_telemetry_fixtures(peers.as_slice()),
         None,
         Some(&config),
         Some(&snapshot),
@@ -47,7 +47,7 @@ fn connected_telemetry_destinations_fail_closed_without_team_directory() {
     );
 
     let destinations =
-        build_runtime_telemetry_destinations(&status, &[], None, Some(&config), None)
+        build_runtime_telemetry_destinations(&status, &[], &[], None, Some(&config), None)
             .expect("connected telemetry destinations");
 
     assert!(destinations.is_empty());
@@ -58,7 +58,7 @@ fn connected_telemetry_without_team_directory_does_not_route_to_unselected_hub()
     let status = build_status_for_tests();
     let config = build_config_fingerprint_for_tests(HubMode::Connected {}, None);
 
-    let destinations = build_runtime_telemetry_destinations(&status, &[], None, Some(&config), None)
+    let destinations = build_runtime_telemetry_destinations(&status, &[], &[], None, Some(&config), None)
         .expect("connected telemetry should fail closed");
 
     assert!(destinations.is_empty());
@@ -108,7 +108,7 @@ fn semi_autonomous_telemetry_destinations_use_hub_snapshot() {
 
     let destinations = build_runtime_telemetry_destinations(
         &status,
-        peers.as_slice(),
+        peers.as_slice(), &saved_telemetry_fixtures(peers.as_slice()),
         None,
         Some(&config),
         Some(&snapshot),
@@ -118,7 +118,7 @@ fn semi_autonomous_telemetry_destinations_use_hub_snapshot() {
     assert_eq!(destinations.len(), 1);
     assert_eq!(
         destinations[0].app_destination_hex,
-        "abababababababababababababababab"
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     );
     assert!(matches!(destinations[0].send_mode, SendMode::Auto {}));
 }
@@ -155,7 +155,7 @@ fn semi_autonomous_telemetry_destinations_use_propagation_for_unsaved_snapshot_p
 
     let destinations = build_runtime_telemetry_destinations(
         &status,
-        peers.as_slice(),
+        peers.as_slice(), &saved_telemetry_fixtures(peers.as_slice()),
         Some("56565656565656565656565656565656"),
         Some(&config),
         Some(&snapshot),
@@ -165,7 +165,7 @@ fn semi_autonomous_telemetry_destinations_use_propagation_for_unsaved_snapshot_p
     assert_eq!(destinations.len(), 1);
     assert_eq!(
         destinations[0].app_destination_hex,
-        "abababababababababababababababab"
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     );
     assert!(matches!(destinations[0].send_mode, SendMode::PropagationOnly {}));
 }
@@ -196,7 +196,7 @@ fn semi_autonomous_telemetry_excludes_contacts_without_roster() {
 
     let destinations = build_runtime_telemetry_destinations(
         &status,
-        peers.as_slice(),
+        peers.as_slice(), &saved_telemetry_fixtures(peers.as_slice()),
         None,
         Some(&config),
         None,
@@ -222,7 +222,7 @@ fn telemetry_targets_keep_direct_peer_before_lxmf_announce_is_current() {
 
     let destinations = build_runtime_telemetry_destinations(
         &status,
-        peers.as_slice(),
+        peers.as_slice(), &saved_telemetry_fixtures(peers.as_slice()),
         Some("56565656565656565656565656565656"),
         Some(&config),
         Some(&test_team_snapshot(&["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"])),
@@ -232,7 +232,7 @@ fn telemetry_targets_keep_direct_peer_before_lxmf_announce_is_current() {
     assert_eq!(destinations.len(), 1);
     assert_eq!(
         destinations[0].app_destination_hex,
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     );
     assert!(matches!(destinations[0].send_mode, SendMode::Auto {}));
 }
@@ -251,7 +251,7 @@ fn telemetry_targets_use_direct_for_saved_peers_when_relay_is_active() {
 
     let destinations = build_runtime_telemetry_destinations(
         &status,
-        &[peer],
+        &[peer.clone()], &saved_telemetry_fixtures(&[peer]),
         Some("56565656565656565656565656565656"),
         Some(&config),
         Some(&test_team_snapshot(&["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"])),
@@ -261,7 +261,7 @@ fn telemetry_targets_use_direct_for_saved_peers_when_relay_is_active() {
     assert_eq!(destinations.len(), 1);
     assert_eq!(
         destinations[0].app_destination_hex,
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     );
     assert!(matches!(destinations[0].send_mode, SendMode::Auto {}));
 }
@@ -288,7 +288,7 @@ fn telemetry_targets_include_direct_and_propagation_fanout() {
 
     let destinations = build_runtime_telemetry_destinations(
         &status,
-        &[direct_peer, relay_peer],
+        &[direct_peer.clone(), relay_peer.clone()], &saved_telemetry_fixtures(&[direct_peer, relay_peer]),
         Some("56565656565656565656565656565656"),
         Some(&config),
         Some(&test_team_snapshot(&["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"])),
@@ -298,12 +298,12 @@ fn telemetry_targets_include_direct_and_propagation_fanout() {
     assert_eq!(destinations.len(), 2);
     assert_eq!(
         destinations[0].app_destination_hex,
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     );
     assert!(matches!(destinations[0].send_mode, SendMode::Auto {}));
     assert_eq!(
         destinations[1].app_destination_hex,
-        "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+        "efefefefefefefefefefefefefefefef"
     );
     assert!(matches!(
         destinations[1].send_mode,
@@ -312,7 +312,7 @@ fn telemetry_targets_include_direct_and_propagation_fanout() {
 }
 
 #[test]
-fn telemetry_targets_skip_stale_peers_without_relay() {
+fn telemetry_targets_skip_stale_peers_without_stored_route() {
     let status = build_status_for_tests();
     let config = build_config_fingerprint_for_tests(HubMode::Autonomous {}, None);
     let mut stale_peer = build_peer_record(
@@ -323,9 +323,13 @@ fn telemetry_targets_skip_stale_peers_without_relay() {
         true,
     );
     stale_peer.stale = true;
+    stale_peer.active_link = false;
+    stale_peer.lxmf_destination_hex = None;
+    stale_peer.announce_last_seen_at_ms = None;
+    stale_peer.lxmf_last_seen_at_ms = None;
 
     let destinations =
-        build_runtime_telemetry_destinations(&status, &[stale_peer], None, Some(&config), Some(&test_team_snapshot(&["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"])))
+        build_runtime_telemetry_destinations(&status, &[stale_peer.clone()], &saved_telemetry_fixtures(&[stale_peer]), None, Some(&config), Some(&test_team_snapshot(&["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"])))
             .expect("telemetry fallback targets");
 
     assert!(destinations.is_empty());
@@ -338,7 +342,7 @@ fn telemetry_targets_keep_direct_peer_when_relay_is_active_before_lxmf_route_is_
     let mut peer = build_peer_record(
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        false,
+        true,
         true,
         true,
     );
@@ -347,7 +351,7 @@ fn telemetry_targets_keep_direct_peer_when_relay_is_active_before_lxmf_route_is_
 
     let destinations = build_runtime_telemetry_destinations(
         &status,
-        &[peer],
+        &[peer.clone()], &saved_telemetry_fixtures(&[peer]),
         Some("56565656565656565656565656565656"),
         Some(&config),
         Some(&test_team_snapshot(&["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"])),
@@ -377,7 +381,7 @@ fn telemetry_targets_skip_unsaved_discovered_peers_when_relay_is_active() {
 
     let destinations = build_runtime_telemetry_destinations(
         &status,
-        &[peer],
+        &[peer.clone()], &saved_telemetry_fixtures(&[peer]),
         Some("56565656565656565656565656565656"),
         Some(&config),
         Some(&test_team_snapshot(&["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"])),
@@ -401,7 +405,7 @@ fn telemetry_targets_use_relay_for_fresh_route_without_active_link_when_relay_ex
 
     let destinations = build_runtime_telemetry_destinations(
         &status,
-        &[peer],
+        &[peer.clone()], &saved_telemetry_fixtures(&[peer]),
         Some("56565656565656565656565656565656"),
         Some(&config),
         Some(&test_team_snapshot(&["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"])),
@@ -411,7 +415,7 @@ fn telemetry_targets_use_relay_for_fresh_route_without_active_link_when_relay_ex
     assert_eq!(destinations.len(), 1);
     assert_eq!(
         destinations[0].app_destination_hex,
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     );
     assert!(matches!(
         destinations[0].send_mode,

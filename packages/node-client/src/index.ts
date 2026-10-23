@@ -168,3 +168,5 @@ export function bytesToBase64(bytes: Uint8Array): string {
 export function base64ToBytes(base64: string): Uint8Array {
   return decodeBase64ToBytes(base64);
 }
+
+export type { TelemetryPublicationState, TelemetryRecipientPublication, TelemetryReceiveFailure, TelemetryPublicationSnapshot } from "./contracts-telemetry";

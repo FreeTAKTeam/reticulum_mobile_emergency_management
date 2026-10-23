@@ -1,12 +1,4 @@
 impl Node {
-    fn upsert_event_with_class(
-        &self,
-        record: EventProjectionRecord,
-        traffic_class: OutboundTrafficClass,
-    ) -> Result<(), NodeError> {
-        self.upsert_event_with_destination_and_class(record, None, traffic_class)
-    }
-
     fn upsert_event_with_destination(
         &self,
         record: EventProjectionRecord,
@@ -259,108 +251,18 @@ impl Node {
         &self,
         position: TelemetryPositionRecord,
     ) -> Result<(), NodeError> {
-        let mut scheduled_sends = Vec::<(String, Vec<u8>, Vec<u8>, SendMode)>::new();
-        let bus = {
-            let mut inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
-            let status = inner
-                .status
-                .lock()
-                .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
-                .clone();
-            let invalidation = inner.app_state.record_local_telemetry_fix(&position)?;
-            emit_projection_invalidation(&inner.bus, invalidation);
-            inner.app_state.record_local_observer_fix(&position)?;
-            let summary = inner.app_state.bump_projection_revision(
-                ProjectionScope::OperationalSummary {},
-                None,
-                Some("telemetry-upserted".to_string()),
-            )?;
-            emit_projection_invalidation(&inner.bus, summary);
-
-            let now = now_ms();
-            let telemetry_due = inner
-                .next_telemetry_publish_at_ms
-                .is_none_or(|deadline| now >= deadline);
-            if inner.cmd_tx.is_some() && telemetry_due {
-                let normal_cadence = inner
-                    .app_state
-                    .get_app_settings()?
-                    .map(|settings| settings.telemetry.publish_interval_seconds)
-                    .unwrap_or(60);
-                let cadence = effective_power_cadence_seconds(
-                    normal_cadence,
-                    inner.power_state.saver_active,
-                );
-                inner.next_telemetry_publish_at_ms =
-                    Some(now.saturating_add(u64::from(cadence).saturating_mul(1_000)));
-                let peers = inner
-                    .peers_snapshot
-                    .lock()
-                    .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
-                    .clone();
-                let hub_directory_snapshot = inner
-                    .hub_directory_snapshot
-                    .lock()
-                    .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
-                    .clone();
-                let sync_status = inner
-                    .sync_status_snapshot
-                    .lock()
-                    .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
-                    .clone();
-                let telemetry_destinations = build_runtime_telemetry_destinations(
-                    &status,
-                    peers.as_slice(),
-                    sync_status.active_propagation_node_hex.as_deref(),
-                    inner.active_config.as_ref(),
-                    hub_directory_snapshot.as_ref(),
-                )?;
-                for target in telemetry_destinations {
-                    match build_telemetry_replication_payload(&position, &target) {
-                        Ok((body, fields)) => scheduled_sends.push((
-                            target.app_destination_hex.clone(),
-                            body,
-                            fields,
-                            target.send_mode,
-                        )),
-                        Err(err) => inner.bus.emit(NodeEvent::Error {
-                            code: "InvalidConfig".to_string(),
-                            message: format!(
-                                "telemetry replication skipped destination={} callsign={} reason={}",
-                                target.app_destination_hex, position.callsign, err
-                            ),
-                        }),
-                    }
-                }
-            }
-
-            inner.bus.clone()
-        };
-
-        for (destination_hex, body, fields_bytes, send_mode) in scheduled_sends {
-            if let Err(err) =
-                self.send_bytes_with_class(
-                    destination_hex.clone(),
-                    body,
-                    Some(fields_bytes),
-                    send_mode,
-                    OutboundTrafficClass::Telemetry {},
-                )
-            {
-                let message = format!(
-                    "telemetry replication delivery failed destination={} callsign={} reason={}",
-                    destination_hex, position.callsign, err
-                );
-                emit_replication_delivery_failure(&bus, message, &err);
-            }
-        }
-
-        Ok(())
+        self.retain_telemetry_fix(position)
     }
 
     pub fn delete_local_telemetry(&self, callsign: String) -> Result<(), NodeError> {
         let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         let invalidation = inner.app_state.delete_local_telemetry(&callsign)?;
+        emit_telemetry_projection(&inner.app_state, &inner.bus, |publication| {
+            if publication.fix.as_ref().is_some_and(|fix| fix.callsign.eq_ignore_ascii_case(callsign.trim())) {
+                publication.fix = None;
+                publication.recipients.clear();
+            }
+        })?;
         emit_projection_invalidation(&inner.bus, invalidation);
         let summary = inner.app_state.bump_projection_revision(
             ProjectionScope::OperationalSummary {},

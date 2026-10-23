@@ -122,23 +122,27 @@ fn telemetry_targets_from_peers_with_relay(
         if !has_capability_token(peer.app_data.as_deref(), "telemetry") {
             continue;
         }
-        if !peer_is_current_replication_target(peer) {
+        if !(peer_is_current_replication_target(peer)
+            || peer.saved && delivery_policy::peer_has_known_lxmf_route(peer))
+        {
             continue;
         }
         if !peer.saved && !peer.active_link {
             continue;
         }
 
-        let relay_ready = has_active_relay && peer_can_use_propagation_fallback(peer);
-        let direct_ready = peer_is_direct_delivery_ready(peer)
+        let relay_ready = has_active_relay && (peer_can_use_propagation_fallback(peer)
+            || peer.saved && delivery_policy::peer_has_known_lxmf_route(peer));
+        let direct_ready = peer_is_mission_direct_delivery_ready(peer, has_active_relay)
+            || (!has_active_relay && peer.saved && delivery_policy::peer_has_known_lxmf_route(peer))
             || peer_can_use_direct_when_relay_route_is_missing(peer, has_active_relay);
-        if !direct_ready && !relay_ready {
+        if !direct_ready && !relay_ready && !peer.saved {
             continue;
         }
         if seen.insert(destination_hex.clone()) {
             let target = MissionReplicationTarget {
                 app_destination_hex: destination_hex,
-                send_mode: if direct_ready {
+                send_mode: if direct_ready || !relay_ready {
                     SendMode::Auto {}
                 } else {
                     SendMode::PropagationOnly {}
@@ -178,49 +182,32 @@ fn telemetry_destinations_from_hub_snapshot(
 fn build_runtime_telemetry_destinations(
     status: &NodeStatus,
     peers: &[PeerRecord],
+    saved_peers: &[SavedPeerRecord],
     active_propagation_node_hex: Option<&str>,
     active_config: Option<&NodeConfigFingerprint>,
     hub_directory_snapshot: Option<&HubDirectorySnapshot>,
 ) -> Result<Vec<MissionReplicationTarget>, NodeError> {
     let self_destination_hex = normalize_hex_32(status.app_destination_hex.as_str());
-    let local_destinations = hub_directory_snapshot
-        .map(active_local_team_destinations)
-        .unwrap_or_default();
-    let local_peers = peers
-        .iter()
-        .filter(|peer| {
-            crate::team_membership::destinations_include_peer(
-                &local_destinations,
-                &peer.destination_hex,
-                peer.lxmf_destination_hex.as_deref(),
-                peer.identity_hex.as_deref(),
-            )
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    let Some(config) = active_config else {
-        return Ok(telemetry_targets_from_peers_with_relay(
+    let local_peers = telemetry_peers_with_saved(peers, saved_peers, hub_directory_snapshot);
+    let local_targets = canonicalize_telemetry_targets(status, telemetry_targets_from_peers_with_relay(
             &local_peers,
             self_destination_hex.as_deref(),
             active_propagation_node_hex,
-        ));
+        ), &local_peers, saved_peers);
+    let Some(config) = active_config else {
+        return Ok(local_targets);
     };
 
     let mode = effective_hub_mode(config.hub_mode, hub_directory_snapshot);
-    let local_targets = telemetry_targets_from_peers_with_relay(
-        &local_peers,
-        self_destination_hex.as_deref(),
-        active_propagation_node_hex,
-    );
     let Some(snapshot) = hub_directory_snapshot else {
         return Ok(local_targets);
     };
-    let directory_targets = build_transient_replication_targets(
+    let directory_targets = canonicalize_telemetry_targets(status, build_transient_replication_targets(
         status,
         peers,
         &telemetry_destinations_from_hub_snapshot(snapshot, self_destination_hex.as_deref()),
         active_propagation_node_hex,
-    );
+    ), peers, saved_peers);
     if matches!(mode, HubMode::Connected {}) {
         if active_team_has_caller_membership(snapshot)
             && !active_team_directory_destinations(snapshot, Some("telemetry")).is_empty()
@@ -234,7 +221,7 @@ fn build_runtime_telemetry_destinations(
         return Ok(local_targets
             .into_iter()
             .filter(|target| {
-                !destination_is_configured_hub(&target.app_destination_hex, Some(config), peers, &[])
+                !destination_is_configured_hub(&target.app_destination_hex, Some(config), peers, saved_peers)
             })
             .collect());
     }
@@ -355,6 +342,7 @@ fn peer_supports_mission_traffic(peer: &PeerRecord) -> bool {
         && has_capability_token(peer.app_data.as_deref(), "emergencymessages")
 }
 
+#[cfg(test)]
 fn peer_is_direct_delivery_ready(peer: &PeerRecord) -> bool {
     peer_connectivity_model(peer, false, peer.saved).direct_delivery_available()
 }

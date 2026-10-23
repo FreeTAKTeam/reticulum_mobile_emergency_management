@@ -1,3 +1,4 @@
+import type { TelemetryPublicationSnapshot } from "@reticulum/node-client";
 import {
   type ProjectionInvalidationEvent,
 } from "@reticulum/node-client";
@@ -8,6 +9,7 @@ import type { TelemetryPosition } from "../types/domain";
 import {
   telemetryService,
   TelemetryPermissionDeniedError,
+  TelemetryUnavailableError,
   type TelemetryPermissionState,
 } from "../services/telemetry";
 import { LEGACY_TELEMETRY_STORAGE_KEY } from "../utils/legacyState";
@@ -69,6 +71,7 @@ function keyFor(callsign: string): string {
 }
 
 export const useTelemetryStore = defineStore("telemetry", () => {
+  const publication = ref<TelemetryPublicationSnapshot | null>(null);
   const byCallsign = reactive<Record<string, TelemetryPosition>>({});
   const initialized = ref(false);
   const startupPermissionRequested = ref(false);
@@ -125,7 +128,9 @@ export const useTelemetryStore = defineStore("telemetry", () => {
         replaceTelemetryProjection(loadLegacyPositions());
         return;
       }
-      const positions = await getProjectionClient(nodeStore.settings.clientMode).getTelemetryPositions();
+      const client = getProjectionClient(nodeStore.settings.clientMode);
+      const [positions, snapshot] = await Promise.all([client.getTelemetryPositions(), client.getTelemetryPublication()]);
+      publication.value = snapshot;
       replaceTelemetryProjection(positions);
     }).catch((error: unknown) => {
       telemetryError.value = error instanceof Error ? error.message : String(error);
@@ -188,7 +193,7 @@ export const useTelemetryStore = defineStore("telemetry", () => {
         return;
       }
 
-      loopStatus.value = "gps_unavailable";
+      loopStatus.value = error instanceof TelemetryUnavailableError ? "gps_unavailable" : "error";
       telemetryError.value = error instanceof Error ? error.message : String(error);
     } finally {
       loopInFlight.value = false;
@@ -390,6 +395,7 @@ export const useTelemetryStore = defineStore("telemetry", () => {
   );
 
   return {
+    publication,
     byCallsign,
     positions,
     activePositions,

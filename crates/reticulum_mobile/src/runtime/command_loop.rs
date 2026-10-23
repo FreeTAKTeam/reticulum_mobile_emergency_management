@@ -147,7 +147,8 @@
                             request.send_mode,
                             SendTaskClass::General,
                             true,
-                        )
+                        OutboundTrafficClass::Chat {},
+)
                         .await?;
                         let method = match (report.method, report.representation) {
                             (LxmfDeliveryMethod::Propagated {}, _) => MessageMethod::Propagated {},
@@ -325,7 +326,8 @@
                             },
                             SendTaskClass::General,
                             true,
-                        )
+                        OutboundTrafficClass::Chat {},
+)
                         .await?;
                         let retried_state = if report.used_propagation_node
                             && matches!(

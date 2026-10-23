@@ -295,7 +295,8 @@ impl AppStateStore {
                  VALUES (?1, ?2, ?3)
                  ON CONFLICT(callsign_key) DO UPDATE SET
                     updated_at_ms = excluded.updated_at_ms,
-                    json = excluded.json",
+                    json = excluded.json
+                 WHERE excluded.updated_at_ms >= telemetry_positions.updated_at_ms",
                 params![
                     position.callsign.to_ascii_lowercase(),
                     crate::numeric::u64_to_i64_saturating(position.updated_at_ms),
