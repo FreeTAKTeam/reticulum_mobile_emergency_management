@@ -4,7 +4,7 @@ Status: **pending physical run**. The user deferred LoRa testing until all softw
 and signed-candidate preparation is complete. Do not publish, close milestone 13,
 or claim field qualification from host/browser tests.
 
-Record the candidate APK/AAB SHA-256, REM commit, LXMF-rs commit, RCH commit/version,
+Record the candidate APK/AAB SHA-256, REM commit, LXMF-rs commit, RCH commit/version when participating,
 phone model/OS, RNode identity/firmware, RF band/frequency/bandwidth/spreading factor/
 coding rate/transmit power, and the selected Android transport on both phones.
 Keep identity/command/message IDs and reason codes in the evidence; redact exact
@@ -20,9 +20,13 @@ positions from normal logs and exported summaries.
 | Trust and fan-out | Removed/out-of-team/non-capable peers receive no exact position. One failed target does not prevent another recipient's acceptance. Connected hub filtering is unchanged. | Pending |
 | No route / timeout / rejection | Waiting/queued/transmitted/transport receipt/app ACK remain distinct. Invalid telemetry yields a correlated rejection and a typed position-free diagnostic. | Pending |
 | Background / permission / battery | Background and restart behavior; revoked/re-granted location; GPS unavailable; saver cadence; disabled/expired sharing. Never infer delivery from the GPS timer. | Pending |
-| RCH #258 chain | Record exact RCH build and independently verify upload → persisted record → map → collector, with correlated command/ACK and installed-client evidence. | Pending |
+| RCH #258 coordination | Record the participating RCH build and coordinate upload → persistence → map → collector evidence/status with RCH #258. Its Columba/Sideband installed-client acceptance remains a separate RCH gate. | Tracked separately |
 
 After all required cases pass, attach evidence to the release qualification record,
 verify the final APK digest and source identity again, and publish from the approved
 source. If code changes after the run, rebuild and repeat affected cases on the new
 exact candidate.
+
+RCH #258 is coordination work, not an additional requirement to close that issue
+or complete its separate Columba/Sideband matrix before REM publication. This does
+not waive the REM LoRa and Android cases above.
