@@ -1,5 +1,17 @@
 # Telemetry reliability and REM 1.5.5 Implementation Plan
 
+## Completed release — 23 October 2026
+
+[PR #310](https://github.com/FreeTAKTeam/reticulum_mobile_emergency_management/pull/310)
+merged the five implementation issues. [REM 1.5.5](https://github.com/FreeTAKTeam/reticulum_mobile_emergency_management/releases/tag/1.5.5)
+is published from exact tested source `807041681430404f06dbac9b257fa5a192bed7e9`.
+The user approved publication with partial physical evidence; deferred scenarios
+are tracked in [#311](https://github.com/FreeTAKTeam/reticulum_mobile_emergency_management/issues/311)
+and are not reported as passed. The published APK/AAB were downloaded anonymously
+and verified for checksums, signing continuity, archive contents and alignment.
+Milestone 13 is closed. Earlier preparation entries below describe their original
+point in time and do not reinstate a publication hold.
+
 **Intent:** Implement milestone 13 (#272–#276) and prepare a signed Android release candidate.
 **Current Behavior:** Telemetry selects live, already linked peers, advances cadence without recipients, discards unsent fixes, and silently drops invalid fields.
 **Expected Outcome:** Authorized telemetry can initiate a direct link; the latest pending fix survives readiness changes/restart; operators see local acquisition separately from per-recipient transmission and application acknowledgement.

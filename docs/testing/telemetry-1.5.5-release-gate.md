@@ -1,43 +1,61 @@
-# REM 1.5.5 telemetry final release gate
+# REM 1.5.5 field-validation record
 
-Status: **partial physical evidence; release held**. The signed `3d443b4`
-candidate demonstrated bidirectional LoRa Resource delivery and correlated
-application acceptance on 23 October 2026. Xiaomi used a real Android location;
-Pixel used a labelled Android mock location because indoor GNSS was unavailable.
-Pixel receiver map persistence survived restart. Reverse delivery required a
-controlled retry after an earlier Resource transfer timed out. Do not describe
-that as first-attempt acceptance.
+Status: **publication approved with partial physical evidence**. On 23 October
+2026 the user approved release: “OK i think we are good for release”. The
+unperformed physical scenarios below are deferred to [#311](https://github.com/FreeTAKTeam/reticulum_mobile_emergency_management/issues/311) and
+are not reported as passed. This release decision supersedes earlier candidate
+publication holds; full field qualification is not asserted.
 
-The Poco has been returned to the user and is no longer attached to USB. Leave
-it untouched. Android battery checks exposed a synchronous community fan-out
-ANR; the corrected candidate must repeat those affected checks. Firmware queue
-clearing, pre-readiness recovery, malformed two-phone telemetry and remaining
-Android cases still need explicit evidence. Do not publish, close milestone 13,
-or claim full field qualification from software tests or partial radio results.
+Build source: `807041681430404f06dbac9b257fa5a192bed7e9`. The signed APK/AAB bytes
+are unchanged from the verified candidate. See the accompanying manifest for
+checksums, signer continuity, native libraries and pinned upstream revisions.
 
-Record the candidate APK/AAB SHA-256, REM commit, LXMF-rs commit, RCH commit/version when participating,
-phone model/OS, RNode identity/firmware, RF band/frequency/bandwidth/spreading factor/
-coding rate/transmit power, and the selected Android transport on both phones.
-Keep identity/command/message IDs and reason codes in the evidence; redact exact
+## Confirmed evidence
+
+- All applicable build-source CI checks passed: 503 Rust, 56 Android JVM,
+  171 app, 40 node-client and 128 browser tests, plus formatting, clippy,
+  source-size, builds and dependency audits.
+- Prior exact `3d443b4` candidate testing demonstrated LoRa Resource telemetry
+  delivery and correlated application acceptance in both directions. Xiaomi
+  used a real Android fix; Pixel used a labelled mock fix because indoor GNSS
+  was unavailable. Pixel receiver persistence survived restart. Reverse delivery
+  required a controlled retry after an earlier Resource timeout.
+- Final exact normal `8070416` Pixel APK: five battery state/resume cases passed
+  with a connected RNode. Original battery reporting and permission flags were
+  restored. A same-source diagnostic build separately verified native permission
+  revoke/regrant and unavailable-provider handling; these were limited API checks.
+- The user confirmed two-way chat while Poco was off USB. On the final normal
+  Pixel APK, Poco telemetry arrived at 14:54:32 local (267-byte Resource, command
+  `t:169ee60ea47631b8`); Pixel sent its application result at 14:54:43.
+- Marker creation arrived at 14:57:15 (909-byte Resource, command
+  `marker-6d4aa7c5773335802709930b858c26ac`). Pixel displayed Drone 1 and sent
+  its application result at 14:58:16. Rename command
+  `marker-b74031ce99d9354eb1f7d77f3c7c29a4` arrived at 15:05:07 and the public
+  map displayed Drone test. The user confirmed both names refer to the same marker.
+- These later arrivals recovered naturally: no added test sends, app restarts
+  or queue clearing occurred during recovery. One earlier incoming transfer
+  targeted an invalidated Pixel session after an APK swap. That observation
+  was not associated with every Poco queue entry.
+
+## Deferred physical scenarios
+
+| Case | Current scope |
+| --- | --- |
+| Both-direction cold LoRa with documented empty firmware queues and no warm-up | Prior bidirectional telemetry evidence is partial; remaining strict matrix deferred to #311. |
+| Enable before readiness; multiple offline fixes; independent fan-out; saved-only restart on both phones | Host regressions pass. Remaining physical observations deferred to #311. |
+| Trust/membership changes and connected-hub filtering on physical devices | Host coverage passes. Remaining physical observations deferred to #311. |
+| Deliberately malformed two-phone telemetry | Missing-latitude Resource obtained transport receipt but no correlated application rejection before timeout; cause unconfirmed. Deferred to #311. |
+| Background acquisition/delivery, permission-to-fix workflow, saver cadence, disabled/expired sharing | Battery/resume and limited native APIs verified as above. Remaining observations deferred to #311. |
+| Queued marker moves and deletions | Creation and rename confirmed; remaining backlog operations unconfirmed and tracked in #311. |
+
+Poco stayed off USB during the later observations, so its final installed APK
+and processing of the latest application results were not independently inspected
+again. The screenshot's newer 14:54:46 fix was separately queued for several
+recipients; queue admission does not assert delivery. Preserve queued user changes
+before any firmware reset or sender restart.
+
+Record exact APK/source/upstream identities, phone/OS, RNode firmware and RF
+profile for future runs. Keep command/message IDs and reason codes; omit exact
 positions from normal logs and exported summaries.
 
-| Case | Required observation | Result |
-| --- | --- | --- |
-| A → B, cold LoRa only | No TCP, chat/SOS/manual connect/Resource warm-up. First telemetry selects the saved team peer, creates its route/link, reaches receiver persistence/map, and returns correlated application acceptance. Record command/message ID, selected Packet/Resource representation and RNode interface. | Pending |
-| B → A, cold LoRa only | Repeat from clean process startup, with the opposite sender and the same evidence. | Pending |
-| Enable before radio ready | Local fix is visible as local/pending; the newest fix flushes when radio/path becomes ready, before the full periodic interval. | Pending |
-| Multiple offline fixes | One latest pending fix per destination/callsign; older fixes do not replay or regress the receiver map. | Pending |
-| Saved-only/restart | Restart both apps with existing contacts/team membership. Delivery resumes without re-saving or warm-up; accepted fixes do not replay. Record uncertain in-flight recovery separately. | Pending |
-| Trust and fan-out | Removed/out-of-team/non-capable peers receive no exact position. One failed target does not prevent another recipient's acceptance. Connected hub filtering is unchanged. | Pending |
-| No route / timeout / rejection | Waiting/queued/transmitted/transport receipt/app ACK remain distinct. Invalid telemetry yields a correlated rejection and a typed position-free diagnostic. | Pending |
-| Background / permission / battery | Background and restart behavior; revoked/re-granted location; GPS unavailable; saver cadence; disabled/expired sharing. Never infer delivery from the GPS timer. | Pending |
-| RCH #258 coordination | Record the participating RCH build and coordinate upload → persistence → map → collector evidence/status with RCH #258. Its Columba/Sideband installed-client acceptance remains a separate RCH gate. | Tracked separately |
-
-After all required cases pass, attach evidence to the release qualification record,
-verify the final APK digest and source identity again, and publish from the approved
-source. If code changes after the run, rebuild and repeat affected cases on the new
-exact candidate.
-
-RCH #258 is coordination work, not an additional requirement to close that issue
-or complete its separate Columba/Sideband matrix before REM publication. This does
-not waive the REM LoRa and Android cases above.
+RCH #258's installed Columba/Sideband acceptance remains a separate RCH gate.
