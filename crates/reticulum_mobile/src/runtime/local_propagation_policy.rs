@@ -53,7 +53,7 @@ fn local_recovery_allowed(
     wire: &[u8],
     event_direct: bool,
 ) -> bool {
-    if (now_ms() / 1000).min(i64::MAX as u64) as i64 >= status.expires_at {
+    if crate::numeric::u64_to_i64_saturating(now_ms() / 1000) >= status.expires_at {
         return false;
     }
     if *state.power_saver_rx.borrow() && !event_direct {

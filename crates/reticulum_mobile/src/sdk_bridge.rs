@@ -1,7 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::sync::{
-    atomic::{AtomicBool,AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     Arc,
 };
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -86,11 +86,11 @@ fn idempotency_key_for_send_attempt(
 
 pub(crate) fn map_sdk_error_to_node_error(err: SdkError) -> NodeError {
     match err.cause_code.as_deref() {
-        Some("UnresolvedRecipient")=>return NodeError::UnresolvedRecipient {},
-        Some("PayloadTooLarge")=>return NodeError::PayloadTooLarge {},
-        Some("StoreFull")=>return NodeError::StoreFull {},
-        Some("Expired")=>return NodeError::Expired {},
-        _=>{},
+        Some("UnresolvedRecipient") => return NodeError::UnresolvedRecipient {},
+        Some("PayloadTooLarge") => return NodeError::PayloadTooLarge {},
+        Some("StoreFull") => return NodeError::StoreFull {},
+        Some("Expired") => return NodeError::Expired {},
+        _ => {}
     }
     if err.cause_code.as_deref() == Some(SDK_CAUSE_LXMF_PACKET_TOO_LARGE) {
         return NodeError::LxmfPacketTooLarge {};
@@ -150,7 +150,7 @@ pub(crate) struct RuntimeLxmfSdk {
     client: Arc<Client<InProcessBackend>>,
     transport: SdkTransportState,
     send_sequence: AtomicU64,
-    pub(crate) local_recovery_inflight:Arc<AtomicBool>,
+    pub(crate) local_recovery_inflight: Arc<AtomicBool>,
     pub(crate) local_propagation: Option<lxmf_runtime::LocalPropagation>,
 }
 

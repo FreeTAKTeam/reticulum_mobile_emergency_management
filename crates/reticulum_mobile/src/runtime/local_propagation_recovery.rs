@@ -3,7 +3,7 @@ async fn publish_local_custody(state: &NodeRuntimeState, bus: &EventBus) -> Resu
         return Ok(());
     };
     let statuses = store
-        .status((now_ms() / 1000).min(i64::MAX as u64) as i64)
+        .status(crate::numeric::u64_to_i64_saturating(now_ms() / 1000))
         .map_err(crate::sdk_bridge::map_local_propagation_error)?;
     if statuses.is_empty() {
         return Ok(());
@@ -141,7 +141,7 @@ async fn recover_local_upload(
         return Ok(());
     }
     let _owner = PropagationFlagGuard(state.propagation_sync_inflight.clone());
-    let now = (now_ms() / 1000).min(i64::MAX as u64) as i64;
+    let now = crate::numeric::u64_to_i64_saturating(now_ms() / 1000);
     let policy_state = state.clone();
     let lora = destination_uses_rnode_ble_route(state, &relay).await;
     let limit = if lora {
@@ -206,7 +206,7 @@ async fn recover_local_custody_once(
     let Some(store) = &state.sdk.local_propagation else {
         return Ok(());
     };
-    let now = (now_ms() / 1000).min(i64::MAX as u64) as i64;
+    let now = crate::numeric::u64_to_i64_saturating(now_ms() / 1000);
     let mut statuses = store
         .status(now)
         .map_err(crate::sdk_bridge::map_local_propagation_error)?;
@@ -313,7 +313,7 @@ async fn acknowledge_local_application_message(
         &candidate.transient_id,
         &candidate.message_id,
         accepted,
-        (now_ms() / 1000).min(i64::MAX as u64) as i64,
+        crate::numeric::u64_to_i64_saturating(now_ms() / 1000),
     ) {
         let _ = publish_local_custody(state, bus).await;
         if !accepted {

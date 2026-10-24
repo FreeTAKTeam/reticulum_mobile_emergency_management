@@ -8,7 +8,9 @@ impl Node {
             .map_err(|_| NodeError::InternalError {})?
             .cmd_tx
             .clone();
-        let Some(tx) = tx else { return Ok(Vec::new()) };
+        let Some(tx) = tx else {
+            return Err(NodeError::NotRunning {});
+        };
         let (resp_tx, resp_rx) = cb::bounded(1);
         dispatch_command(&tx, Command::ListLocalPropagation { resp: resp_tx })?;
         resp_rx
@@ -18,7 +20,8 @@ impl Node {
     pub fn get_local_propagation_config(&self) -> crate::types::LocalPropagationConfig {
         crate::types::LocalPropagationConfig {
             capacity_bytes: lxmf_runtime::propagation_store::CAPACITY_BYTES,
-            retention_seconds: lxmf_runtime::propagation_store::RETENTION_SECS as u32,
+            retention_seconds: u32::try_from(lxmf_runtime::propagation_store::RETENTION_SECS)
+                .unwrap_or(u32::MAX),
             lora_poll_interval_seconds: crate::sdk_bridge::LOCAL_PROPAGATION_LORA_INTERVAL_SECONDS,
             lora_transfer_limit_bytes: crate::sdk_bridge::LOCAL_PROPAGATION_LORA_TRANSFER_BYTES,
         }
@@ -26,6 +29,10 @@ impl Node {
 }
 
 /// Reuse the current native routing/sharing owners for immutable stored destinations.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "authorization reuses the existing native routing inputs"
+)]
 pub(crate) fn local_custody_recipient_allowed(
     app_state: &AppStateStore,
     status: &NodeStatus,

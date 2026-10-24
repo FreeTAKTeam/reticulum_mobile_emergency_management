@@ -132,7 +132,7 @@ fn spawn_receipt_listener(
         while let Some(message_id_hex) = receipt_rx.recv().await {
             if let Some(store)=&state.sdk.local_propagation {
                 if let Ok(Some(record))=store.message(&message_id_hex) {
-                    let _=store.delivered(&record.transient_id,&record.message_id,false,(now_ms()/1000).min(i64::MAX as u64) as i64);
+                    let _=store.delivered(&record.transient_id,&record.message_id,false,crate::numeric::u64_to_i64_saturating(now_ms() / 1000));
                     let _=publish_local_custody(&state,&bus).await;
                     // The custody owner also decides whether a late proof is still admissible.
                     continue;

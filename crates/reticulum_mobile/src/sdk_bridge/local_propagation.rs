@@ -37,8 +37,10 @@ pub(crate) fn local_propagation_record(
         destination_hex: status.destination.clone(),
         state,
         encrypted_bytes: status.encrypted_bytes,
-        admitted_at_ms: (status.admitted_at.max(0) as u64).saturating_mul(1000),
-        expires_at_ms: (status.expires_at.max(0) as u64).saturating_mul(1000),
+        admitted_at_ms: crate::numeric::i64_to_u64_saturating(status.admitted_at)
+            .saturating_mul(1000),
+        expires_at_ms: crate::numeric::i64_to_u64_saturating(status.expires_at)
+            .saturating_mul(1000),
         may_exist_on_relay: status.uploaded,
     }
 }

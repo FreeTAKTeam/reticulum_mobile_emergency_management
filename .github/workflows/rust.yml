@@ -19,7 +19,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   # Immutable daemon-free local propagation implementation (LXMF-rs PR #679).
-  LXMF_RS_REF: 5d054d8750fafbd98f394225f083a9d356b65ca7
+  LXMF_RS_REF: 0d127f9076eab0fe6c71b37401a7a386dd175062
 
 jobs:
   web:

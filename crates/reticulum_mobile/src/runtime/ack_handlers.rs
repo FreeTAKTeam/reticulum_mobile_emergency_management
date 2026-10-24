@@ -214,7 +214,7 @@ async fn acknowledge_chat_delivery(
     if let Some(store)=&state.sdk.local_propagation {
         if let Ok(Some(candidate))=store.message(&message_id_hex) {
             if peer_matches_hex(&source_peer,&candidate.destination) {
-                let _=store.delivered(&candidate.transient_id,&candidate.message_id,true,(now_ms()/1000).min(i64::MAX as u64) as i64);
+                let _=store.delivered(&candidate.transient_id,&candidate.message_id,true,crate::numeric::u64_to_i64_saturating(now_ms() / 1000));
                 let _=publish_local_custody(state,bus).await;
                 return true;
             }

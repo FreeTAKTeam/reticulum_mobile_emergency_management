@@ -188,24 +188,29 @@ pub async fn run_node(
         bus.clone(),
     ));
     let sdk = match RuntimeLxmfSdk::new(
-            identity.address_hash().to_hex_string(),
-            SdkTransportState {
-                identity: identity.clone(),
-                transport: transport.clone(),
-                lxmf_destination: lxmf_destination.clone(),
-                known_destinations: known_destinations.clone(),
-                out_links: out_links.clone(),
-                active_propagation_node_hex: active_propagation_node_hex.clone(),
-            },
-            config.storage_dir.as_deref(),
-        ).await {
-            Ok(sdk)=>Arc::new(sdk),
-            Err(error)=>{
-                bus.emit(NodeEvent::Error {code:node_error_code(&error).to_owned(),message:format!("local propagation initialization failed: {error}")});
-                mark_runtime_stopped(&status,&bus);
-                return;
-            }
-        };
+        identity.address_hash().to_hex_string(),
+        SdkTransportState {
+            identity: identity.clone(),
+            transport: transport.clone(),
+            lxmf_destination: lxmf_destination.clone(),
+            known_destinations: known_destinations.clone(),
+            out_links: out_links.clone(),
+            active_propagation_node_hex: active_propagation_node_hex.clone(),
+        },
+        config.storage_dir.as_deref(),
+    )
+    .await
+    {
+        Ok(sdk) => Arc::new(sdk),
+        Err(error) => {
+            bus.emit(NodeEvent::Error {
+                code: node_error_code(&error).to_owned(),
+                message: format!("local propagation initialization failed: {error}"),
+            });
+            mark_runtime_stopped(&status, &bus);
+            return;
+        }
+    };
 
     let state = NodeRuntimeState {
         status: status.clone(),

@@ -54,7 +54,9 @@ async fn send_with_local_custody(
     if lora {
         request = request.with_extension(
             "reticulum.link_connect_timeout_ms",
-            serde_json::json!(RNODE_BLE_LINK_CONNECT_TIMEOUT.as_millis() as u64),
+            serde_json::json!(crate::numeric::u128_to_u64_saturating(
+                RNODE_BLE_LINK_CONNECT_TIMEOUT.as_millis()
+            )),
         );
         request = request.with_extension(
             lxmf_runtime::EXT_DIRECT_PACKET_MAX_WIRE_BYTES,
@@ -120,7 +122,7 @@ async fn send_with_local_custody(
             }
         }
     }
-    let now = (now_ms() / 1000).min(i64::MAX as u64) as i64;
+    let now = crate::numeric::u64_to_i64_saturating(now_ms() / 1000);
     let kind = match class {
         OutboundTrafficClass::Chat {} => lxmf_runtime::propagation_store::MessageKind::Chat,
         OutboundTrafficClass::Telemetry {} => {
@@ -137,7 +139,7 @@ async fn send_with_local_custody(
             .ok_or(NodeError::InvalidConfig {})?;
         let publication = state.app_state.telemetry_publication()?;
         publication.fix.map(|fix| {
-            ((fix.updated_at_ms / 1000).min(i64::MAX as u64) as i64)
+            crate::numeric::u64_to_i64_saturating(fix.updated_at_ms / 1000)
                 .saturating_add(i64::from(settings.telemetry.expire_after_minutes) * 60)
         })
     } else {
@@ -240,7 +242,7 @@ fn local_runtime_send_report(
 
 fn local_propagation_route_limits(lora: bool) -> lxmf_runtime::PropagationRouteLimits {
     lxmf_runtime::PropagationRouteLimits {
-        max_packet_bytes: lora.then_some(RNODE_BLE_DIRECT_PACKET_MAX_WIRE_BYTES as usize),
+        max_packet_bytes: lora.then_some(RNODE_BLE_DIRECT_PACKET_MAX_WIRE_BYTES),
         link_connect_timeout: lora.then_some(RNODE_BLE_LINK_CONNECT_TIMEOUT),
     }
 }

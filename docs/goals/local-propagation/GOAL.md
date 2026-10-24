@@ -26,7 +26,7 @@ Preserve the earlier unapproved routing worktree unchanged for reference.
 
 ## Qualified software checkpoint
 
-- LXMF-rs branch `corvo/local-propagation`, immutable revision `5d054d8750fafbd98f394225f083a9d356b65ca7`, draft PR https://github.com/FreeTAKTeam/LXMF-rs/pull/679. REM CI now pins that pushed revision.
+- LXMF-rs branch `corvo/local-propagation`, immutable revision `0d127f9076eab0fe6c71b37401a7a386dd175062`, draft PR https://github.com/FreeTAKTeam/LXMF-rs/pull/679. REM CI now pins that pushed revision.
 - Shared schema, SQL, validation, retention, full standard `/get` and `/offer` handler bodies, and sender-only custody are implemented. Daemon adapters retain the existing writer, authentication, counters, bounded processing and custody behavior.
 - One retained native owner holds transfer admission through Resource completion or observed cancellation. Store leases recover conservatively from SQLite finalization failures; tests cover cancellation, disconnect, timeout, storage rejection, restart and stale completion.
 - Local custody is the only retry/ACK owner after admission. Direct recovery does not create REM pending ACK timers. Authenticated negative application results stay rejected; late results cannot revive expired or evicted payloads.
@@ -57,3 +57,10 @@ Preserve the earlier unapproved routing worktree unchanged for reference.
 - Final source-size check: 697 first-party files, no ratcheted exceptions. Shared Rust module-size and feature-isolation checks pass. No compiler, source-size or dependency limit was weakened.
 - `ktlint` is unavailable, so codegen could not auto-format generated Kotlin; generation and Android compilation succeeded.
 - Hosted CI remains separate from these local results; draft PRs are not releases. The relay amendment and field matrix remain open.
+
+## Hosted CI follow-up
+
+- On REM `677b14e`, hosted Rust tests, the complete Playwright matrix, all web checks and dependency audits passed. Formatting and strict Clippy found source issues in the new integration; those were fixed without weakening checks.
+- Exact REM CI formatter and strict Clippy commands now pass locally, including the JNI macro. The full 509-test suite and stopped-runtime status regression pass after the fixes.
+- LXMF workspace Clippy passes on the CI stable toolchain (1.99.0). The existing integration guard against ignored errors passes after explicit channel-close and poisoned-lock diagnostics. Runtime cancellation/timeout/disconnect tests remain green.
+- The dependency pin follows LXMF `0d127f90`; hosted checks on both follow-up revisions remain pending. Android native artifact qualification above belongs to REM `677b14e` / LXMF `5d054d87`; final release packaging must rebuild after the pending relay-policy amendment.
