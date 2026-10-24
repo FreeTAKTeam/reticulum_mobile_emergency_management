@@ -318,5 +318,15 @@
     "alternate usable relay preflight guard focused regression",
     "hosted CI on final source and release artifact qualification"
   ],
-  "rem_revision": "f752ed67588365c465350ef4c0c9e39a0a4e97de"
+  "rem_revision": "f752ed67588365c465350ef4c0c9e39a0a4e97de",
+  "pr_status": "ready_for_review",
+  "additional_tests_deferred_by_user": {
+    "instruction": "Skip those tests for now and create a PR.",
+    "field_checks": [
+      "external propagation relay storage and recipient retrieval",
+      "actual phone OS reboot while a chat is stored",
+      "LoRa-only sender via another node with LoRa and TCP, including TCP loss and restoration"
+    ],
+    "additional_tests_run_for_pr": false
+  }
 }
