@@ -173,7 +173,9 @@ fn spawn_local_custody_recovery(
     bus: &EventBus,
     recipient_hint: Option<String>,
 ) {
-    if state.sdk.local_propagation.is_none() {
+    let Some(store) = &state.sdk.local_propagation else { return; };
+    let now = crate::numeric::u64_to_i64_saturating(now_ms() / 1000);
+    if !store.status(now).is_ok_and(|rows| rows.iter().any(|row| !row.state.terminal())) {
         return;
     }
     if state

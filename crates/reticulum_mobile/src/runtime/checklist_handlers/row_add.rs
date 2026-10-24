@@ -9,16 +9,18 @@ fn handle_inbound_checklist_row_add(ctx: &InboundChecklistCommand<'_>) -> bool {
     let _ = (command_map, content_bytes);
     let mut persisted_any = false;
 
-    let Some(checklist_uid) =
-        msgpack_get_checklist_arg(args, "checklist_uid").and_then(msgpack_checklist_uid)
+    let Some(checklist_uid) = msgpack_get_checklist_arg(args, "checklist_uid")
+        .and_then(msgpack_checklist_uid)
     else {
         return false;
     };
-    let Some(task_uid) = msgpack_get_checklist_arg(args, "task_uid").and_then(msgpack_string)
+    let Some(task_uid) =
+        msgpack_get_checklist_arg(args, "task_uid").and_then(msgpack_string)
     else {
         return false;
     };
-    let Some(number) = msgpack_get_checklist_arg(args, "number").and_then(msgpack_u64) else {
+    let Some(number) = msgpack_get_checklist_arg(args, "number").and_then(msgpack_u64)
+    else {
         return false;
     };
     let incoming_task_payload = checklist_task_from_row_add_args(
@@ -27,19 +29,22 @@ fn handle_inbound_checklist_row_add(ctx: &InboundChecklistCommand<'_>) -> bool {
         crate::numeric::u64_to_u32_saturating(number),
         timestamp.as_str(),
     );
-    let existing = match app_state.get_checklist_any(checklist_uid.as_str()) {
-        Ok(existing) => existing,
-        Err(_) => return false,
-    };
-    let already_saved = existing.is_some();
-    let mut checklist = existing.unwrap_or_else(|| {
-        hidden_placeholder_checklist_record(checklist_uid.as_str(), timestamp.as_str())
-    });
+    let mut checklist = app_state
+        .get_checklist_any(checklist_uid.as_str())
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| {
+            hidden_placeholder_checklist_record(
+                checklist_uid.as_str(),
+                timestamp.as_str(),
+            )
+        });
     if checklist.deleted_at.as_deref().is_some_and(|deleted_at| {
         !incoming_timestamp_is_newer(Some(deleted_at), timestamp.as_str())
-    }) || (checklist.deleted_at.is_some() && !is_hidden_placeholder_checklist(&checklist))
+    }) || (checklist.deleted_at.is_some()
+        && !is_hidden_placeholder_checklist(&checklist))
     {
-        return already_saved;
+        return false;
     }
     if let Some(task) = checklist
         .tasks
@@ -50,15 +55,19 @@ fn handle_inbound_checklist_row_add(ctx: &InboundChecklistCommand<'_>) -> bool {
             && (task.deleted_at.as_deref().is_some_and(|deleted_at| {
                 !incoming_timestamp_is_newer(Some(deleted_at), timestamp.as_str())
             }) || (!task_needs_row_metadata_hydration(task)
-                && !incoming_timestamp_is_newer(task.updated_at.as_deref(), timestamp.as_str())))
+                && !incoming_timestamp_is_newer(
+                    task.updated_at.as_deref(),
+                    timestamp.as_str(),
+                )))
         {
-            return already_saved;
+            return false;
         }
     }
     let due_relative_minutes = msgpack_get_checklist_arg(args, "due_relative_minutes")
         .and_then(msgpack_u64)
         .map(crate::numeric::u64_to_u32_saturating);
-    let legacy_value = msgpack_get_checklist_arg(args, "legacy_value").and_then(msgpack_string);
+    let legacy_value =
+        msgpack_get_checklist_arg(args, "legacy_value").and_then(msgpack_string);
     let due_dtg = msgpack_get_checklist_arg(args, "due_dtg").and_then(msgpack_string);
     let notes = msgpack_get_checklist_arg(args, "notes").and_then(msgpack_string);
     if let Some(incoming_task) = incoming_task_payload {
@@ -68,7 +77,8 @@ fn handle_inbound_checklist_row_add(ctx: &InboundChecklistCommand<'_>) -> bool {
             .position(|task| task.task_uid == task_uid)
         {
             let local_task = checklist.tasks[index].clone();
-            checklist.tasks[index] = merge_uploaded_task_record(local_task, incoming_task);
+            checklist.tasks[index] =
+                merge_uploaded_task_record(local_task, incoming_task);
         } else {
             checklist.tasks.push(incoming_task);
         }
@@ -83,8 +93,9 @@ fn handle_inbound_checklist_row_add(ctx: &InboundChecklistCommand<'_>) -> bool {
         task.notes = notes.clone();
         task.legacy_value = legacy_value;
         task.deleted_at = None;
-        task.updated_at = newest_timestamp(task.updated_at.as_deref(), Some(timestamp.as_str()))
-            .map(ToString::to_string);
+        task.updated_at =
+            newest_timestamp(task.updated_at.as_deref(), Some(timestamp.as_str()))
+                .map(ToString::to_string);
     } else {
         let cells = blank_task_cells(checklist.columns.as_slice(), task_uid.as_str());
         checklist.tasks.push(ChecklistTaskRecord {

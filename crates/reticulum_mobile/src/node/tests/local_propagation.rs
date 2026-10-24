@@ -19,9 +19,9 @@ fn saved_offline_mission_recipients_remain_targets_without_a_relay() {
         circle_tier: CircleTier::Inner {},
     };
     for targets in [
-        build_mission_replication_targets(&status, &[], std::slice::from_ref(&saved), None),
-        build_event_replication_targets(&status, &[], std::slice::from_ref(&saved), None),
-        build_mission_replication_targets(
+        mission_targets_with_offline(&status, &[], std::slice::from_ref(&saved), None),
+        event_targets_with_offline(&status, &[], std::slice::from_ref(&saved), None),
+        mission_targets_with_offline(
             &status,
             std::slice::from_ref(&peer),
             std::slice::from_ref(&saved),
@@ -33,14 +33,14 @@ fn saved_offline_mission_recipients_remain_targets_without_a_relay() {
         assert_eq!(targets[0].send_mode, SendMode::Auto {});
     }
     peer.app_data = Some("LXMF".to_owned());
-    assert!(build_mission_replication_targets(
+    assert!(mission_targets_with_offline(
         &status,
         std::slice::from_ref(&peer),
         std::slice::from_ref(&saved),
         None
     )
     .is_empty());
-    assert!(build_event_replication_targets(&status, &[peer], &[saved], None).is_empty());
+    assert!(event_targets_with_offline(&status, &[peer], &[saved], None).is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -73,6 +73,9 @@ async fn rejected_result_retires_custody_without_claiming_acceptance() {
         ]),
     )]))
     .unwrap();
+    let endpoint = relay.address();
+    relay.shutdown().await;
+    wait_no_interfaces(&node_a).await;
     let events = node_a.subscribe_events();
     node_a
         .send_bytes_with_class(
@@ -86,6 +89,8 @@ async fn rejected_result_retires_custody_without_claiming_acceptance() {
     let stored = node_a.list_local_propagation().unwrap();
     assert_eq!(stored.len(), 1);
     assert_ne!(stored[0].state, LocalPropagationState::Acknowledged);
+    let relay = TcpRelayHandle::start_at(&endpoint).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
     let result_fields = rmp_serde::to_vec(&MsgPackValue::Map(vec![(
         MsgPackValue::from(FIELD_RESULTS),
         MsgPackValue::Map(vec![
@@ -138,6 +143,8 @@ async fn chat_history_survives_rejected_local_admission() {
         BEGIN SELECT RAISE(ABORT,'injected admission failure'); END;",
     )
     .unwrap();
+    relay.shutdown().await;
+    wait_no_interfaces(&node_a).await;
     let result = node_a.send_lxmf(SendLxmfRequest {
         destination_hex: destination,
         body_utf8: "Keep this attempted chat after a crash".to_owned(),
@@ -168,5 +175,85 @@ async fn chat_history_survives_rejected_local_admission() {
     drop(conn);
     stop_node(node_a).await;
     stop_node(node_b).await;
+}
+
+async fn wait_no_interfaces(node: &Node) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while !node.get_status().interfaces.is_empty() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "fixture network must be offline"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn online_two_way_chat_never_writes_local_custody() {
+    let _guard = test_lock().lock().await;
+    let (relay, node_a, node_b) =
+        start_node_pair_with_profile("online-custody-isolation", true).await;
+    let mut connections = Vec::new();
+    for node in [&node_a, &node_b] {
+        let storage = node
+            .inner
+            .lock()
+            .unwrap()
+            .active_config
+            .as_ref()
+            .unwrap()
+            .storage_dir
+            .clone()
+            .unwrap();
+        let db =
+            rusqlite::Connection::open(Path::new(&storage).join("local-propagation.db")).unwrap();
+        db.execute_batch("CREATE TRIGGER reject_online_custody BEFORE INSERT ON propagation_owned BEGIN SELECT RAISE(ABORT,'online traffic entered custody'); END;").unwrap();
+        connections.push(db);
+    }
+    for (sender, receiver, body) in [
+        (&node_a, &node_b, "online a to b"),
+        (&node_b, &node_a, "online b to a"),
+    ] {
+        let subscription = receiver.subscribe_events();
+        let id = sender
+            .send_lxmf(SendLxmfRequest {
+                destination_hex: receiver.get_status().lxmf_destination_hex,
+                body_utf8: body.to_owned(),
+                title: None,
+                send_mode: SendMode::Auto {},
+            })
+            .expect(
+                "baseline online send succeeds even if custody storage rejects every admission",
+            );
+        wait_for_event(&subscription, TEST_TIMEOUT, |event| matches!(event,
+            NodeEvent::MessageReceived { message } if message.body_utf8 == body && message.message_id_hex == id
+        )).expect("recipient durably received the same wire");
+        assert!(sender.list_local_propagation().unwrap().is_empty());
+    }
+    stop_node(node_a).await;
+    stop_node(node_b).await;
+    drop(connections);
     relay.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unavailable_custody_storage_does_not_stop_the_normal_node() {
+    let _guard = test_lock().lock().await;
+    let storage = prepare_storage_dir("custody-unavailable-startup");
+    std::fs::write(
+        storage.join("local-propagation.db"),
+        b"not a sqlite database",
+    )
+    .unwrap();
+    let node = Node::with_storage_dir(storage.to_str()).unwrap();
+    node.start(build_config("custody-unavailable", &storage, ""))
+        .unwrap();
+    assert!(matches!(
+        node.list_local_propagation(),
+        Err(NodeError::IoError {})
+    ));
+    assert!(node.get_status().running);
+    node.announce_now()
+        .expect("normal command lane remains usable");
+    stop_node(node).await;
 }

@@ -19,32 +19,35 @@ fn handle_inbound_checklist_create(ctx: &InboundChecklistCommand<'_>) -> bool {
     let Some(checklist_uid) = checklist_uid else {
         return false;
     };
-    let Some(mission_uid) = msgpack_get_checklist_arg(args, "mission_uid").and_then(msgpack_string)
+    let Some(mission_uid) =
+        msgpack_get_checklist_arg(args, "mission_uid").and_then(msgpack_string)
     else {
         return false;
     };
-    let Some(template_uid) =
-        msgpack_get_checklist_arg(args, "template_uid").and_then(msgpack_checklist_template_uid)
+    let Some(template_uid) = msgpack_get_checklist_arg(args, "template_uid")
+        .and_then(msgpack_checklist_template_uid)
     else {
         return false;
     };
-    let Some(name) = msgpack_get_checklist_arg(args, "name").and_then(msgpack_string) else {
+    let Some(name) = msgpack_get_checklist_arg(args, "name").and_then(msgpack_string)
+    else {
         return false;
     };
     let description = msgpack_get_checklist_arg(args, "description")
         .and_then(msgpack_string)
         .unwrap_or_default();
-    let start_time = msgpack_get_checklist_arg(args, "start_time").and_then(msgpack_string);
-    let existing = match app_state.get_checklist_any(checklist_uid.as_str()) {
-        Ok(existing) => existing,
-        Err(_) => return false,
-    };
+    let start_time =
+        msgpack_get_checklist_arg(args, "start_time").and_then(msgpack_string);
+    let existing = app_state
+        .get_checklist_any(checklist_uid.as_str())
+        .unwrap_or_default();
     if !should_apply_inbound_checklist_create(existing.as_ref(), timestamp.as_str()) {
-        return existing.is_some();
+        return false;
     }
     let mut checklist = match existing {
         Some(record)
-            if record.deleted_at.is_some() && !is_hidden_placeholder_checklist(&record) =>
+            if record.deleted_at.is_some()
+                && !is_hidden_placeholder_checklist(&record) =>
         {
             blank_checklist_record(
                 checklist_uid.as_str(),
@@ -64,13 +67,16 @@ fn handle_inbound_checklist_create(ctx: &InboundChecklistCommand<'_>) -> bool {
     checklist.name = name;
     checklist.description = description;
     checklist.start_time = start_time;
-    if let Some(columns) = msgpack_json_arg::<Vec<ChecklistColumnRecord>>(args, "columns") {
+    if let Some(columns) =
+        msgpack_json_arg::<Vec<ChecklistColumnRecord>>(args, "columns")
+    {
         checklist.columns = columns;
     }
     if let Some(tasks) = msgpack_json_arg::<Vec<ChecklistTaskRecord>>(args, "tasks") {
         checklist.tasks = tasks;
     }
-    if let Some(participants) = msgpack_json_arg::<Vec<String>>(args, "participant_rns_identities")
+    if let Some(participants) =
+        msgpack_json_arg::<Vec<String>>(args, "participant_rns_identities")
     {
         checklist.participant_rns_identities = merge_uploaded_participants(
             checklist.participant_rns_identities,
@@ -78,11 +84,13 @@ fn handle_inbound_checklist_create(ctx: &InboundChecklistCommand<'_>) -> bool {
             source_identity.as_deref(),
         );
     }
-    if let Some(total_tasks) = msgpack_get_checklist_arg(args, "total_tasks").and_then(msgpack_u64)
+    if let Some(total_tasks) =
+        msgpack_get_checklist_arg(args, "total_tasks").and_then(msgpack_u64)
     {
         checklist.expected_task_count = Some(crate::numeric::u64_to_u32_saturating(total_tasks));
     }
-    if let Some(created_at) = msgpack_get_checklist_arg(args, "created_at").and_then(msgpack_string)
+    if let Some(created_at) =
+        msgpack_get_checklist_arg(args, "created_at").and_then(msgpack_string)
     {
         checklist.created_at = Some(created_at);
     }
@@ -114,7 +122,9 @@ fn handle_inbound_checklist_create(ctx: &InboundChecklistCommand<'_>) -> bool {
     if let Some(snapshot_json) =
         checklist_snapshot_json_from_content(content_bytes, checklist_uid.as_str())
     {
-        if let Ok(mut snapshot) = serde_json::from_str::<ChecklistRecord>(snapshot_json.as_str()) {
+        if let Ok(mut snapshot) =
+            serde_json::from_str::<ChecklistRecord>(snapshot_json.as_str())
+        {
             snapshot.uid = checklist_uid.clone();
             if snapshot.mission_uid.is_none() {
                 snapshot.mission_uid = checklist.mission_uid.clone();
@@ -165,8 +175,12 @@ fn handle_inbound_checklist_create(ctx: &InboundChecklistCommand<'_>) -> bool {
     hydrate_checklist_from_local_template(app_state, &mut checklist);
     set_checklist_last_changed_by(&mut checklist, source_identity.as_deref());
     normalize_checklist_record(&mut checklist);
-    persisted_any |=
-        upsert_inbound_checklist(app_state, bus, &checklist, "checklist-received-create");
+    persisted_any |= upsert_inbound_checklist(
+        app_state,
+        bus,
+        &checklist,
+        "checklist-received-create",
+    );
 
     persisted_any
 }

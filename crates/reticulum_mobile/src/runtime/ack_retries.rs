@@ -122,6 +122,10 @@ async fn retry_pending_ack_timeout_via_propagation(
     .await
     .map_err(|err| err.to_string())?;
 
+    if report.local_custody.is_some() {
+        emit_local_mission_custody(state, bus, &report);
+        return Ok(true);
+    }
     if !lxmf_send_succeeded(report.outcome) {
         return Err(format!("{:?}", send_outcome_to_udl(report.outcome)));
     }

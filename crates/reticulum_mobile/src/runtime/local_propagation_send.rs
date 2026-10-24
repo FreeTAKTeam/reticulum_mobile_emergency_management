@@ -1,8 +1,8 @@
 #[expect(
     clippy::too_many_arguments,
-    reason = "bounded routing reuses the existing send contract"
+    reason = "preserve the release delivery boundary"
 )]
-async fn send_with_local_custody(
+async fn send_lxmf_with_delivery_policy(
     state: &NodeRuntimeState,
     bus: &EventBus,
     requested_destination: &str,
@@ -11,116 +11,132 @@ async fn send_with_local_custody(
     fields: Option<Vec<u8>>,
     metadata: Option<MissionSyncMetadata>,
     mode: SendMode,
-    class: OutboundTrafficClass,
     task_class: SendTaskClass,
-    direct_attempts: usize,
+    allow_inbound_correspondent: bool,
+    class: OutboundTrafficClass,
+) -> Result<LxmfSendReport, NodeError> {
+    let mut failed_attempt = None;
+    let result = send_lxmf_with_legacy_delivery_policy(
+        state,
+        bus,
+        requested_destination,
+        body,
+        title.clone(),
+        fields.clone(),
+        metadata.clone(),
+        mode,
+        task_class,
+        allow_inbound_correspondent,
+        class,
+        &mut failed_attempt,
+    )
+    .await;
+    // Successful submissions keep the release's report and retry ownership.
+    let error = match result {
+        Ok(report) => return Ok(report),
+        Err(error) => error,
+    };
+    if state.sdk.local_propagation.is_none() && !state.sdk.local_propagation_init_failed
+        || !matches!(mode, SendMode::Auto {} | SendMode::PropagationOnly {})
+        || is_accepted_result_metadata(metadata.as_ref())
+        || !matches!(
+            class,
+            OutboundTrafficClass::Chat {}
+                | OutboundTrafficClass::Event {}
+                | OutboundTrafficClass::Eam {}
+                | OutboundTrafficClass::Checklist {}
+                | OutboundTrafficClass::Telemetry {}
+        )
+        || !matches!(error, NodeError::NetworkError {} | NodeError::Timeout {})
+    {
+        return Err(error);
+    }
+    if failed_attempt
+        .as_ref()
+        .is_some_and(|attempt| !attempt.unreachable)
+    {
+        return Err(error);
+    }
+    let resolved = resolve_lxmf_destination_hex(state, requested_destination).await;
+    let destination = parse_address_hash(&resolved)?;
+    let interfaces_active = has_active_reticulum_interface(state).await;
+    if interfaces_active && state.transport.delivery_link_available(&destination).await {
+        return Err(error);
+    }
+    if failed_attempt.is_none() && interfaces_active && state.transport.has_path(&destination).await
+    {
+        return Err(error);
+    }
+    if state.sdk.local_propagation_init_failed {
+        return Err(NodeError::IoError {});
+    }
+    // Without a native attempt, the baseline could only reject a missing current route.
+    // A busy admission or a failed live transfer never classifies the peer as offline.
+    deposit_offline_message(
+        state,
+        bus,
+        requested_destination,
+        body,
+        title,
+        fields,
+        metadata,
+        class,
+        failed_attempt.and_then(|attempt| attempt.outgoing),
+    )
+    .await
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "offline admission retains original message data"
+)]
+async fn deposit_offline_message(
+    state: &NodeRuntimeState,
+    bus: &EventBus,
+    requested_destination: &str,
+    body: &[u8],
+    title: Option<String>,
+    fields: Option<Vec<u8>>,
+    metadata: Option<MissionSyncMetadata>,
+    class: OutboundTrafficClass,
+    captured: Option<lxmf_runtime::CapturedOutgoing>,
 ) -> Result<LxmfSendReport, NodeError> {
     let store = state
         .sdk
         .local_propagation
         .as_ref()
         .ok_or(NodeError::IoError {})?;
-    let started = tokio::time::Instant::now();
-    let lora = active_interfaces_are_rnode_ble_only(&*state.active_interface_registry.lock().await);
-    let destination = resolve_lxmf_destination_for_send(state, requested_destination, false)
-        .await
-        .map_err(|_| NodeError::UnresolvedRecipient {})?;
-    let destination = parse_address_hash(&destination)?;
-    let lora = lora || destination_uses_rnode_ble_route(state, &destination).await;
-    let bound = Duration::from_secs(if lora { 180 } else { 60 });
-    if !local_permission_check(
-        state,
-        &destination.to_hex_string(),
-        class,
-        metadata.as_ref(),
-    ) {
+    let destination =
+        resolve_lxmf_destination_for_send(state, requested_destination, false).await?;
+    if !local_permission_check(state, &destination, class, metadata.as_ref()) {
         return Err(NodeError::InvalidConfig {});
     }
-    let remaining = bound
-        .checked_sub(started.elapsed())
-        .ok_or(NodeError::Timeout {})?;
-    let (prepared, mut request) = tokio::time::timeout(
-        remaining,
-        state.sdk.prepare_local_outgoing(
-            destination,
-            body,
-            title.as_deref(),
-            fields.as_deref(),
-            metadata.as_ref(),
-        ),
-    )
-    .await
-    .map_err(|_| NodeError::UnresolvedRecipient {})??;
-    if lora {
-        request = request.with_extension(
-            "reticulum.link_connect_timeout_ms",
-            serde_json::json!(crate::numeric::u128_to_u64_saturating(
-                RNODE_BLE_LINK_CONNECT_TIMEOUT.as_millis()
-            )),
-        );
-        request = request.with_extension(
-            lxmf_runtime::EXT_DIRECT_PACKET_MAX_WIRE_BYTES,
-            serde_json::json!(RNODE_BLE_DIRECT_PACKET_MAX_WIRE_BYTES),
-        );
-    }
-    let interfaces_active = !state.active_interface_registry.lock().await.is_empty();
-    if interfaces_active && matches!(mode, SendMode::Auto {}) {
-        for attempt in 0..direct_attempts.max(1) {
-            let Some(remaining) = bound.checked_sub(started.elapsed()) else {
-                break;
-            };
-            if *state.power_saver_rx.borrow()
-                || !local_permission_check(state, &prepared.destination(), class, metadata.as_ref())
-            {
-                break;
-            }
-            ensure_current_telemetry_delivery(
-                state,
-                class,
-                requested_destination,
+    let prepared = if let Some(captured) = captured {
+        store
+            .prepare_captured(
+                captured,
+                metadata
+                    .as_ref()
+                    .and_then(MissionSyncMetadata::tracking_key),
+            )
+            .map_err(crate::sdk_bridge::map_sdk_error_to_node_error)?
+    } else {
+        // This branch runs only when the release never constructed an outgoing wire.
+        state
+            .sdk
+            .prepare_local_outgoing(
+                parse_address_hash(&destination)?,
+                body,
+                title.as_deref(),
+                fields.as_deref(),
                 metadata.as_ref(),
-            )?;
-            let _permit = match tokio::time::timeout(
-                remaining,
-                acquire_send_task_permit(&state.send_task_permits, task_class),
             )
-            .await
-            {
-                Ok(result) => result?,
-                Err(_) => break,
-            };
-            let Some(remaining) = bound.checked_sub(started.elapsed()) else {
-                break;
-            };
-            if !local_permission_check(state, &prepared.destination(), class, metadata.as_ref()) {
-                return Err(NodeError::InvalidConfig {});
-            }
-            let policy_state = state.clone();
-            let policy_destination = prepared.destination();
-            let policy_metadata = metadata.clone();
-            let result = tokio::time::timeout(
-                remaining,
-                store.send_direct(&prepared, &request, remaining, move || {
-                    !*policy_state.power_saver_rx.borrow()
-                        && local_permission_check(
-                            &policy_state,
-                            &policy_destination,
-                            class,
-                            policy_metadata.as_ref(),
-                        )
-                }),
-            )
-            .await;
-            if let Ok(Ok(report)) = result {
-                return Ok(local_runtime_send_report(report, metadata));
-            }
-            if attempt + 1 < direct_attempts {
-                let Some(remaining) = bound.checked_sub(started.elapsed()) else {
-                    break;
-                };
-                tokio::time::sleep(remaining.min(Duration::from_secs(10))).await;
-            }
-        }
+            .await?
+            .0
+    };
+    ensure_current_telemetry_delivery(state, class, requested_destination, metadata.as_ref())?;
+    if !local_permission_check(state, &prepared.destination(), class, metadata.as_ref()) {
+        return Err(NodeError::InvalidConfig {});
     }
     let now = crate::numeric::u64_to_i64_saturating(now_ms() / 1000);
     let kind = match class {
@@ -152,44 +168,28 @@ async fn send_with_local_custody(
     let status = store
         .deposit_own(prepared, kind, now, expiry)
         .map_err(crate::sdk_bridge::map_local_propagation_error)?;
-    publish_local_custody(state, bus).await?;
     // This store is the only retry owner from this commit onward.
     state
         .pending_lxmf_deliveries
         .lock()
         .await
-        .retain(|_, pending| pending.message_id_hex != status.message_id);
-    if !*state.power_saver_rx.borrow() {
-        if let Some(remaining) = bound.checked_sub(started.elapsed()) {
-            if !remaining.is_zero() {
-                let relay = state.active_propagation_node_hex.lock().await.clone();
-                if let Some(relay) = relay.and_then(|value| parse_address_hash(&value).ok()) {
-                    let transfer_limit = if lora {
-                        crate::sdk_bridge::LOCAL_PROPAGATION_LORA_TRANSFER_BYTES as usize
-                    } else {
-                        25 * 1024 * 1024
-                    };
-                    let _ = tokio::time::timeout(
-                        remaining,
-                        recover_local_upload(
-                            state,
-                            bus,
-                            &status.transient_id,
-                            relay,
-                            transfer_limit,
-                        ),
-                    )
-                    .await;
-                }
-            }
-        }
+        .retain(|key, pending| {
+            pending.message_id_hex != status.message_id
+                && metadata
+                    .as_ref()
+                    .and_then(MissionSyncMetadata::tracking_key)
+                    != Some(key.as_str())
+        });
+    if let Some(key) = metadata
+        .as_ref()
+        .and_then(MissionSyncMetadata::tracking_key)
+    {
+        state.pending_lxmf_acknowledgements.lock().await.remove(key);
     }
-    let entry = state
-        .projection_journal
-        .local_propagation()?
-        .into_iter()
-        .find(|entry| entry.transient_id_hex == status.transient_id)
-        .unwrap_or_else(|| crate::sdk_bridge::local_propagation_record(&status));
+    if let Err(error) = publish_local_custody(state, bus).await {
+        warn!("[local-propagation] durable admission awaits projection retry: {error}");
+    }
+    let entry = crate::sdk_bridge::local_propagation_record(&status);
     Ok(LxmfSendReport {
         outcome: RnsSendOutcome::DroppedNoRoute,
         message_id_hex: status.message_id,
@@ -204,40 +204,6 @@ async fn send_with_local_custody(
         receipt_hash_hex: None,
         local_custody: Some(entry),
     })
-}
-
-fn local_runtime_send_report(
-    report: lxmf_runtime::InProcessSendReport,
-    metadata: Option<MissionSyncMetadata>,
-) -> LxmfSendReport {
-    LxmfSendReport {
-        outcome: match report.outcome {
-            lxmf_runtime::DeliveryOutcome::SentDirect => RnsSendOutcome::SentDirect,
-            lxmf_runtime::DeliveryOutcome::SentBroadcast => RnsSendOutcome::SentBroadcast,
-        },
-        message_id_hex: report.message_id.0,
-        resolved_destination_hex: report.resolved_destination,
-        track_delivery_timeout: metadata
-            .as_ref()
-            .is_some_and(|metadata| metadata.command_present && metadata.tracking_key().is_some()),
-        metadata,
-        used_propagation_node: matches!(report.method, lxmf_runtime::DeliveryMethod::Propagated),
-        method: match report.method {
-            lxmf_runtime::DeliveryMethod::Direct => LxmfDeliveryMethod::Direct {},
-            lxmf_runtime::DeliveryMethod::Opportunistic => LxmfDeliveryMethod::Opportunistic {},
-            lxmf_runtime::DeliveryMethod::Propagated => LxmfDeliveryMethod::Propagated {},
-        },
-        representation: match report.representation {
-            lxmf_runtime::DeliveryRepresentation::Packet => LxmfDeliveryRepresentation::Packet {},
-            lxmf_runtime::DeliveryRepresentation::Resource => {
-                LxmfDeliveryRepresentation::Resource {}
-            }
-        },
-        relay_destination_hex: report.relay_destination,
-        fallback_stage: None,
-        receipt_hash_hex: report.receipt_hash,
-        local_custody: None,
-    }
 }
 
 fn local_propagation_route_limits(lora: bool) -> lxmf_runtime::PropagationRouteLimits {

@@ -148,7 +148,7 @@ fn active_relay_transport_requires_non_rnode_ble_interface() {
             "connected",
         ),
     )]);
-    assert!(active_interfaces_include_relay_transport(&rnode_only));
+    assert!(!active_interfaces_include_relay_transport(&rnode_only));
     assert!(active_interfaces_are_rnode_ble_only(&rnode_only));
     assert!(active_interface_is_rnode_ble(
         &rnode_only,

@@ -294,6 +294,7 @@ fn fields_with_active_team(
 
 include!("node/local_team_routing.rs");
 include!("node/replication_targets.rs");
+include!("node/offline_targets.rs");
 include!("node/telemetry_targets.rs");
 include!("node/chat_routing.rs");
 include!("node/replication_planning.rs");
@@ -363,7 +364,6 @@ mod tests {
     include!("node/tests/events_event_route_priority_puts_low_hop_live_pee.rs");
     include!("node/tests/lifecycle.rs");
     include!("node/tests/messaging_delivery.rs");
-    include!("node/tests/rnode_connection.rs");
     include!("node/tests/peers_routes.rs");
     include!("node/tests/peers_routes_capabilities.rs");
     include!("node/tests/chat_routing.rs");

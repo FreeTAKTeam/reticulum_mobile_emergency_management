@@ -63,21 +63,25 @@ fn build_event_replication_targets(
         if self_destination_hex.as_deref() == Some(app_destination_hex.as_str()) {
             continue;
         }
-        if replication_target_already_selected(&app_destination_hex, &direct_destination_set, peers) {
+        if direct_destination_set.contains(app_destination_hex.as_str()) {
             continue;
         }
-        let eligible = peers.iter().find(|peer| {
-            peer_destination_hashes(peer).any(|hash| hash == app_destination_hex)
-        }).map(peer_supports_mission_traffic).unwrap_or_else(|| {
-            saved_peers.iter().any(|peer| {
+        if has_active_relay {
+            let relay_ready = saved_peers.iter().any(|peer| {
                 saved_peer_target_destination(peer).as_deref() == Some(app_destination_hex.as_str())
-                    && saved_peer_supports_mission_traffic(peer)
-            })
-        });
-        if !eligible {
+                    && saved_peer_has_stored_propagation_route(peer)
+            }) || peers.iter().any(|peer| {
+                normalize_hex_32(peer.destination_hex.as_str()).as_deref()
+                    == Some(app_destination_hex.as_str())
+                    && peer_supports_mission_traffic(peer)
+                    && peer_has_stored_propagation_route(peer)
+            });
+            if !relay_ready {
+                continue;
+            }
+        } else {
             continue;
         }
-        direct_destination_set.insert(app_destination_hex.clone());
         relay_targets.push(MissionReplicationTarget {
             app_destination_hex,
             send_mode: if has_active_relay {
@@ -207,7 +211,7 @@ fn build_runtime_mission_replication_targets(
 ) -> Result<Vec<MissionReplicationTarget>, NodeError> {
     let active_saved_peers = active_local_saved_peers(saved_peers, hub_directory_snapshot);
     let Some(config) = active_config else {
-        return Ok(build_mission_replication_targets(
+        return Ok(mission_targets_with_offline(
             status,
             peers,
             &active_saved_peers,
@@ -218,7 +222,7 @@ fn build_runtime_mission_replication_targets(
     let local_targets = if !active_saved_peers.is_empty()
         || hub_directory_snapshot.is_none_or(|snapshot| snapshot.local_teams.is_empty())
     {
-        build_mission_replication_targets(
+        mission_targets_with_offline(
             status,
             peers,
             &active_saved_peers,
@@ -286,7 +290,7 @@ fn build_runtime_event_replication_targets(
 ) -> Result<Vec<MissionReplicationTarget>, NodeError> {
     let active_saved_peers = active_local_saved_peers(saved_peers, hub_directory_snapshot);
     let Some(config) = active_config else {
-        return Ok(build_event_replication_targets(
+        return Ok(event_targets_with_offline(
             status,
             peers,
             &active_saved_peers,
@@ -297,7 +301,7 @@ fn build_runtime_event_replication_targets(
     let local_targets = if !active_saved_peers.is_empty()
         || hub_directory_snapshot.is_none_or(|snapshot| snapshot.local_teams.is_empty())
     {
-        build_event_replication_targets(
+        event_targets_with_offline(
             status,
             peers,
             &active_saved_peers,

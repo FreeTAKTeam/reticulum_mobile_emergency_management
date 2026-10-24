@@ -1,44 +1,15 @@
 impl RuntimeLxmfSdk {
-    pub(crate) async fn fetch_propagated_lxmf_from_relay<F, Fut>(
+    pub(crate) async fn fetch_propagated_lxmf_from_relay(
         &self,
         relay_hex: &str,
         limit: Option<u32>,
-        transfer_limit_bytes: Option<usize>,
-        import: F,
-    ) -> Result<lxmf_runtime::PropagationFetchReport, NodeError>
-    where
-        F: FnMut(Vec<u8>) -> Fut + Send + 'static,
-        Fut: std::future::Future<Output = bool> + Send,
-    {
-        let admission = self
-            .local_propagation
-            .as_ref()
-            .map(|store| store.try_transfer())
-            .transpose()
-            .map_err(map_sdk_error_to_node_error)?;
-        let bounded = transfer_limit_bytes.is_some();
-        let max_messages = usize::try_from(limit.unwrap_or(100)).unwrap_or(100);
-        let limits = lxmf_runtime::PropagationFetchLimits {
-            max_messages: if bounded {
-                max_messages.min(1)
-            } else {
-                max_messages
-            },
-            max_response_bytes: transfer_limit_bytes.unwrap_or(10_240_000),
-            request_timeout: Duration::from_secs(if bounded { 90 } else { 30 }),
-            link_timeout: Duration::from_secs(if bounded { 75 } else { 20 }),
-            link_attempts: if bounded { 1 } else { 3 },
-        };
-        self.client
-            .backend()
-            .fetch_propagated_messages(
-                parse_address_hash(relay_hex.trim())?,
-                limits,
-                admission,
-                import,
-            )
-            .await
-            .map_err(map_sdk_error_to_node_error)
+        direct_iface_hex: Option<&str>,
+    ) -> Result<PropagationFetchResult, NodeError> {
+        let relay_hex = relay_hex.trim();
+        if relay_hex.is_empty() {
+            return Err(NodeError::InvalidConfig {});
+        }
+        compat_fetch_propagated_lxmf(&self.transport, relay_hex, limit, direct_iface_hex).await
     }
 
     fn record_event(&self, event_type: &str, severity: Severity, payload: JsonValue) {

@@ -7,7 +7,8 @@
         };
         match cmd {
             Command::ListLocalPropagation {resp} => {
-                let result=publish_local_custody(&state,&bus).await.and_then(|()|state.projection_journal.local_propagation());
+                let result = if state.sdk.local_propagation_init_failed { Err(NodeError::IoError {}) }
+                    else { publish_local_custody(&state,&bus).await.and_then(|()|state.projection_journal.local_propagation()) };
                 let _=resp.send(result);
             },
             Command::Stop { resp } => {

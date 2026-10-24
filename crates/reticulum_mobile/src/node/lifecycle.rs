@@ -280,7 +280,7 @@ impl Node {
             },
         )?;
         resp_rx
-            .recv_timeout(SEND_COMMAND_TIMEOUT)
+            .recv_timeout(Duration::from_secs(20))
             .unwrap_or(Err(NodeError::Timeout {}))
     }
 

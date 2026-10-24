@@ -122,7 +122,8 @@ fn telemetry_targets_from_peers_with_relay(
         if !has_capability_token(peer.app_data.as_deref(), "telemetry") {
             continue;
         }
-        if !(peer_is_current_replication_target(peer) || peer.saved)
+        if !(peer_is_current_replication_target(peer)
+            || peer.saved && delivery_policy::peer_has_known_lxmf_route(peer))
         {
             continue;
         }
@@ -188,9 +189,10 @@ fn build_runtime_telemetry_destinations(
 ) -> Result<Vec<MissionReplicationTarget>, NodeError> {
     let self_destination_hex = normalize_hex_32(status.app_destination_hex.as_str());
     let local_peers = telemetry_peers_with_saved(peers, saved_peers, hub_directory_snapshot);
-    let local_targets = canonicalize_telemetry_targets(status, telemetry_targets_from_peers_with_relay(
+    let local_targets = canonicalize_telemetry_targets(status, telemetry_targets_with_offline(
+            status,
             &local_peers,
-            self_destination_hex.as_deref(),
+            &active_local_saved_peers(saved_peers, hub_directory_snapshot),
             active_propagation_node_hex,
         ), &local_peers, saved_peers);
     let Some(config) = active_config else {
@@ -378,7 +380,6 @@ fn peer_can_use_propagation_fallback(peer: &PeerRecord) -> bool {
     delivery_policy::peer_can_use_propagation_fallback(peer)
 }
 
-#[cfg(test)]
 fn peer_has_stored_propagation_route(peer: &PeerRecord) -> bool {
     peer_connectivity_model(peer, true, true).stored_propagation_available()
 }
@@ -395,7 +396,6 @@ fn saved_peer_supports_mission_traffic(peer: &SavedPeerRecord) -> bool {
         && has_capability_token(peer.app_data.as_deref(), "emergencymessages")
 }
 
-#[cfg(test)]
 fn saved_peer_has_stored_propagation_route(peer: &SavedPeerRecord) -> bool {
     saved_peer_supports_mission_traffic(peer)
         && normalize_hex_32(peer.destination_hex.as_str()).is_some()

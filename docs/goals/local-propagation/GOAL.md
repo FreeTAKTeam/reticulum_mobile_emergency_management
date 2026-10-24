@@ -5,7 +5,23 @@ The user authorized implementation and explicitly waived Phase 0 on 2026-10-23.
 Keep LXMF-rs as the propagation owner; do not import the daemon or add a REM queue.
 Preserve the earlier unapproved routing worktree unchanged for reference.
 
-## Task board
+## Current scope correction (2026-10-24)
+
+The user rejected changes to online delivery. The [offline-only correction](../../plans/offline-only-correction.md)
+is authoritative. Both phones are restored to the exact signed public 1.5.5 APK
+(`ce5c8324…`) with original radio frequency and telemetry preferences, preserving app data.
+
+The corrective library branch starts at the tested `7822b608` rather than the
+newer transport revision. REM's normal delivery body, Connect/aliases, caller
+waits, packet sizing and normal relay Sync/polling are restored. Native custody
+starts only after an eligible unreachable-route failure; it does not run a second
+send loop. Additional offline recipients do not alter the baseline online target set.
+
+Earlier implementation/checkpoint evidence below is historical and does not
+qualify this correction. Final source pins, Android rebuilding and hardware
+acceptance remain open. Phase 3 remains deferred.
+
+## Historical task board
 
 - [x] Re-read authoritative plan; create clean REM and pinned LXMF-rs worktrees.
 - [x] Phase 0: skipped at the user's explicit instruction; no new measurement claimed.

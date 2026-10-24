@@ -10,9 +10,6 @@ fn spawn_payload_receivers(state: &NodeRuntimeState, bus: &EventBus) {
             loop {
                 match rx.recv().await {
                     Ok(event) => {
-                        if event.request_id.is_some() {
-                            continue;
-                        }
                         let destination_hex = address_hash_to_hex(&event.destination);
                         let expected_lxmf = {
                             let local_lxmf_destination = state
@@ -59,19 +56,20 @@ fn spawn_payload_receivers(state: &NodeRuntimeState, bus: &EventBus) {
                 match rx.recv().await {
                     Ok(event) => match event.kind {
                         ResourceEventKind::Complete(complete) => {
-                            if complete.is_request || complete.is_response {
-                                continue;
-                            }
-                            let destination_hex = if let Some(link) =
-                                transport.find_in_link(&event.link_id).await
-                            {
-                                address_hash_to_hex(&link.lock().await.destination().address_hash)
-                            } else if let Some(link) = transport.find_out_link(&event.link_id).await
-                            {
-                                address_hash_to_hex(&link.lock().await.destination().address_hash)
-                            } else {
-                                address_hash_to_hex(&event.link_id)
-                            };
+                            let destination_hex =
+                                if let Some(link) = transport.find_in_link(&event.link_id).await {
+                                    address_hash_to_hex(
+                                        &link.lock().await.destination().address_hash,
+                                    )
+                                } else if let Some(link) =
+                                    transport.find_out_link(&event.link_id).await
+                                {
+                                    address_hash_to_hex(
+                                        &link.lock().await.destination().address_hash,
+                                    )
+                                } else {
+                                    address_hash_to_hex(&event.link_id)
+                                };
                             info!(
                                 "[lxmf][events] resource complete link_id={} destination={} bytes={} metadata_bytes={}",
                                 address_hash_to_hex(&event.link_id),
@@ -182,9 +180,12 @@ fn spawn_delivery_tracking_tasks(
                         .filter(|(_, pending)| {
                             pending_ack_timeout_elapsed(pending, now)
                                 && (!saver_active
-                                    || pending.resend.as_ref().is_some_and(|resend| {
-                                        resend.traffic_class.allowed_in_power_saver()
-                                    }))
+                                    || pending
+                                        .resend
+                                        .as_ref()
+                                        .is_some_and(|resend| {
+                                            resend.traffic_class.allowed_in_power_saver()
+                                        }))
                         })
                         .map(|(key, _)| key.clone())
                         .collect::<Vec<_>>();
@@ -199,8 +200,7 @@ fn spawn_delivery_tracking_tasks(
                         Ok(true) => continue,
                         Ok(false) => {
                             record_pending_delivery_timed_out(
-                                &state.app_state,
-                                state.sdk.as_ref(),
+                                &state.app_state,                                state.sdk.as_ref(),
                                 &bus,
                                 &pending,
                                 "ack timeout",
@@ -209,8 +209,7 @@ fn spawn_delivery_tracking_tasks(
                         Err(err) => {
                             let detail = format!("ack timeout; propagation retry failed: {err}");
                             record_pending_delivery_timed_out(
-                                &state.app_state,
-                                state.sdk.as_ref(),
+                                &state.app_state,                                state.sdk.as_ref(),
                                 &bus,
                                 &pending,
                                 detail.as_str(),

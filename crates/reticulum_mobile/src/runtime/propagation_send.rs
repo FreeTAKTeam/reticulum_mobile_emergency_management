@@ -1,3 +1,7 @@
+#[expect(
+    clippy::too_many_arguments,
+    reason = "retain relay policy with a captured offline failure"
+)]
 async fn send_lxmf_via_propagation_candidates(
     state: &NodeRuntimeState,
     destination: AddressHash,
@@ -6,6 +10,7 @@ async fn send_lxmf_via_propagation_candidates(
     title: Option<String>,
     fields_bytes: Option<Vec<u8>>,
     metadata: Option<MissionSyncMetadata>,
+    failed_attempt: &mut Option<crate::sdk_bridge::FailedLxmfAttempt>,
 ) -> Result<LxmfSendReport, NodeError> {
     let (requested_destination_hex, traffic_class) = request;
     let active_relay = state.active_propagation_node_hex.lock().await.clone();
@@ -42,6 +47,7 @@ async fn send_lxmf_via_propagation_candidates(
                 fields_bytes.clone(),
                 metadata.clone(),
                 relay_candidate.clone(),
+                failed_attempt,
             )
             .await
         {

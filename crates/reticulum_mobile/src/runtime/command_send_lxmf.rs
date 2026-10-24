@@ -39,6 +39,18 @@ fn spawn_send_lxmf_command(
                 OutboundTrafficClass::Chat {},
             )
             .await?;
+            if report.local_custody.is_some() {
+                // History already exists; only Core may advance a custody-owned message.
+                state
+                    .messaging
+                    .lock()
+                    .await
+                    .store_outbound(sdkmsg::StoredOutboundMessage {
+                        request: to_sdk_send_request(&request),
+                        message_id_hex: report.message_id_hex.clone(),
+                    });
+                return Ok::<String, NodeError>(report.message_id_hex);
+            }
             let method = match (report.method, report.representation) {
                 (LxmfDeliveryMethod::Propagated {}, _) => MessageMethod::Propagated {},
                 (LxmfDeliveryMethod::Opportunistic {}, _) => MessageMethod::Opportunistic {},

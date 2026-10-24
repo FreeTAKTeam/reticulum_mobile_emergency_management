@@ -1,5 +1,9 @@
 impl RuntimeLxmfSdk {
-    pub(crate) async fn new(runtime_id: String, transport: SdkTransportState, storage_dir: Option<&str>) -> Result<Self,NodeError> {
+    pub(crate) async fn new(
+        runtime_id: String,
+        transport: SdkTransportState,
+        storage_dir: Option<&str>,
+    ) -> Self {
         let source_destination = transport.lxmf_destination.lock().await.desc.address_hash;
         let backend = InProcessBackend::new(InProcessBackendConfig::new(
             runtime_id,
@@ -8,16 +12,32 @@ impl RuntimeLxmfSdk {
             transport.identity.clone(),
             source_destination,
         ));
-        let local_propagation=storage_dir.map(str::trim).filter(|dir|!dir.is_empty())
-            .map(|dir|backend.local_propagation(std::path::Path::new(dir).join("local-propagation.db"),lxmf_runtime::propagation_store::StoreLimits::default()))
-            .transpose().map_err(map_local_propagation_error)?;
-        Ok(Self {
+        let local_propagation = storage_dir
+            .map(str::trim)
+            .filter(|dir| !dir.is_empty())
+            .map(|dir| {
+                backend.local_propagation(
+                    std::path::Path::new(dir).join("local-propagation.db"),
+                    lxmf_runtime::propagation_store::StoreLimits::default(),
+                )
+            })
+            .transpose();
+        let local_propagation_init_failed = local_propagation.is_err();
+        let local_propagation = match local_propagation {
+            Ok(service) => service,
+            Err(error) => {
+                warn!("local custody storage unavailable; normal delivery remains active: {error}");
+                None
+            }
+        };
+        Self {
             client: Arc::new(Client::new(backend)),
             transport,
             send_sequence: AtomicU64::new(0),
             local_propagation,
-            local_recovery_inflight:Arc::new(AtomicBool::new(false)),
-        })
+            local_propagation_init_failed,
+            local_recovery_inflight: Arc::new(AtomicBool::new(false)),
+        }
     }
 
     pub(crate) async fn start(&self) -> Result<(), NodeError> {
@@ -33,34 +53,38 @@ impl RuntimeLxmfSdk {
                 )
                 .map(|_| ())
                 .map_err(|error| {
-                    crate::error_context::contextual_node_error(
-                        NodeError::InternalError {},
-                        error,
-                    )
+                    crate::error_context::contextual_node_error(NodeError::InternalError {}, error)
                 })
         })
         .await
-        .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
+        .map_err(|error| {
+            crate::error_context::contextual_node_error(NodeError::InternalError {}, error)
+        })?
     }
 
     pub(crate) async fn shutdown(&self) -> Result<(), NodeError> {
-        if let Some(store)=&self.local_propagation {store.stop().map_err(map_local_propagation_error)?;}
+        if let Some(store) = &self.local_propagation {
+            store.stop().map_err(map_local_propagation_error)?;
+        }
         let client = self.client.clone();
         tokio::task::spawn_blocking(move || {
             client
                 .shutdown(ShutdownMode::Graceful)
                 .map(|_| ())
                 .map_err(|error| {
-                    crate::error_context::contextual_node_error(
-                        NodeError::InternalError {},
-                        error,
-                    )
+                    crate::error_context::contextual_node_error(NodeError::InternalError {}, error)
                 })
         })
-            .await
-            .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
+        .await
+        .map_err(|error| {
+            crate::error_context::contextual_node_error(NodeError::InternalError {}, error)
+        })?
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "retain the release send contract with an offline failure capture"
+    )]
     pub(crate) async fn send_lxmf_via_propagation_relay(
         &self,
         destination: AddressHash,
@@ -69,6 +93,7 @@ impl RuntimeLxmfSdk {
         fields_bytes: Option<Vec<u8>>,
         metadata: Option<MissionSyncMetadata>,
         propagation_relay_hex: String,
+        failed_attempt: &mut Option<FailedLxmfAttempt>,
     ) -> Result<LxmfSendReport, NodeError> {
         self.send_lxmf_with_direct_attempt(
             destination,
@@ -81,6 +106,7 @@ impl RuntimeLxmfSdk {
             None,
             None,
             Some(propagation_relay_hex),
+            failed_attempt,
         )
         .await
     }
@@ -101,6 +127,7 @@ impl RuntimeLxmfSdk {
         link_connect_timeout: Option<Duration>,
         direct_packet_max_wire_bytes: Option<usize>,
         propagation_relay_hex: Option<String>,
+        failed_attempt: &mut Option<FailedLxmfAttempt>,
     ) -> Result<LxmfSendReport, NodeError> {
         let source = self
             .transport
@@ -171,11 +198,8 @@ impl RuntimeLxmfSdk {
                 .then(|| value.tracking_key().map(ToOwned::to_owned))
                 .flatten()
         }) {
-            let attempt_key = idempotency_key_for_send_attempt(
-                &idempotency_key,
-                send_mode,
-                direct_attempt,
-            );
+            let attempt_key =
+                idempotency_key_for_send_attempt(&idempotency_key, send_mode, direct_attempt);
             // Command identity is stable; each intentional transport submission must run.
             request = request.with_idempotency_key(format!(
                 "{attempt_key}:submission-{}",
@@ -198,16 +222,24 @@ impl RuntimeLxmfSdk {
 
         let client = self.client.clone();
         let send_destination_hex = requested_destination_hex.clone();
-        let message_id = tokio::task::spawn_blocking(move || {
-            client.send(request).map_err(|error| {
-                warn!(
-                    "in-process LXMF send failed destination={send_destination_hex}: {error}"
-                );
-                map_sdk_error_to_node_error(error)
-            })
+        let (result, outgoing) = tokio::task::spawn_blocking(move || {
+            lxmf_runtime::capture_outgoing(|| client.send(request))
         })
-            .await
-            .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))??;
+        .await
+        .map_err(|error| {
+            crate::error_context::contextual_node_error(NodeError::InternalError {}, error)
+        })?;
+        let message_id = match result {
+            Ok(message_id) => message_id,
+            Err(error) => {
+                *failed_attempt = Some(FailedLxmfAttempt {
+                    unreachable: error.cause_code.as_deref() == Some("OfflineRouteUnavailable"),
+                    outgoing,
+                });
+                warn!("in-process LXMF send failed destination={send_destination_hex}: {error}");
+                return Err(map_sdk_error_to_node_error(error));
+            }
+        };
         let report = self
             .client
             .backend()
@@ -248,7 +280,7 @@ impl RuntimeLxmfSdk {
             .is_some_and(|value| value.command_present && value.tracking_key().is_some());
 
         Ok(LxmfSendReport {
-            local_custody:None,
+            local_custody: None,
             outcome,
             message_id_hex: report.message_id.0,
             resolved_destination_hex: report.resolved_destination,
@@ -262,5 +294,4 @@ impl RuntimeLxmfSdk {
             receipt_hash_hex: report.receipt_hash,
         })
     }
-
 }

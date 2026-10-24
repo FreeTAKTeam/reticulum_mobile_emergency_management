@@ -2,7 +2,7 @@
     clippy::too_many_arguments,
     reason = "send policy boundary intentionally keeps transport, payload, metadata, and lane selection explicit"
 )]
-async fn send_lxmf_with_delivery_policy(
+async fn send_lxmf_with_legacy_delivery_policy(
     state: &NodeRuntimeState,
     bus: &EventBus,
     requested_destination_hex: &str,
@@ -14,12 +14,13 @@ async fn send_lxmf_with_delivery_policy(
     send_task_class: SendTaskClass,
     allow_inbound_correspondent_route: bool,
     traffic_class: OutboundTrafficClass,
+    failed_attempt: &mut Option<crate::sdk_bridge::FailedLxmfAttempt>,
 ) -> Result<LxmfSendReport, NodeError> {
     const RETRY_DELAY: Duration = Duration::from_secs(10);
     const ACCEPTED_RESULT_RETRY_DELAY: Duration = Duration::from_secs(1);
     let has_active_relay = has_active_propagation_relay(state).await;
     let has_active_relay_transport =
-        has_active_relay && has_active_reticulum_interface(state).await;
+        has_active_relay && has_active_relay_transport_interface(state).await;
     let rnode_only_transport = {
         let active_interfaces = state.active_interface_registry.lock().await;
         active_interfaces_are_rnode_ble_only(&active_interfaces)
@@ -121,13 +122,6 @@ async fn send_lxmf_with_delivery_policy(
         } else {
             None
         };
-    if state.sdk.local_propagation.is_some() && !is_accepted_result
-        && matches!(send_mode,SendMode::Auto {}|SendMode::PropagationOnly {})
-        && matches!(traffic_class, OutboundTrafficClass::Chat {} | OutboundTrafficClass::Event {}
-            | OutboundTrafficClass::Eam {} | OutboundTrafficClass::Checklist {} | OutboundTrafficClass::Telemetry {}) {
-        return send_with_local_custody(state,bus,requested_destination_hex,body,title,fields_bytes,metadata,
-            send_mode,traffic_class,send_task_class,direct_attempts).await;
-    }
     let prefer_propagation = matches!(send_mode, SendMode::Auto {})
         && !is_accepted_result
         && has_active_relay_transport
@@ -180,6 +174,7 @@ async fn send_lxmf_with_delivery_policy(
             title,
             fields_bytes,
             metadata,
+            failed_attempt,
         )
         .await;
     }
@@ -268,6 +263,7 @@ async fn send_lxmf_with_delivery_policy(
                     direct_link_connect_timeout,
                     rnode_direct_route.then_some(RNODE_BLE_DIRECT_PACKET_MAX_WIRE_BYTES),
                     None,
+                    failed_attempt,
                 )
                 .await
         };
@@ -417,6 +413,7 @@ async fn send_lxmf_with_delivery_policy(
         title,
         fields_bytes,
         metadata,
+        failed_attempt,
     )
     .await?;
     report.fallback_stage = Some(LxmfFallbackStage::AfterDirectRetryBudget {});

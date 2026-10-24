@@ -1,6 +1,6 @@
 # Daemon-free local propagation and LoRa/TCP routing
 
-Status: approved for implementation; Phase 0 waived by the user. The receiver-confirmed `/get` correction was explicitly approved on 2026-10-24; see [the amendment](local-propagation-relay-correction.md).
+Status: subject to the authoritative [offline-only correction](offline-only-correction.md); approved for implementation; Phase 0 waived by the user. The receiver-confirmed `/get` correction was explicitly approved on 2026-10-24; see [the amendment](local-propagation-relay-correction.md).
 Supersedes the earlier unapproved routing draft. Keep that draft for reference and do not merge its incidental cleanup.
 
 ## Goal
@@ -151,4 +151,4 @@ Do this only if Phase 2 field data shows real asymmetric cases, where the recipi
 
 Remote possession is something the relay asserts after authentication. It doesn't guarantee that the relay will keep the message or survive a crash.
 
-Implement against LXMF-rs `7bf5257c1f3087c254aea1379d09612e603736a0`. Once the changes are qualified, pin REM's path dependencies to the resulting revision.
+The user's 2026-10-24 scope correction supersedes the original `7bf5257c` implementation base. Preserve the tested LXMF-rs `7822b608f2cd2debd8170895bc580d01dda5356e` behavior and add only offline custody. Pin the qualified additive revision. Normal online LoRa polling, Sync and send deadlines remain those of release 1.5.5.

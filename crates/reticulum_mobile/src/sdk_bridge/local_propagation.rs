@@ -1,4 +1,5 @@
-pub(crate) const LOCAL_PROPAGATION_LORA_INTERVAL_SECONDS: u32 = 300;
+// Zero means disabled: normal LoRa relay polling keeps the tested release policy.
+pub(crate) const LOCAL_PROPAGATION_LORA_INTERVAL_SECONDS: u32 = 0;
 // Phase 0 measurement was waived; keep each LoRa transfer conservatively bounded.
 pub(crate) const LOCAL_PROPAGATION_LORA_TRANSFER_BYTES: u32 = 2048;
 

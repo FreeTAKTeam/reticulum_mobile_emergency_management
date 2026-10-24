@@ -33,7 +33,6 @@ fn persist_received_checklist_if_present(
     };
 
     let mut handled_any = false;
-    let mut handled_all = true;
     for command in command_entries {
         let command_map_storage;
         let args_storage;
@@ -42,10 +41,7 @@ fn persist_received_checklist_if_present(
         } else if let Some((command_type, args)) = positional_checklist_command_args(command) {
             command_map_storage = vec![(MsgPackValue::from("t"), MsgPackValue::from(command_type))];
             args_storage = args;
-            (
-                command_map_storage.as_slice(),
-                Some(args_storage.as_slice()),
-            )
+            (command_map_storage.as_slice(), Some(args_storage.as_slice()))
         } else {
             continue;
         };
@@ -75,8 +71,7 @@ fn persist_received_checklist_if_present(
             source_identity,
             content_bytes,
         };
-        handled_any = true;
-        handled_all &= match command_type.as_str() {
+        handled_any |= match command_type.as_str() {
             "checklist.create.online" => handle_inbound_checklist_create(&context),
             "checklist.upload" => handle_inbound_checklist_upload(&context),
             "checklist.update" => handle_inbound_checklist_update(&context),
@@ -90,7 +85,7 @@ fn persist_received_checklist_if_present(
             _ => false,
         };
     }
-    handled_any && handled_all
+    handled_any
 }
 
 include!("checklist_handlers/create.rs");
