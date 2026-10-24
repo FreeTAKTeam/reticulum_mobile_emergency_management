@@ -17,7 +17,9 @@ release 1.5.5 for all other traffic.
 
 1. Restore protected behavior and the tested dependency baseline. Keep the shared
    daemon-free custody crate additive; do not take unrelated transport updates.
-2. Run the existing delivery flow first. A successful send returns its original
+2. Run the existing delivery flow first whenever any interface can carry traffic.
+   With no active interface, admit eligible offline traffic directly rather than
+   running futile send attempts against a cached Link. A successful send returns its original
    report and never writes custody. No-open-Link alone is not an offline decision.
 3. At an unavailable-route failure only, validate recipient identity and current
    sharing permission, then deposit once. Preserve any failed attempt's signed
@@ -28,6 +30,9 @@ release 1.5.5 for all other traffic.
    Reticulum/LXMF APIs, retains ownership through cleanup, and cannot change
    normal connection, polling or Sync policy. Existing online fanout targets stay
    unchanged; any additional offline recipients are handled separately.
+   For stored messages only, an unconfirmed direct attempt may use a visible relay
+   on its next scheduled attempt; fresh recipient events still prefer direct recovery.
+   Publish expiry notices even in power saver, without starting network transfers.
 5. Verify baseline preservation, online success with zero custody writes, explicit
    offline admission, immutable recovery and single retry ownership. Then rebuild
    an isolated candidate before repeating the two-phone chat test.

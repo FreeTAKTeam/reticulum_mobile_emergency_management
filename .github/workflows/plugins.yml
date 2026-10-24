@@ -9,7 +9,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   # Offline-only custody on the tested 1.5.5 library baseline.
-  LXMF_RS_REF: 038dde2e4b9eb3f80dee9066f3513a307d4d7181
+  LXMF_RS_REF: f16b3151db4d70dace2f44d011b9aabda76facd5
 
 jobs:
   plugin-system:

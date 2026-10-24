@@ -173,9 +173,11 @@ fn spawn_local_custody_recovery(
     bus: &EventBus,
     recipient_hint: Option<String>,
 ) {
-    let Some(store) = &state.sdk.local_propagation else { return; };
+    let Some(store) = &state.sdk.local_propagation else {
+        return;
+    };
     let now = crate::numeric::u64_to_i64_saturating(now_ms() / 1000);
-    if !store.status(now).is_ok_and(|rows| rows.iter().any(|row| !row.state.terminal())) {
+    if !store.status(now).is_ok_and(|rows| !rows.is_empty()) {
         return;
     }
     if state
@@ -221,11 +223,24 @@ async fn recover_local_custody_once(
                 .is_none_or(|recipient| recipient == status.destination)
     }) {
         let destination = parse_address_hash(&status.destination)?;
+        let relay = state
+            .active_propagation_node_hex
+            .lock()
+            .await
+            .clone()
+            .and_then(|relay| parse_address_hash(&relay).ok());
         let event_direct = recipient_hint.as_deref() == Some(status.destination.as_str());
         let direct_route = event_direct
             || state.transport.has_path(&destination).await
             || state.transport.delivery_link_available(&destination).await;
-        if direct_route {
+        let relay_route = if let Some(relay) = relay.as_ref() {
+            state.transport.has_path(relay).await
+                || state.transport.delivery_link_available(relay).await
+        } else {
+            false
+        };
+        // After an unconfirmed attempt, a cached path must not starve a visible relay.
+        if local_custody_should_try_direct(status, direct_route, event_direct, relay_route) {
             let lora = destination_uses_rnode_ble_route(state, &destination).await;
             let policy_state = state.clone();
             let result = store
@@ -254,9 +269,8 @@ async fn recover_local_custody_once(
         if *state.power_saver_rx.borrow() {
             continue;
         }
-        let relay = state.active_propagation_node_hex.lock().await.clone();
         if !status.uploaded {
-            if let Some(relay) = relay.and_then(|relay| parse_address_hash(&relay).ok()) {
+            if let Some(relay) = relay {
                 let lora = active_interfaces_are_rnode_ble_only(
                     &*state.active_interface_registry.lock().await,
                 );
@@ -270,6 +284,15 @@ async fn recover_local_custody_once(
         }
     }
     Ok(())
+}
+
+fn local_custody_should_try_direct(
+    status: &lxmf_runtime::propagation_store::Status,
+    direct_route: bool,
+    recipient_event: bool,
+    relay_route: bool,
+) -> bool {
+    direct_route && (recipient_event || status.attempts % 2 == 0 || status.uploaded || !relay_route)
 }
 
 async fn acknowledge_local_application_message(

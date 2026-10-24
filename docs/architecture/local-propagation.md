@@ -5,7 +5,9 @@ implementation. Normal delivery, Connect, alias handling, caller deadlines,
 packet sizing, regular relay Sync and automatic polling preserve release 1.5.5:
 REM `8070416`, LXMF-rs `7822b608`.
 
-REM runs that existing delivery policy first. Successful submissions return the
+REM runs that existing delivery policy first whenever an interface can carry
+traffic. With no active interface, eligible traffic goes directly to validated
+local admission. Successful submissions return the
 original report without writing local custody. At a missing-route failure, or a
 native attempt explicitly classified as unreachable, the offline fallback checks
 current sharing permission and validated recipient identity, then deposits once.
@@ -35,12 +37,16 @@ Existing announces, learned paths, identified Links and maintenance drive only
 already-stored work. Direct recovery preserves the signed wire; relay upload
 preserves its recipient transient. Reticulum can reach a relay through LoRa to a
 transport-enabled node with TCP. The sender need not have TCP. Uncertain relay
-uploads retain their local copy as `UploadedUnverified`.
+uploads retain their local copy as `UploadedUnverified`. After an unconfirmed
+direct attempt, a usable relay route gets the next scheduled turn. If both
+routes remain unconfirmed, existing custody attempts alternate between them;
+a cached relay announce alone cannot preempt a usable recipient path.
 
 A retained task owns each offline transfer through completion or exact Resource
 cancellation, identified by original hash and Link ID. It never resets a shared
 online Link. Current sharing permission is checked again before dispatch. Empty
-custody stores schedule no recovery traffic. Power saver suspends background work.
+custody stores schedule no recovery traffic. Power saver suspends background
+transfers; expiry/status publication still runs without network activity.
 
 Normal LoRa-only automatic relay polling remains disabled, as in the tested
 release; the config reports interval zero. Normal manual Sync also remains the

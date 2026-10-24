@@ -15,6 +15,33 @@ async fn send_lxmf_with_delivery_policy(
     allow_inbound_correspondent: bool,
     class: OutboundTrafficClass,
 ) -> Result<LxmfSendReport, NodeError> {
+    let custody_eligible = (state.sdk.local_propagation.is_some()
+        || state.sdk.local_propagation_init_failed)
+        && matches!(mode, SendMode::Auto {} | SendMode::PropagationOnly {})
+        && !is_accepted_result_metadata(metadata.as_ref())
+        && matches!(
+            class,
+            OutboundTrafficClass::Chat {}
+                | OutboundTrafficClass::Event {}
+                | OutboundTrafficClass::Eam {}
+                | OutboundTrafficClass::Checklist {}
+                | OutboundTrafficClass::Telemetry {}
+        );
+    // No interface can carry the baseline attempts, even if a cached Link remains active.
+    if custody_eligible && !has_active_reticulum_interface(state).await {
+        return deposit_offline_message(
+            state,
+            bus,
+            requested_destination,
+            body,
+            title,
+            fields,
+            metadata,
+            class,
+            None,
+        )
+        .await;
+    }
     let mut failed_attempt = None;
     let result = send_lxmf_with_legacy_delivery_policy(
         state,
@@ -36,19 +63,7 @@ async fn send_lxmf_with_delivery_policy(
         Ok(report) => return Ok(report),
         Err(error) => error,
     };
-    if state.sdk.local_propagation.is_none() && !state.sdk.local_propagation_init_failed
-        || !matches!(mode, SendMode::Auto {} | SendMode::PropagationOnly {})
-        || is_accepted_result_metadata(metadata.as_ref())
-        || !matches!(
-            class,
-            OutboundTrafficClass::Chat {}
-                | OutboundTrafficClass::Event {}
-                | OutboundTrafficClass::Eam {}
-                | OutboundTrafficClass::Checklist {}
-                | OutboundTrafficClass::Telemetry {}
-        )
-        || !matches!(error, NodeError::NetworkError {} | NodeError::Timeout {})
-    {
+    if !custody_eligible || !matches!(error, NodeError::NetworkError {} | NodeError::Timeout {}) {
         return Err(error);
     }
     if failed_attempt

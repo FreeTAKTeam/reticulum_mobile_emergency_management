@@ -257,3 +257,108 @@ async fn unavailable_custody_storage_does_not_stop_the_normal_node() {
         .expect("normal command lane remains usable");
     stop_node(node).await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn no_interface_chat_is_stored_promptly_and_expires_in_power_saver() {
+    use crate::types::LocalPropagationState;
+    let _guard = test_lock().lock().await;
+    let (relay, node_a, node_b) = start_node_pair("offline-fast-admission").await;
+    let destination = node_b.get_status().lxmf_destination_hex;
+    let received = node_b.subscribe_events();
+    node_a
+        .send_lxmf(SendLxmfRequest {
+            destination_hex: destination.clone(),
+            body_utf8: "warm link".to_owned(),
+            title: None,
+            send_mode: SendMode::DirectOnly {},
+        })
+        .unwrap();
+    wait_for_event(&received, TEST_TIMEOUT, |event| {
+        matches!(event,
+            NodeEvent::MessageReceived {message} if message.body_utf8 == "warm link"
+        )
+    })
+    .expect("fixture has an established Link");
+    relay.shutdown().await;
+    wait_no_interfaces(&node_a).await;
+    let started = Instant::now();
+    let id = node_a
+        .send_lxmf(SendLxmfRequest {
+            destination_hex: destination,
+            body_utf8: "offline custody expiry".to_owned(),
+            title: None,
+            send_mode: SendMode::Auto {},
+        })
+        .expect("validated offline recipient is stored");
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "no futile baseline attempts"
+    );
+    let stored = node_a.list_local_propagation().unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].message_id_hex, id);
+    assert_eq!(stored[0].state, LocalPropagationState::StoredLocally);
+    assert!(stored[0].encrypted_bytes > 0);
+    let (storage, app_state) = {
+        let inner = node_a.inner.lock().unwrap();
+        inner.power_saver_tx.send_replace(true);
+        (
+            inner
+                .active_config
+                .as_ref()
+                .unwrap()
+                .storage_dir
+                .clone()
+                .unwrap(),
+            inner.app_state.clone(),
+        )
+    };
+    let events = node_a.subscribe_events();
+    let conn =
+        rusqlite::Connection::open(Path::new(&storage).join("local-propagation.db")).unwrap();
+    conn.execute(
+        "UPDATE propagation_owned SET expires_at=0 WHERE message_id=?1",
+        [&id],
+    )
+    .unwrap();
+    // Do not query custody: that would itself publish the pending expiry notice.
+    wait_for_event(&events, Duration::from_secs(10), |event| matches!(event,
+        NodeEvent::LocalPropagationUpdated {entry} if entry.message_id_hex == id && entry.state == LocalPropagationState::Expired
+    )).expect("background maintenance publishes final expiry during saver");
+    let message = app_state.message_for_wire(&id).unwrap().unwrap();
+    assert_eq!(message.state, MessageState::Failed {});
+    assert_eq!(message.detail.as_deref(), Some("Expired"));
+    assert_eq!(
+        conn.query_row(
+            "SELECT encrypted_bytes FROM propagation_owned WHERE message_id=?1",
+            [&id],
+            |row| row.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
+    stop_node(node_a).await;
+    stop_node(node_b).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn offline_chat_without_validated_recipient_returns_typed_error() {
+    let _guard = test_lock().lock().await;
+    let storage = prepare_storage_dir("offline-unresolved-recipient");
+    let node = Node::with_storage_dir(storage.to_str()).unwrap();
+    let mut config = build_config("offline-unresolved", &storage, "");
+    config.tcp_clients.clear();
+    node.start(config).unwrap();
+    let result = node.send_lxmf(SendLxmfRequest {
+        destination_hex: "ee".repeat(16),
+        body_utf8: "cannot encrypt unknown recipient".to_owned(),
+        title: None,
+        send_mode: SendMode::Auto {},
+    });
+    assert!(
+        matches!(result, Err(NodeError::UnresolvedRecipient {})),
+        "{result:?}"
+    );
+    assert!(node.list_local_propagation().unwrap().is_empty());
+    stop_node(node).await;
+}

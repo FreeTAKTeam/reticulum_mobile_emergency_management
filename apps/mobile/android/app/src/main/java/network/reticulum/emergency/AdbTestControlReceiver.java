@@ -19,6 +19,7 @@ public final class AdbTestControlReceiver extends BroadcastReceiver {
     public static final String ACTION_EAMS = "network.reticulum.emergency.action.ADB_EAMS";
     public static final String ACTION_EVENTS = "network.reticulum.emergency.action.ADB_EVENTS";
     public static final String ACTION_STATUS = "network.reticulum.emergency.action.ADB_STATUS";
+    public static final String ACTION_LOCAL_PROPAGATION = "network.reticulum.emergency.action.ADB_LOCAL_PROPAGATION";
     public static final String ACTION_SEND_LXMF = "network.reticulum.emergency.action.ADB_SEND_LXMF";
     public static final String ACTION_RESET_RNODE = "network.reticulum.emergency.action.ADB_RESET_RNODE";
     public static final String ACTION_RNODE_STATS = "network.reticulum.emergency.action.ADB_RNODE_STATS";
@@ -71,6 +72,8 @@ public final class AdbTestControlReceiver extends BroadcastReceiver {
             } else if (ACTION_STATUS.equals(action)) {
                 Log.i(TAG, "status " + ReticulumBridge.getStatusJson());
                 Log.i(TAG, "rnodeTransport " + RNodeAndroidTransportManager.status());
+            } else if (ACTION_LOCAL_PROPAGATION.equals(action)) {
+                Log.i(TAG, "localPropagation " + ReticulumBridge.listLocalPropagationJson());
             } else if (ACTION_SEND_LXMF.equals(action)) {
                 logJsonResult("sendLxmf", ReticulumBridge.sendLxmfJson(requirePayload(intent)));
             } else if (ACTION_RESET_RNODE.equals(action)) {

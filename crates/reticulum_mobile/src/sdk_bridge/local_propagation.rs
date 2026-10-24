@@ -82,10 +82,13 @@ impl RuntimeLxmfSdk {
         {
             request = request.with_correlation_id(key.to_owned());
         }
-        let prepared = store
-            .prepare(&request)
-            .await
-            .map_err(map_sdk_error_to_node_error)?;
+        let prepared = store.prepare(&request).await.map_err(|error| {
+            if error.cause_code.as_deref() == Some("UnresolvedRecipient") {
+                NodeError::UnresolvedRecipient {}
+            } else {
+                map_sdk_error_to_node_error(error)
+            }
+        })?;
         Ok((prepared, request))
     }
 }

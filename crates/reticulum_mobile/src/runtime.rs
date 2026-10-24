@@ -376,5 +376,6 @@ mod tests {
     include!("runtime/tests/peers_routes_rem_lxmf_announce_path_response_keeps_capa.rs");
     include!("runtime/tests/propagation.rs");
     include!("runtime/tests/propagation_fallback.rs");
+    include!("runtime/tests/local_custody_recovery.rs");
     include!("runtime/tests/sos.rs");
 }

@@ -15,8 +15,8 @@ fn spawn_peer_maintenance_tasks(
                 refresh_peer_snapshot(&state).await;
                 if !*power_saver_rx.borrow() {
                     sync_auto_propagation_node(&state, &bus).await;
-                    spawn_local_custody_recovery(&state, &bus, None);
                 }
+                spawn_local_custody_recovery(&state, &bus, None);
             }
         });
     }
