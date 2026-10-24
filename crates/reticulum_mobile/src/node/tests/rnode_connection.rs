@@ -23,6 +23,94 @@ async fn capture_relay_packets(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn pending_relay_fetch_does_not_block_explicit_peer_connection() {
+    let _guard = test_lock().lock().await;
+    let (relay, node_a, node_b) = start_node_pair_with_profile("fetch_registry", true).await;
+    let storage = node_a
+        .inner
+        .lock()
+        .unwrap()
+        .active_config
+        .as_ref()
+        .unwrap()
+        .storage_dir
+        .clone()
+        .unwrap();
+    let config = build_config(
+        "fetch_registry-a",
+        Path::new(&storage),
+        &format!("rnode-ble:test-loopback:{}", relay.address()),
+    );
+    node_a
+        .inner
+        .lock()
+        .unwrap()
+        .app_state
+        .upsert_announce(&AnnounceRecord {
+            destination_hex: "cccccccccccccccccccccccccccccccc".to_owned(),
+            identity_hex: "dddddddddddddddddddddddddddddddd".to_owned(),
+            destination_kind: "lxmf_propagation".to_owned(),
+            announce_class: AnnounceClass::PropagationNode {},
+            app_data: String::new(),
+            display_name: None,
+            hops: 1,
+            interface_hex: String::new(),
+            received_at_ms: now_ms(),
+        })
+        .expect("cache unavailable relay hint");
+    let node_a = tokio::task::spawn_blocking(move || {
+        node_a.restart(config).expect("restore cached relay");
+        node_a
+    })
+    .await
+    .expect("restart worker");
+    node_b.announce_now().expect("refresh recipient route");
+    node_a
+        .request_peer_identity(node_b.get_status().lxmf_destination_hex)
+        .expect("resolve recipient");
+    node_a
+        .set_active_propagation_node(Some("cccccccccccccccccccccccccccccccc".to_owned()))
+        .expect("select unavailable relay");
+    node_a.request_lxmf_sync(Some(1)).expect("schedule fetch");
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !matches!(
+        node_a.get_lxmf_sync_status().unwrap().phase,
+        SyncPhase::RequestSent {}
+    ) {
+        assert!(Instant::now() < deadline, "fetch did not start");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let (resp, response) = cb::bounded(1);
+    let tx = node_a.inner.lock().unwrap().cmd_tx.clone().unwrap();
+    dispatch_command(
+        &tx,
+        Command::ConnectPeer {
+            destination_hex: node_b.get_status().lxmf_destination_hex,
+            resp,
+        },
+    )
+    .expect("dispatch connect while fetch is pending");
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let connected = loop {
+        if let Ok(result) = response.try_recv() {
+            break result.is_ok();
+        }
+        if Instant::now() >= deadline {
+            break false;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    };
+    stop_node(node_a).await;
+    stop_node(node_b).await;
+    relay.shutdown().await;
+    assert!(
+        connected,
+        "relay network wait held the interface registry needed by Connect"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn rnode_explicit_connect_uses_lxmf_and_clears_disconnected_aliases() {
     use reticulum::packet::{DestinationType, PacketType};
     let _guard = test_lock().lock().await;

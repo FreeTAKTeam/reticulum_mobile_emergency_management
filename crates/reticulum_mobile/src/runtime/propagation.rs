@@ -95,15 +95,15 @@ async fn run_propagation_sync_job(
             .desc
             .address_hash
             .to_hex_string();
+        let lora_transfer_limit =
+            active_interfaces_are_rnode_ble_only(&*state.active_interface_registry.lock().await)
+                .then_some(crate::sdk_bridge::LOCAL_PROPAGATION_LORA_TRANSFER_BYTES as usize);
         let result = match state
             .sdk
             .fetch_propagated_lxmf_from_relay(
                 relay_candidate.as_str(),
                 limit,
-                active_interfaces_are_rnode_ble_only(
-                    &*state.active_interface_registry.lock().await,
-                )
-                .then_some(crate::sdk_bridge::LOCAL_PROPAGATION_LORA_TRANSFER_BYTES as usize),
+                lora_transfer_limit,
                 move |wire| {
                     let state = import_state.clone();
                     let bus = import_bus.clone();
