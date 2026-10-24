@@ -11,6 +11,12 @@ fn send_outcome_to_str(outcome: SendOutcome) -> &'static str {
 
 fn lxmf_delivery_status_to_str(status: LxmfDeliveryStatus) -> &'static str {
     match status {
+        LxmfDeliveryStatus::StoredLocally {}=>"StoredLocally",
+        LxmfDeliveryStatus::Uploading {}=>"Uploading",
+        LxmfDeliveryStatus::UploadedUnverified {}=>"UploadedUnverified",
+        LxmfDeliveryStatus::RelayHolds {}=>"RelayHolds",
+        LxmfDeliveryStatus::Expired {}=>"Expired",
+        LxmfDeliveryStatus::Evicted {}=>"Evicted",
         LxmfDeliveryStatus::Sent {} => "Sent",
         LxmfDeliveryStatus::SentToPropagation {} => "SentToPropagation",
         LxmfDeliveryStatus::Delivered {} => "Delivered",
@@ -191,6 +197,7 @@ fn conversation_record_json(conversation: &ConversationRecord) -> Value {
 
 fn event_to_wire_json(event: NodeEvent) -> String {
     let (event_name, payload) = match event {
+        NodeEvent::LocalPropagationUpdated {entry} => ("localPropagationUpdated",json!({"entry":entry})),
         NodeEvent::StatusChanged { status } => (
             "statusChanged",
             json!({

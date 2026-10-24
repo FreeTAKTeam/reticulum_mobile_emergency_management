@@ -51,6 +51,7 @@ macro_rules! string_enum {
 
 include!("types/core_contracts.rs");
 include!("types/runtime_contracts.rs");
+include!("types/local_propagation_contracts.rs");
 include!("types/community_contracts.rs");
 include!("types/situation_contracts.rs");
 include!("types/messaging_contracts.rs");

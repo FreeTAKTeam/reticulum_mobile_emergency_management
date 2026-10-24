@@ -1,5 +1,6 @@
 #[derive(Debug, Clone)]
 pub enum NodeEvent {
+    LocalPropagationUpdated { entry: LocalPropagationRecord },
     StatusChanged {
         status: NodeStatus,
     },

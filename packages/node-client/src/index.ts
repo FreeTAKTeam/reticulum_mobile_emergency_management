@@ -170,3 +170,5 @@ export function base64ToBytes(base64: string): Uint8Array {
 }
 
 export type { TelemetryPublicationState, TelemetryRecipientPublication, TelemetryReceiveFailure, TelemetryPublicationSnapshot } from "./contracts-telemetry";
+
+export type { LocalPropagationState, LocalPropagationRecord, LocalPropagationConfig } from "./contracts-local-propagation";

@@ -16,6 +16,7 @@ fn spawn_peer_maintenance_tasks(
                 if !*power_saver_rx.borrow() {
                     sync_auto_propagation_node(&state, &bus).await;
                 }
+                spawn_local_custody_recovery(&state, &bus, None);
             }
         });
     }
@@ -132,6 +133,16 @@ fn spawn_receipt_listener(
     let state = state.clone();
     tokio::spawn(async move {
         while let Some(message_id_hex) = receipt_rx.recv().await {
+            if let Some(store) = &state.sdk.local_propagation {
+                if let Ok(Some(record)) = store.message(&message_id_hex) {
+                    if !record.state.terminal() {
+                        let _ = store.delivered(&record.transient_id, &message_id_hex, false,
+                            crate::numeric::u64_to_i64_saturating(now_ms() / 1000));
+                        let _ = publish_local_custody(&state, &bus).await;
+                    }
+                    continue;
+                }
+            }
             let maybe_record = state
                 .messaging
                 .lock()

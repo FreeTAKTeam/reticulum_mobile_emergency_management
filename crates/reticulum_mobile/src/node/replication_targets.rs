@@ -189,9 +189,10 @@ fn build_runtime_telemetry_destinations(
 ) -> Result<Vec<MissionReplicationTarget>, NodeError> {
     let self_destination_hex = normalize_hex_32(status.app_destination_hex.as_str());
     let local_peers = telemetry_peers_with_saved(peers, saved_peers, hub_directory_snapshot);
-    let local_targets = canonicalize_telemetry_targets(status, telemetry_targets_from_peers_with_relay(
+    let local_targets = canonicalize_telemetry_targets(status, telemetry_targets_with_offline(
+            status,
             &local_peers,
-            self_destination_hex.as_deref(),
+            &active_local_saved_peers(saved_peers, hub_directory_snapshot),
             active_propagation_node_hex,
         ), &local_peers, saved_peers);
     let Some(config) = active_config else {

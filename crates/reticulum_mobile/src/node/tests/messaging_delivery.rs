@@ -62,8 +62,10 @@ struct TcpRelayHandle {
 }
 
 impl TcpRelayHandle {
-    async fn start() -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0")
+    async fn start() -> Self { Self::start_at("127.0.0.1:0").await }
+
+    async fn start_at(endpoint: &str) -> Self {
+        let listener = TcpListener::bind(endpoint)
             .await
             .expect("bind relay listener");
         let addr = listener.local_addr().expect("relay local addr");
@@ -100,10 +102,15 @@ impl TcpRelayHandle {
                             });
 
                             let reader_clients = clients.clone();
+                            let reader_shutdown = shutdown.clone();
                             tokio::spawn(async move {
                                 let mut buf = vec![0u8; 4096];
                                 loop {
-                                    let read = match read_half.read(&mut buf).await {
+                                    let read_result = tokio::select! {
+                                        _ = reader_shutdown.notified() => break,
+                                        read = read_half.read(&mut buf) => read,
+                                    };
+                                    let read = match read_result {
                                         Ok(0) => break,
                                         Ok(n) => n,
                                         Err(_) => break,

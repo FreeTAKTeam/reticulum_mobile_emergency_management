@@ -1,3 +1,5 @@
+import { toLocalPropagationRecord, toLocalPropagationConfig } from "./local-propagation-converters";
+import type { LocalPropagationRecord, LocalPropagationConfig } from "./contracts-local-propagation";
 import { toTelemetryPublication } from "./telemetry-converters";
 import type { TelemetryPublicationSnapshot } from "./contracts-telemetry";
 import type { AppSettingsRecord, BlockOnboardingDraft, BlockOnboardingImportRequest, BlockOnboardingImportResult, BlockOnboardingInspection, ChecklistDeleteOptions, ChecklistRecord, ChecklistTemplateRecord, ChecklistUserTaskStatus, CommunityStatusProjectionRecord, ConversationRecord, EamProjectionRecord, EamReadinessSummaryRecord, EamTeamSummaryRecord, EventProjectionRecord, HouseholdMode, HouseholdSituation, HouseholdSituationRecord, InstalledPluginRecord, LegacyImportPayload, MessageRecord, OperationalSummary, PeerRecord, PluginCapabilityRecord, PluginSensorRecord, PowerStateRecord, SavedPeerRecord, SignedBlockOnboardingEnvelope, SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord, SosSettingsRecord, SosStatusRecord, SosTriggerSource, SyncStatus, TelemetryPositionRecord } from "./contracts";
@@ -76,6 +78,18 @@ export abstract class CapacitorProjectionClient {
     await this.ready();
     const result = await this.plugin.listMessages({ conversationId });
     return Array.isArray(result.items) ? result.items.map(toMessageRecord) : [];
+  }
+
+  async listLocalPropagation(): Promise<LocalPropagationRecord[]> {
+    await this.ready();
+    const result = await this.plugin.listLocalPropagation();
+    if (!Array.isArray(result.items)) throw new Error("Invalid local propagation list");
+    return result.items.map(toLocalPropagationRecord);
+  }
+
+  async getLocalPropagationConfig(): Promise<LocalPropagationConfig> {
+    await this.ready();
+    return toLocalPropagationConfig(await this.plugin.getLocalPropagationConfig());
   }
 
   async deleteConversation(conversationId: string): Promise<void> {

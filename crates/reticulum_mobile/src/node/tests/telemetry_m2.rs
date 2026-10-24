@@ -111,10 +111,11 @@ fn publication_test_node(name: &str) -> (Node, mpsc::Receiver<Command>, PeerReco
 }
 
 #[test]
-fn telemetry_m2_coalesces_before_route_and_survives_reconstruction() {
+fn telemetry_m2_coalesces_before_runtime_and_survives_reconstruction() {
     let (node, mut commands, peer) = publication_test_node("telemetry-m2-coalesce");
     {
         let inner = node.inner.lock().unwrap();
+        inner.status.lock().unwrap().running = false;
         inner.peers_snapshot.lock().unwrap().clear();
         let mut saved = inner.app_state.get_saved_peers().unwrap();
         saved[0].last_route_seen_at_ms = None;
@@ -139,6 +140,7 @@ fn telemetry_m2_coalesces_before_route_and_survives_reconstruction() {
             PublicationState::QueuedNoRoute
         );
         assert!(inner.peers_snapshot.lock().unwrap().is_empty());
+        inner.status.lock().unwrap().running = true;
         *inner.peers_snapshot.lock().unwrap() = vec![peer.clone()];
         inner
             .status
@@ -318,7 +320,7 @@ fn telemetry_m2_zero_targets_is_local_and_old_ack_cannot_accept_new_fix() {
     app_state.record_telemetry_delivery(&update).unwrap();
     assert_eq!(
         app_state.telemetry_publication().unwrap().recipients[0].state,
-        PublicationState::QueuedNoRoute
+        PublicationState::QueuedForDelivery
     );
     update.command_id = Some("current".to_string());
     update.status = crate::types::LxmfDeliveryStatus::Delivered {};
@@ -398,14 +400,62 @@ async fn telemetry_m2_pending_fix_survives_node_restart_without_warmup() {
     assert!(node_a.list_peers().unwrap().is_empty());
     let subscription = node_a.subscribe_events();
     node_a.start(config).unwrap();
-    let event = wait_for_event(&subscription, Duration::from_secs(75), |event| matches!(event, NodeEvent::LxmfDelivery { update } if update.command_type.as_deref() == Some("mission.registry.telemetry.upsert") && matches!(update.application_ack_state, ApplicationAckState::Accepted {}))).expect("pending telemetry application acceptance after restart");
-    let NodeEvent::LxmfDelivery { update } = event else {
-        unreachable!()
-    };
-    assert_eq!(
-        update.representation,
-        crate::types::LxmfDeliveryRepresentation::Resource {}
-    );
+    // After restart, a known recipient can enter custody before its path is learned.
+    let event = wait_for_event(
+        &subscription,
+        Duration::from_secs(75),
+        |event| match event {
+            NodeEvent::LxmfDelivery { update } => {
+                update.command_type.as_deref() == Some("mission.registry.telemetry.upsert")
+                    && matches!(
+                        update.application_ack_state,
+                        ApplicationAckState::Accepted {}
+                    )
+            }
+            NodeEvent::LocalPropagationUpdated { entry } => {
+                entry.destination_hex == status_b.lxmf_destination_hex
+                    && entry.state == crate::types::LocalPropagationState::Acknowledged
+            }
+            _ => false,
+        },
+    )
+    .expect("pending telemetry application acceptance after restart");
+    match event {
+        NodeEvent::LxmfDelivery { update } => assert_eq!(
+            update.representation,
+            crate::types::LxmfDeliveryRepresentation::Resource {}
+        ),
+        NodeEvent::LocalPropagationUpdated { entry } => {
+            let publication = node_a
+                .inner
+                .lock()
+                .unwrap()
+                .app_state
+                .telemetry_publication()
+                .unwrap();
+            assert_eq!(
+                publication.recipients[0].custody_message_id_hex.as_deref(),
+                Some(entry.message_id_hex.as_str())
+            );
+            assert_eq!(
+                entry.encrypted_bytes, 0,
+                "accepted custody payload is retired"
+            );
+            assert!(
+                node_a
+                    .list_local_propagation()
+                    .unwrap()
+                    .iter()
+                    .any(|stored| {
+                        stored.message_id_hex == entry.message_id_hex
+                            && stored.state == crate::types::LocalPropagationState::Acknowledged
+                            && stored.encrypted_bytes == 0
+                    }),
+                "custody acknowledgement is durable"
+            );
+        }
+        _ => unreachable!(),
+    }
     assert!(node_b.get_telemetry_positions().unwrap().iter().any(|fix| {
         fix.callsign == position.callsign && fix.lat == position.lat
             && fix.updated_at_ms == position.updated_at_ms

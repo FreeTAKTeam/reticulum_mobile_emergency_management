@@ -806,6 +806,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
+name = "lxmf-propagation"
+version = "0.14.0"
+dependencies = [
+ "hex",
+ "hkdf",
+ "log",
+ "lxmf-wire",
+ "rand_core",
+ "reticulum-rs-core",
+ "rmp-serde",
+ "rmpv",
+ "rusqlite",
+ "sha2",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "lxmf-reference"
 version = "0.14.0"
 dependencies = [
@@ -818,11 +835,14 @@ version = "0.14.0"
 dependencies = [
  "base64",
  "hex",
+ "log",
+ "lxmf-propagation",
  "lxmf-sdk",
  "lxmf-wire",
  "rand_core",
  "reticulum-rs-transport",
  "rmp-serde",
+ "rmpv",
  "serde",
  "serde_json",
  "tokio",

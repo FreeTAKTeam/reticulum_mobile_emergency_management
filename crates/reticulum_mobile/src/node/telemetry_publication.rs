@@ -82,6 +82,9 @@ impl Node {
                 .recipients
                 .retain(|recipient| recipient.callsign == position.callsign);
             for recipient in &mut publication.recipients {
+                if recipient.custody_message_id_hex.is_some() && !fix_changed {
+                    continue;
+                }
                 if due
                     || fix_changed
                         && !matches!(
@@ -91,6 +94,7 @@ impl Node {
                 {
                     recipient.fix_updated_at_ms = position.updated_at_ms;
                     recipient.command_id.clear();
+                    recipient.custody_message_id_hex = None;
                     recipient.state = PublicationState::QueuedNoRoute;
                     recipient.message_id_hex = None;
                     recipient.representation = None;
@@ -156,10 +160,12 @@ impl Node {
                             .iter_mut()
                             .find(|row| row.command_id == *command_id)
                         {
-                            if !matches!(
-                                row.state,
-                                PublicationState::Acknowledged | PublicationState::Rejected
-                            ) {
+                            if row.custody_message_id_hex.is_none()
+                                && !matches!(
+                                    row.state,
+                                    PublicationState::Acknowledged | PublicationState::Rejected
+                                )
+                            {
                                 row.state = if matches!(error, NodeError::Timeout {}) {
                                     PublicationState::TimedOut
                                 } else {
@@ -230,13 +236,14 @@ impl Node {
                     detail: None,
                     updated_at_ms: now_ms(),
                     attempt_route: None,
+                    custody_message_id_hex: None,
                 });
             }
         })?;
         if !current_fix {
             return Ok(());
         }
-        if !status.running || status.interfaces.is_empty() {
+        if !status.running {
             return Ok(());
         }
         let publication = app_state.telemetry_publication()?;
@@ -244,7 +251,8 @@ impl Node {
             return Ok(());
         }
         for row in publication.recipients {
-            if inflight.contains_key(&row.destination_hex)
+            if row.custody_message_id_hex.is_some()
+                || inflight.contains_key(&row.destination_hex)
                 || row.fix_updated_at_ms != position.updated_at_ms
                 || matches!(
                     row.state,
@@ -271,24 +279,17 @@ impl Node {
                     peer.identity_hex.as_deref(),
                 )
             });
-            let route_ready = peer
-                .is_some_and(|peer| peer.active_link || peer_has_current_known_lxmf_route(peer));
+            let route_ready = peer.is_some_and(|peer| peer.active_link || peer_has_current_known_lxmf_route(peer));
             let stored_route = saved.iter().any(|saved_peer| {
                 crate::team_membership::destinations_include_peer(
-                    &[target.app_destination_hex.clone()],
-                    &saved_peer.destination_hex,
-                    saved_peer.lxmf_destination_hex.as_deref(),
-                    saved_peer.identity_hex.as_deref(),
-                ) && saved_peer
-                    .lxmf_destination_hex
-                    .as_deref()
-                    .and_then(normalize_hex_32)
-                    .is_some()
+                    &[target.app_destination_hex.clone()], &saved_peer.destination_hex,
+                    saved_peer.lxmf_destination_hex.as_deref(), saved_peer.identity_hex.as_deref(),
+                ) && saved_peer.lxmf_destination_hex.as_deref().and_then(normalize_hex_32).is_some()
             });
-            if !(route_ready
-                || stored_route
-                || matches!(target.send_mode, SendMode::PropagationOnly {}))
-            {
+            let offline = offline_saved_targets(&status, &peers, &saved, &[], true).iter()
+                .any(|candidate| candidate.app_destination_hex == target.app_destination_hex);
+            if !(route_ready || stored_route || matches!(target.send_mode, SendMode::PropagationOnly {}) || offline)
+                || status.interfaces.is_empty() && !offline {
                 continue;
             }
             let route = format!(
@@ -327,10 +328,12 @@ impl Node {
                     row.destination_hex == target.app_destination_hex
                         && row.fix_updated_at_ms == position.updated_at_ms
                 }) {
-                    if matches!(
-                        row.state,
-                        PublicationState::Acknowledged | PublicationState::Rejected
-                    ) {
+                    if row.custody_message_id_hex.is_some()
+                        || matches!(
+                            row.state,
+                            PublicationState::Acknowledged | PublicationState::Rejected
+                        )
+                    {
                         return;
                     }
                     queued = true;
@@ -381,19 +384,7 @@ fn spawn_telemetry_publication_worker(runtime: &Runtime, node: std::sync::Weak<M
         if let Some(inner) = node.upgrade() {
             if let Ok(inner) = inner.lock() {
                 let _ = emit_telemetry_projection(&inner.app_state, &inner.bus, |publication| {
-                    for row in &mut publication.recipients {
-                        if matches!(
-                            row.state,
-                            PublicationState::QueuedForDelivery
-                                | PublicationState::Transmitted
-                                | PublicationState::TransportDelivered
-                        ) {
-                            row.state = PublicationState::QueuedNoRoute;
-                            row.attempt_route = None;
-                            row.detail =
-                                Some("recovering uncertain delivery after restart".to_string());
-                        }
-                    }
+                    publication.recover_uncertain_sends();
                 });
             }
         }

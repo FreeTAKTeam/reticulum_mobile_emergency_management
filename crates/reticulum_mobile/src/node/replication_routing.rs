@@ -211,7 +211,7 @@ fn build_runtime_mission_replication_targets(
 ) -> Result<Vec<MissionReplicationTarget>, NodeError> {
     let active_saved_peers = active_local_saved_peers(saved_peers, hub_directory_snapshot);
     let Some(config) = active_config else {
-        return Ok(build_mission_replication_targets(
+        return Ok(mission_targets_with_offline(
             status,
             peers,
             &active_saved_peers,
@@ -222,7 +222,7 @@ fn build_runtime_mission_replication_targets(
     let local_targets = if !active_saved_peers.is_empty()
         || hub_directory_snapshot.is_none_or(|snapshot| snapshot.local_teams.is_empty())
     {
-        build_mission_replication_targets(
+        mission_targets_with_offline(
             status,
             peers,
             &active_saved_peers,
@@ -290,7 +290,7 @@ fn build_runtime_event_replication_targets(
 ) -> Result<Vec<MissionReplicationTarget>, NodeError> {
     let active_saved_peers = active_local_saved_peers(saved_peers, hub_directory_snapshot);
     let Some(config) = active_config else {
-        return Ok(build_event_replication_targets(
+        return Ok(event_targets_with_offline(
             status,
             peers,
             &active_saved_peers,
@@ -301,7 +301,7 @@ fn build_runtime_event_replication_targets(
     let local_targets = if !active_saved_peers.is_empty()
         || hub_directory_snapshot.is_none_or(|snapshot| snapshot.local_teams.is_empty())
     {
-        build_event_replication_targets(
+        event_targets_with_offline(
             status,
             peers,
             &active_saved_peers,

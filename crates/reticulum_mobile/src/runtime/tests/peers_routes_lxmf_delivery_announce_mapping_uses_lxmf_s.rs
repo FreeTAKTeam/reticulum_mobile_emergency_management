@@ -138,6 +138,7 @@ fn test_lxmf_report(
     used_propagation_node: bool,
 ) -> LxmfSendReport {
     LxmfSendReport {
+        local_custody:None,
         outcome: RnsSendOutcome::SentDirect,
         message_id_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
         resolved_destination_hex: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),

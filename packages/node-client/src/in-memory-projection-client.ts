@@ -49,6 +49,11 @@ export abstract class InMemoryProjectionClient {
   }
   async stopPluginMapSession(): Promise<boolean> { return false; }
 
+  async listLocalPropagation(): Promise<import("./contracts-local-propagation").LocalPropagationRecord[]> { return []; }
+  async getLocalPropagationConfig(): Promise<import("./contracts-local-propagation").LocalPropagationConfig> {
+    throw new Error("Local propagation storage requires the native runtime.");
+  }
+
   async getPowerState(): Promise<PowerStateRecord> {
     return { charging: false, saverActive: false, updatedAtMs: 0 };
   }

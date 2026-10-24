@@ -3,7 +3,7 @@ async fn upsert_message_record(
     bus: &EventBus,
     message: MessageRecord,
     emit_received: bool,
-) {
+) -> bool {
     let message = canonicalize_chat_message(&message);
     match state.app_state.upsert_message(&message) {
         Ok(invalidations) => {
@@ -19,6 +19,7 @@ async fn upsert_message_record(
                     message.message_id_hex
                 ),
             });
+            return false;
         }
     }
     let changed = state
@@ -38,6 +39,7 @@ async fn upsert_message_record(
         }
         bus.emit(NodeEvent::MessageUpdated { message });
     }
+    true
 }
 
 async fn delete_conversation_records(
@@ -93,6 +95,7 @@ async fn conversation_records_snapshot(state: &NodeRuntimeState) -> Vec<Conversa
 }
 
 pub enum Command {
+    ListLocalPropagation {resp: cb::Sender<Result<Vec<crate::types::LocalPropagationRecord>,NodeError>>},
     Stop {
         resp: cb::Sender<Result<(), NodeError>>,
     },

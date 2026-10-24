@@ -1,6 +1,7 @@
 import {
   type ConversationRecord,
   type MessageRecord,
+  type LocalPropagationRecord,
   type ProjectionInvalidationEvent,
 } from "@reticulum/node-client";
 import type { Ref } from "vue";
@@ -30,6 +31,7 @@ import { useNodeStore } from "./nodeStore";
 const getProjectionClient = createProjectionClientAccessor("messaging");
 
 interface MessagingProjectionContext {
+  localPropagation: Ref<Record<string, LocalPropagationRecord>>;
   byMessageId: Ref<StoredMessages>;
   cleanups: Array<() => void>;
   findNativeConversationByDestination: (destinationHex: string) => ConversationRecord | null;
@@ -59,6 +61,7 @@ export function createMessagingProjectionController(context: MessagingProjection
     selectedConversationId,
     upsertMessage,
   } = context;
+  const { localPropagation } = context;
   let initPromise: Promise<void> | null = null;
 
   function runDetached(operation: string, task: () => Promise<void>): void {
@@ -302,7 +305,14 @@ export function createMessagingProjectionController(context: MessagingProjection
     }, { trailing: Boolean(requestedConversationId) });
   }
 
+  async function refreshLocalPropagation(): Promise<void> {
+    const client = getProjectionClient(nodeStore.settings.clientMode);
+    const entries = await client.listLocalPropagation();
+    localPropagation.value = Object.fromEntries(entries.map((entry) => [entry.messageIdHex, entry]));
+  }
+
   async function refreshAll(): Promise<void> {
+    await refreshLocalPropagation();
     await refreshConversations();
     await refreshMessages();
   }
@@ -316,6 +326,7 @@ export function createMessagingProjectionController(context: MessagingProjection
 
     const client = getProjectionClient(nodeStore.settings.clientMode);
     await refreshConversations();
+    await refreshLocalPropagation();
     const items = await client.listMessages(undefined);
     mergeFetchedMessages(items);
     primeOperationalNotificationScope(
@@ -375,6 +386,9 @@ export function createMessagingProjectionController(context: MessagingProjection
       cleanups.push(client.on("messageReceived", (message) => {
         runDetached("received message projection", () => syncConversationStateForMessage(message));
         runDetached("received message notification", () => notifyForInboundMessage(message));
+      }));
+      cleanups.push(client.on("localPropagationUpdated", ({ entry }) => {
+        localPropagation.value = { ...localPropagation.value, [entry.messageIdHex]: entry };
       }));
       cleanups.push(client.on("messageUpdated", (message) => {
         runDetached("updated message projection", () => syncConversationStateForMessage(message));

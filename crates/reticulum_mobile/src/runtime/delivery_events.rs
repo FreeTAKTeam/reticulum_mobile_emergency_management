@@ -99,28 +99,23 @@ fn register_receipt_tracking(
     }
 }
 
-fn transport_state_for_lxmf_status(status: LxmfDeliveryStatus) -> TransportDeliveryState {
+fn transport_state_for_lxmf_status(status:LxmfDeliveryStatus)->TransportDeliveryState {
     match status {
-        LxmfDeliveryStatus::Sent {} => TransportDeliveryState::SentDirect {},
-        LxmfDeliveryStatus::SentToPropagation {} => TransportDeliveryState::SentToPropagation {},
-        LxmfDeliveryStatus::Delivered {} | LxmfDeliveryStatus::Acknowledged {} => {
-            TransportDeliveryState::TransportDelivered {}
-        }
-        LxmfDeliveryStatus::Failed {} => TransportDeliveryState::Failed {},
-        LxmfDeliveryStatus::TimedOut {} => TransportDeliveryState::TimedOut {},
+        LxmfDeliveryStatus::StoredLocally {}=>TransportDeliveryState::Queued {},
+        LxmfDeliveryStatus::Uploading {}=>TransportDeliveryState::Sending {},
+        LxmfDeliveryStatus::UploadedUnverified {}|LxmfDeliveryStatus::RelayHolds {}|LxmfDeliveryStatus::SentToPropagation {}=>TransportDeliveryState::SentToPropagation {},
+        LxmfDeliveryStatus::Sent {}=>TransportDeliveryState::SentDirect {},
+        LxmfDeliveryStatus::Delivered {}|LxmfDeliveryStatus::Acknowledged {}=>TransportDeliveryState::TransportDelivered {},
+        LxmfDeliveryStatus::Failed {}|LxmfDeliveryStatus::Expired {}|LxmfDeliveryStatus::Evicted {}=>TransportDeliveryState::Failed {},
+        LxmfDeliveryStatus::TimedOut {}=>TransportDeliveryState::TimedOut {},
     }
 }
-
-fn application_ack_state_for_lxmf_status(status: LxmfDeliveryStatus) -> ApplicationAckState {
+fn application_ack_state_for_lxmf_status(status:LxmfDeliveryStatus)->ApplicationAckState {
     match status {
-        LxmfDeliveryStatus::Delivered {} => ApplicationAckState::Waiting {},
-        LxmfDeliveryStatus::Acknowledged {} => ApplicationAckState::Accepted {},
-        LxmfDeliveryStatus::Failed {} | LxmfDeliveryStatus::TimedOut {} => {
-            ApplicationAckState::Failed {}
-        }
-        LxmfDeliveryStatus::Sent {} | LxmfDeliveryStatus::SentToPropagation {} => {
-            ApplicationAckState::Waiting {}
-        }
+        LxmfDeliveryStatus::StoredLocally {}|LxmfDeliveryStatus::Uploading {}|LxmfDeliveryStatus::UploadedUnverified {}|LxmfDeliveryStatus::RelayHolds {}=>ApplicationAckState::NotRequired {},
+        LxmfDeliveryStatus::Acknowledged {}=>ApplicationAckState::Accepted {},
+        LxmfDeliveryStatus::Failed {}|LxmfDeliveryStatus::Expired {}|LxmfDeliveryStatus::Evicted {}|LxmfDeliveryStatus::TimedOut {}=>ApplicationAckState::Failed {},
+        _=>ApplicationAckState::Waiting {},
     }
 }
 

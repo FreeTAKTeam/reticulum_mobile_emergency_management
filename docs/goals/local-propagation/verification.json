@@ -1,0 +1,332 @@
+{
+  "status": "s8-timeout-correction-mvp-end-to-end-confirmed-release-matrix-open",
+  "baseline": {
+    "rem": "807041681430404f06dbac9b257fa5a192bed7e9",
+    "lxmf": "7822b608f2cd2debd8170895bc580d01dda5356e"
+  },
+  "lxmf_revision": "ee971c2818b62c62f7feb8262af30bb984ff97da",
+  "online_preservation": {
+    "checks_passed": 26,
+    "artifact": "output/local-propagation/offline-only-correction/baseline-preservation-current.json"
+  },
+  "checks": {
+    "rem_custody_current": {
+      "passed": 7,
+      "log": "/tmp/rem-offline-custody-final.log"
+    },
+    "shared_and_runtime": {
+      "passed": 46,
+      "revision": "f16b3151db4d70dace2f44d011b9aabda76facd5",
+      "log": "/tmp/lxmf-offline-final-tests.log"
+    },
+    "rpc": {
+      "passed": 795,
+      "ignored": 8,
+      "log": "/tmp/rem-offline-rpc-tests.log",
+      "revision": "038dde2e4b9eb3f80dee9066f3513a307d4d7181",
+      "scope": "prior checkpoint; standard handler bodies unchanged"
+    },
+    "daemon": {
+      "passed": 535,
+      "log": "/tmp/rem-offline-daemon-tests.log",
+      "revision": "038dde2e4b9eb3f80dee9066f3513a307d4d7181",
+      "scope": "prior checkpoint; standard handler bodies unchanged"
+    },
+    "clippy": "passed",
+    "embedded_dependency_isolation": "passed",
+    "rem_full": {
+      "passed": 514,
+      "revision": "9c254fe498efe579ff61286cf785fb377a8076d4",
+      "log": "/tmp/rem-offline-9c254fe-tests.log"
+    },
+    "android_native": {
+      "abis": [
+        "arm64-v8a",
+        "armeabi-v7a",
+        "x86_64"
+      ],
+      "bindings_regenerated": true,
+      "elf_page_bytes": 16384,
+      "signed_apk_built": true,
+      "revision": "9c254fe498efe579ff61286cf785fb377a8076d4",
+      "lxmf_revision": "f16b3151db4d70dace2f44d011b9aabda76facd5"
+    },
+    "offline_correction": {
+      "no_interface_admission_and_saver_expiry": "passed",
+      "unresolved_recipient_typed_error": "passed",
+      "stale_direct_and_relay_recovery": "passed",
+      "online_zero_custody_admission": "passed",
+      "retention_reopen_invariance": "passed",
+      "independent_review": "no remaining software blockers",
+      "ordinary_ci_embedded_gate": "wired"
+    },
+    "python_relay_interop": {
+      "passed": 2,
+      "scope": [
+        "propagated_rust_to_python",
+        "propagation_remote_download_rust_to_python"
+      ],
+      "revision": "f16b3151db4d70dace2f44d011b9aabda76facd5",
+      "matrix_status": "partial; other 28 cases not run",
+      "artifact": "output/local-propagation/offline-only-correction/python-compat-current.json"
+    },
+    "s8_timeout_correction": {
+      "rem_revision": "f752ed67588365c465350ef4c0c9e39a0a4e97de",
+      "lxmf_revision": "ee971c2818b62c62f7feb8262af30bb984ff97da",
+      "host_restart_same_message_recovery": "passed",
+      "host_admission_under_two_seconds": "passed",
+      "online_two_way_with_custody_and_cache_writes_rejected": "passed",
+      "unknown_recipient_prompt_typed_error": "passed",
+      "recipient_binding_corruption_restart_and_bound": "passed",
+      "daemon_identity_restart": "passed",
+      "runtime_propagation_tests": 6,
+      "embedded_storage_tests": 24,
+      "selected_package_clippy": "passed",
+      "source_size_files": 700,
+      "baseline_preservation_checks": 26,
+      "review": "PRE and POST aligned; no blocking findings",
+      "full_suite_on_this_revision": "not rerun; prior checkpoint counts retain their recorded revisions",
+      "artifact": "output/local-propagation/s8-correction/software-verification.json"
+    }
+  },
+  "phones": {
+    "baseline_restore": {
+      "restored_release": "1.5.5",
+      "apk_sha256": "ce5c832470ae8ef8aa16e19aa976781c5e5b84291e1e4af82d46b0710d9c31fd",
+      "data_preserved": true,
+      "candidate_test": "pending"
+    },
+    "direct_lora_chat": {
+      "passed": true,
+      "started_at": "2026-10-24T15:18:51.400987+00:00",
+      "finished_at": "2026-10-24T15:20:06.193959+00:00",
+      "route": "RNode BLE only on both devices",
+      "settings_changed": false,
+      "messages": [
+        {
+          "sender": "pixel",
+          "recipient": "poco",
+          "recipient_persisted": true,
+          "sender_callback_succeeded": true,
+          "elapsed_seconds": 36.9,
+          "receiver_wire_id_compared": false
+        },
+        {
+          "sender": "poco",
+          "recipient": "pixel",
+          "recipient_persisted": true,
+          "sender_callback_succeeded": true,
+          "elapsed_seconds": 22.9,
+          "receiver_wire_id_compared": false
+        }
+      ]
+    },
+    "previous_two_way_candidate": {
+      "sha256": "9b9490baeb31e93594659d0a7b0fbbb56e66961a503d5852c3621de25b4627c8",
+      "rem_revision": "1d2bdcb288f7d1be1fd39f31a875d2282e8e6a5d",
+      "lxmf_revision": "038dde2e4b9eb3f80dee9066f3513a307d4d7181",
+      "version": "1.5.5-hil-1d2bdcb-038dde2",
+      "test_control": true,
+      "webview_debugging": false,
+      "not_for_public_release": true
+    },
+    "current_candidate": {
+      "sha256": "9e8cdf3dd02742a828d57f27702291171586464b626a1ae5db7107f8c2a0f8e9",
+      "signer_sha256": "62608481f3ffa0c44d8d36de1055c826e47011fe8b598c8ef9c9e53e46016f1d",
+      "rem_revision": "f752ed67588365c465350ef4c0c9e39a0a4e97de",
+      "lxmf_revision": "ee971c2818b62c62f7feb8262af30bb984ff97da",
+      "version": "1.5.5-mvp-f752ed6-ee971c2",
+      "version_code": 262961600,
+      "test_control": false,
+      "webview_debugging": false,
+      "not_for_public_release": true,
+      "artifact": "output/local-propagation/candidate/reticulum-mobile-emergency-management-v1.5.5-mvp-f752ed6-ee971c2-release.apk",
+      "installed_on": [
+        "Pixel 7"
+      ],
+      "data_preserved": true,
+      "poco_unchanged": true,
+      "manifest_test_receiver_disabled": true,
+      "three_abi_native_code_verified": true
+    },
+    "no_interface_attempt": {
+      "started_at": "2026-10-24T15:48:51.525592+00:00",
+      "finished_at": "2026-10-24T15:49:42.284772+00:00",
+      "pass": false,
+      "error": "Pixel interface shutdown timed out",
+      "bluetooth_restored_after_stop": true,
+      "scope": "Interface-removal precondition timed out. No test message was submitted; no admission, restart or recovery was qualified."
+    },
+    "s8_offline_tcp_recovery": {
+      "passed_sender": true,
+      "recipient_screen_confirmation": "confirmed by user",
+      "body": "hello world",
+      "send_count": 1,
+      "s8_verified_announce_learned_over_tcp": true,
+      "pixel_tcp_removed_and_node_restarted": true,
+      "lora_config_preserved": true,
+      "stored_locally_visible": true,
+      "first_ui_observation_seconds": 3.331,
+      "tcp_restored_and_node_restarted": true,
+      "manual_message_resend": false,
+      "specific_single_message_bubble": "Delivered",
+      "receiver_wire_id_compared": false,
+      "scope": "Pixel offline encrypted custody, runtime restart and automatic TCP recovery; S8 receipt confirmed by user; no OS reboot or relay route qualified",
+      "artifact": "output/local-propagation/s8-correction/physical-test.json",
+      "recipient_confirmed_at_utc": "2026-10-24T19:40:24.067397+00:00",
+      "passed": true
+    }
+  },
+  "release_ready": false,
+  "superseded_implementation_evidence": {
+    "status": "implemented-partial-host-validated",
+    "phase_0": "waived_by_user",
+    "lxmf_revision": "2e04e012b05402195e02e05e8cdcd5accad23fb9",
+    "checks": {
+      "rem_rust": {
+        "passed": 499,
+        "log": "/tmp/local-propagation-rem-relay-tests.log"
+      },
+      "lxmf_shared_and_runtime": {
+        "passed": 50,
+        "log": "/tmp/local-propagation-relay-native-current-tests.log"
+      },
+      "daemon": {
+        "passed": 681,
+        "log": "/tmp/local-propagation-relay-daemon-tests.log"
+      },
+      "android_app_unit": {
+        "passed": 56,
+        "debug_apk_built": true,
+        "log": "/tmp/local-propagation-relay-android-tests.log"
+      },
+      "javascript_unit": {
+        "source_size": 7,
+        "app": 171,
+        "node_client": 44,
+        "log": "/tmp/local-propagation-relay-js-unit.log"
+      },
+      "android_native": {
+        "abis": [
+          "arm64-v8a",
+          "armeabi-v7a",
+          "x86_64"
+        ],
+        "elf_page_bytes": 16384,
+        "generated": "Kotlin",
+        "lxmf_revision": "2e04e012b05402195e02e05e8cdcd5accad23fb9",
+        "rem_source": "receiver-confirmed correction in this commit",
+        "source_fingerprint_sha256": "9b4e173d62e12bb0eba9c6ba8f78167733079f38fdd4cc7d8c4e3dc51e60580f",
+        "log": "/tmp/local-propagation-relay-android-codegen.log"
+      },
+      "playwright": {
+        "desktop": true,
+        "mobile": true,
+        "scope": "local-propagation status and eviction notice in web mock",
+        "log": "/tmp/local-propagation-e2e.log"
+      },
+      "source_size": {
+        "files": 694,
+        "ratcheted_exceptions": 0
+      },
+      "embedded_rpc_zeromq_excluded": true,
+      "typecheck": true,
+      "mobile_build": true,
+      "python_interop": {
+        "upload": true,
+        "retrieval": true,
+        "scope": "shared daemon handlers, not native outbox field acceptance",
+        "correction_logs": [
+          "/tmp/local-propagation-relay-correction-python-upload.log",
+          "/tmp/local-propagation-relay-correction-python-retrieval.log"
+        ]
+      },
+      "rem_strict_clippy": true,
+      "rem_fmt": true,
+      "lxmf_workspace_strict_clippy_toolchain": "1.99.0",
+      "silent_failure_guard": true,
+      "embedded_retrieve_for": {
+        "library_only": true,
+        "recipient_isolation": true,
+        "current_permission_check": true,
+        "retains_custody": true,
+        "bounded_ciphertext": true,
+        "shared_admission_guard": true,
+        "phone_endpoint_enabled": false
+      },
+      "native_python_retrieval": {
+        "passed": true,
+        "log": "/tmp/local-propagation-native-python-live-final.log",
+        "scope": "embedded native client against pinned stock Python relay: failed import retained, durable retry confirmed then retired; loopback TCP, not physical LoRa"
+      },
+      "receiver_confirmed_retrieval": {
+        "native_response_caps": true,
+        "one_payload_per_lora_poll": true,
+        "durable_import_before_haves": true,
+        "shared_admission_after_caller_drop": true,
+        "partial_malformed_database_failure_unconfirmed": true,
+        "signature_and_recipient_verified": true,
+        "historical_relay_marks_rewritten": false
+      },
+      "android_native_previous": {
+        "abis": [
+          "arm64-v8a",
+          "armeabi-v7a",
+          "x86_64"
+        ],
+        "elf_page_bytes": 16384,
+        "generated": "Kotlin",
+        "log": "/tmp/local-propagation-android-final-codegen.log",
+        "rem_revision": "677b14e41ff6d15feb9c7608836b594e5c3313c5",
+        "lxmf_revision": "5d054d8750fafbd98f394225f083a9d356b65ca7"
+      },
+      "android_only_capacitor_sync": true,
+      "typecheck_log": "/tmp/local-propagation-relay-typecheck.log",
+      "mobile_build_log": "/tmp/local-propagation-relay-mobile-build.log"
+    },
+    "unperformed": [
+      "physical routing matrix for this implementation",
+      "new release publication",
+      "iOS build",
+      "full hosted CI completion for receiver-confirmed correction"
+    ],
+    "open_contract": "Receiver-confirmed correction approved and implemented. Physical routing matrix and release qualification remain open.",
+    "warnings": [
+      "Generated Kotlin formatter ktlint unavailable; Android compilation succeeded.",
+      "Unpaginated inventories exceeding the cap, missing signer identities and unsupported or partial bundles remain relay-held.",
+      "Older Rust relays need the correction; existing historical completion marks are not rewritten."
+    ],
+    "hosted_ci_checkpoint": {
+      "rem_revision": "5bbcdb5863cad16ff5cb1063c5e58998858dfa34",
+      "lxmf_revision": "0d127f9076eab0fe6c71b37401a7a386dd175062",
+      "passed": [
+        "REM main CI",
+        "LXMF main CI",
+        "REM Android plugin/APK/Binder integration"
+      ],
+      "runs": [
+        "https://github.com/FreeTAKTeam/reticulum_mobile_emergency_management/actions/runs/40046466566",
+        "https://github.com/FreeTAKTeam/LXMF-rs/actions/runs/40046419224",
+        "https://github.com/FreeTAKTeam/reticulum_mobile_emergency_management/actions/runs/40046466567"
+      ],
+      "current_reruns": "pending for receiver-confirmed correction; native Python custody step already passed in LXMF Verify run 40050884367"
+    }
+  },
+  "remaining_acceptance": [
+    "physical relay TCP and LoRa-via-B forwarding scenarios",
+    "physical OS reboot during persisted states and full release routing matrix",
+    "alternate usable relay preflight guard focused regression",
+    "hosted CI on final source and release artifact qualification"
+  ],
+  "rem_revision": "f752ed67588365c465350ef4c0c9e39a0a4e97de",
+  "pr_status": "ready_for_review",
+  "additional_tests_deferred_by_user": {
+    "instruction": "Skip those tests for now and create a PR.",
+    "field_checks": [
+      "external propagation relay storage and recipient retrieval",
+      "actual phone OS reboot while a chat is stored",
+      "LoRa-only sender via another node with LoRa and TCP, including TCP loss and restoration"
+    ],
+    "additional_tests_run_for_pr": false
+  }
+}

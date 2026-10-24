@@ -67,6 +67,10 @@ fn spawn_send_bytes_command(
             } else {
                 None
             };
+            if let Some(report)=lxmf_report.as_ref().filter(|report|report.local_custody.is_some()) {
+                emit_local_mission_custody(&state,&bus,report);
+                return Ok(());
+            }
             let outcome = if let Some(report) = lxmf_report.as_ref() {
                 report.outcome
             } else {

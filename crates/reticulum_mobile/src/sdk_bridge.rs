@@ -1,7 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::sync::{
-    atomic::{AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     Arc,
 };
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -54,7 +54,7 @@ fn metadata_is_accepted_result(metadata: Option<&MissionSyncMetadata>) -> bool {
     })
 }
 
-fn metadata_uses_compact_eam_tracking_marker(metadata: &MissionSyncMetadata) -> bool {
+pub(crate) fn metadata_uses_compact_eam_tracking_marker(metadata: &MissionSyncMetadata) -> bool {
     metadata.command_type.as_deref() == Some("mission.registry.eam.upsert")
         && metadata.command_id.as_deref() == Some("m")
         && metadata
@@ -84,7 +84,7 @@ fn idempotency_key_for_send_attempt(
     }
 }
 
-fn map_sdk_error_to_node_error(err: SdkError) -> NodeError {
+pub(crate) fn map_sdk_error_to_node_error(err: SdkError) -> NodeError {
     if err.cause_code.as_deref() == Some(SDK_CAUSE_LXMF_PACKET_TOO_LARGE) {
         return NodeError::LxmfPacketTooLarge {};
     }
@@ -139,13 +139,22 @@ pub(crate) struct PropagationFetchResult {
     pub(crate) decrypt_failed_count: usize,
 }
 
+pub(crate) struct FailedLxmfAttempt {
+    pub(crate) outgoing: Option<lxmf_runtime::CapturedOutgoing>,
+    pub(crate) unreachable: bool,
+}
+
 pub(crate) struct RuntimeLxmfSdk {
     client: Arc<Client<InProcessBackend>>,
     transport: SdkTransportState,
     send_sequence: AtomicU64,
+    pub(crate) local_recovery_inflight: Arc<AtomicBool>,
+    pub(crate) local_propagation: Option<lxmf_runtime::LocalPropagation>,
+    pub(crate) local_propagation_init_failed: bool,
 }
 
 include!("sdk_bridge/runtime_send.rs");
+include!("sdk_bridge/local_propagation.rs");
 include!("sdk_bridge/event_recording.rs");
 
 include!("sdk_bridge/propagation_fetch.rs");

@@ -14,7 +14,7 @@ export type SendOutcome =
   | "DroppedCiphertextTooLarge"
   | "DroppedEncryptFailed"
   | "DroppedNoRoute";
-export type LxmfDeliveryStatus = "Sent" | "SentToPropagation" | "Delivered" | "Acknowledged" | "Failed" | "TimedOut";
+export type LxmfDeliveryStatus = import("./contracts-local-propagation").LocalPropagationState | "Sent" | "SentToPropagation" | "Delivered" | "Acknowledged" | "Failed" | "TimedOut";
 export type TransportDeliveryState =
   | "Queued"
   | "Sending"

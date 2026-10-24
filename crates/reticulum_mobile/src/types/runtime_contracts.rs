@@ -1,5 +1,13 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum NodeError {
+    #[error("recipient encryption identity is unresolved")]
+    UnresolvedRecipient {},
+    #[error("local propagation payload is too large")]
+    PayloadTooLarge {},
+    #[error("local propagation store is full")]
+    StoreFull {},
+    #[error("local propagation message has expired")]
+    Expired {},
     #[error("invalid config")]
     InvalidConfig {},
     #[error("io error")]

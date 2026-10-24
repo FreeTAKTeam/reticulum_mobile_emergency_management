@@ -1,3 +1,4 @@
+import type { DiscoveredPeer } from "../types/domain";
 import {
   type ConversationRecord,
   type MessageRecord,
@@ -355,4 +356,19 @@ export function mapConversationRecord(
     updatedAtMs: record.lastMessageAtMs,
     state: record.lastMessageState ?? "Queued",
   };
+}
+
+export function findConversationForSelection(
+  conversations: readonly ConversationListItem[],
+  destinationHex: string,
+  peer: Pick<DiscoveredPeer, "destination" | "lxmfDestinationHex"> | null = null,
+) {
+  const aliases = [destinationHex, peer?.destination, peer?.lxmfDestinationHex]
+    .filter((value): value is string => Boolean(value)).map(normalizeDestinationHex);
+  const matches = conversations.filter((conversation) =>
+    aliases.includes(normalizeDestinationHex(conversation.destinationHex)),
+  );
+  return matches.find((conversation) => !isDraftConversationId(conversation.conversationId))
+    ?? matches[0]
+    ?? null;
 }

@@ -43,10 +43,11 @@ fn spawn_announce_tasks(
         tokio::spawn(async move {
             loop {
                 let saver_active = *power_saver_rx.borrow_and_update();
-                let delay = Duration::from_secs(u64::from(crate::node::effective_power_cadence_seconds(
-                    normal_interval_secs,
-                    saver_active,
-                )));
+                let delay =
+                    Duration::from_secs(u64::from(crate::node::effective_power_cadence_seconds(
+                        normal_interval_secs,
+                        saver_active,
+                    )));
                 tokio::select! {
                     _ = tokio::time::sleep(delay) => {
                         announce_destinations(
@@ -92,6 +93,21 @@ fn spawn_announce_receiver(state: &NodeRuntimeState, bus: &EventBus) {
                     let destination_kind =
                         announce_destination_kind_from_name_hash(event.name_hash.as_slice())
                             .to_string();
+                    if destination_kind == DESTINATION_KIND_LXMF_DELIVERY {
+                        if let Some(store) = &sdk.local_propagation {
+                            if let Err(error) = store
+                                .remember_recipient(
+                                    desc.address_hash,
+                                    crate::numeric::u64_to_i64_saturating(now_ms() / 1000),
+                                )
+                                .await
+                            {
+                                warn!(
+                                    "[local-propagation] recipient key persistence failed: {error}"
+                                );
+                            }
+                        }
+                    }
                     let interface_hex = hex::encode(event.interface);
                     let received_at_ms = now_ms();
                     let sdk_announce_record = lxmf_sdk_announce_record_from_raw(
@@ -239,6 +255,14 @@ fn spawn_announce_receiver(state: &NodeRuntimeState, bus: &EventBus) {
                         }
                     }
                     sync_auto_propagation_node(&state, &bus).await;
+                    let recipient = SingleOutputDestination::new(
+                        desc.identity,
+                        DestinationName::new(LXMF_DELIVERY_NAME.0, LXMF_DELIVERY_NAME.1),
+                    )
+                    .desc
+                    .address_hash
+                    .to_hex_string();
+                    spawn_local_custody_recovery(&state, &bus, Some(recipient));
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,

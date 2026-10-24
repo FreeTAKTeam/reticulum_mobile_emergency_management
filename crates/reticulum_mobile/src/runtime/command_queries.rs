@@ -9,6 +9,9 @@ fn spawn_cancel_lxmf_command(
     let state = state.clone();
     let bus = bus.clone();
     executor.spawn(lane, RuntimeCommandClass::Control, resp, async move {
+        if local_message_in_custody(&state, &message_id_hex).await? {
+            return Err(NodeError::InvalidConfig {});
+        }
         let updated = state
             .messaging
             .lock()

@@ -22,6 +22,7 @@ fn spawn_link_event_listener(
                             );
                             connected_peers.lock().await.insert(event.address_hash);
                             record_peer_link_state(&state, &bus, &destination_hex, true).await;
+                            spawn_local_custody_recovery(&state,&bus,Some(destination_hex.clone()));
                         }
                         LinkEvent::Closed => {
                             debug!(
@@ -118,4 +119,25 @@ fn spawn_periodic_hub_refresh(
             }
         });
     }
+}
+
+fn spawn_inbound_custody_listener(state: &NodeRuntimeState, bus: &EventBus) {
+    let state = state.clone();
+    let bus = bus.clone();
+    let mut events = state.transport.in_link_events();
+    tokio::spawn(async move {
+        loop {
+            match events.recv().await {
+                Ok(event) => {
+                    if let LinkEvent::PeerIdentified(identity) = event.event {
+                        let destination = SingleOutputDestination::new(*identity, DestinationName::new("lxmf", "delivery"))
+                            .desc.address_hash.to_hex_string();
+                        spawn_local_custody_recovery(&state, &bus, Some(destination));
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+            }
+        }
+    });
 }
