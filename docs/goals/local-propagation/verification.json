@@ -1,5 +1,5 @@
 {
-  "status": "s8-timeout-correction-mvp-sender-qualified-recipient-confirmation-pending",
+  "status": "s8-timeout-correction-mvp-end-to-end-confirmed-release-matrix-open",
   "baseline": {
     "rem": "807041681430404f06dbac9b257fa5a192bed7e9",
     "lxmf": "7822b608f2cd2debd8170895bc580d01dda5356e"
@@ -159,7 +159,7 @@
     },
     "s8_offline_tcp_recovery": {
       "passed_sender": true,
-      "recipient_screen_confirmation": "pending",
+      "recipient_screen_confirmation": "confirmed by user",
       "body": "hello world",
       "send_count": 1,
       "s8_verified_announce_learned_over_tcp": true,
@@ -171,8 +171,10 @@
       "manual_message_resend": false,
       "specific_single_message_bubble": "Delivered",
       "receiver_wire_id_compared": false,
-      "scope": "sender-side device evidence; receiver screen confirmation pending; no OS reboot or relay route qualified",
-      "artifact": "output/local-propagation/s8-correction/physical-test.json"
+      "scope": "Pixel offline encrypted custody, runtime restart and automatic TCP recovery; S8 receipt confirmed by user; no OS reboot or relay route qualified",
+      "artifact": "output/local-propagation/s8-correction/physical-test.json",
+      "recipient_confirmed_at_utc": "2026-10-24T19:40:24.067397+00:00",
+      "passed": true
     }
   },
   "release_ready": false,
@@ -311,7 +313,6 @@
     }
   },
   "remaining_acceptance": [
-    "S8 recipient screen confirmation for new hello world",
     "physical relay TCP and LoRa-via-B forwarding scenarios",
     "physical OS reboot during persisted states and full release routing matrix",
     "alternate usable relay preflight guard focused regression",
