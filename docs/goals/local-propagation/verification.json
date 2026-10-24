@@ -1,5 +1,5 @@
 {
-  "status": "offline-only-correction-host-validated-android-and-field-pending",
+  "status": "offline-only-correction-host-validated-two-way-lora-chat-passed",
   "baseline": {
     "rem": "807041681430404f06dbac9b257fa5a192bed7e9",
     "lxmf": "7822b608f2cd2debd8170895bc580d01dda5356e"
@@ -32,13 +32,59 @@
     "rem_full": {
       "passed": 511,
       "log": "/tmp/rem-offline-tests-final.log"
+    },
+    "android_native": {
+      "abis": [
+        "arm64-v8a",
+        "armeabi-v7a",
+        "x86_64"
+      ],
+      "bindings_regenerated": true,
+      "elf_page_bytes": 16384,
+      "signed_apk_built": true
     }
   },
   "phones": {
-    "restored_release": "1.5.5",
-    "apk_sha256": "ce5c832470ae8ef8aa16e19aa976781c5e5b84291e1e4af82d46b0710d9c31fd",
-    "data_preserved": true,
-    "candidate_test": "pending"
+    "baseline_restore": {
+      "restored_release": "1.5.5",
+      "apk_sha256": "ce5c832470ae8ef8aa16e19aa976781c5e5b84291e1e4af82d46b0710d9c31fd",
+      "data_preserved": true,
+      "candidate_test": "pending"
+    },
+    "current_candidate": {
+      "sha256": "9b9490baeb31e93594659d0a7b0fbbb56e66961a503d5852c3621de25b4627c8",
+      "rem_revision": "1d2bdcb288f7d1be1fd39f31a875d2282e8e6a5d",
+      "lxmf_revision": "038dde2e4b9eb3f80dee9066f3513a307d4d7181",
+      "version": "1.5.5-hil-1d2bdcb-038dde2",
+      "test_control": true,
+      "webview_debugging": false,
+      "not_for_public_release": true
+    },
+    "direct_lora_chat": {
+      "passed": true,
+      "started_at": "2026-10-24T15:18:51.400987+00:00",
+      "finished_at": "2026-10-24T15:20:06.193959+00:00",
+      "route": "RNode BLE only on both devices",
+      "settings_changed": false,
+      "messages": [
+        {
+          "sender": "pixel",
+          "recipient": "poco",
+          "recipient_persisted": true,
+          "sender_callback_succeeded": true,
+          "elapsed_seconds": 36.9,
+          "receiver_wire_id_compared": false
+        },
+        {
+          "sender": "poco",
+          "recipient": "pixel",
+          "recipient_persisted": true,
+          "sender_callback_succeeded": true,
+          "elapsed_seconds": 22.9,
+          "receiver_wire_id_compared": false
+        }
+      ]
+    }
   },
   "release_ready": false,
   "superseded_implementation_evidence": {
@@ -174,5 +220,11 @@
       ],
       "current_reruns": "pending for receiver-confirmed correction; native Python custody step already passed in LXMF Verify run 40050884367"
     }
-  }
+  },
+  "remaining_acceptance": [
+    "offline recipient and relay handoff",
+    "LoRa through TCP transport relay",
+    "restart/expiry/eviction field cases",
+    "public release packaging without test control"
+  ]
 }

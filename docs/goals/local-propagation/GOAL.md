@@ -105,3 +105,27 @@ acceptance remain open. Phase 3 remains deferred.
 - Both existing pinned-Python daemon smokes pass. Strict Clippy, formatting, 694-file REM source-size gate, LXMF module-size and embedded dependency isolation pass.
 - Android native rebuild: all three ABIs and 16 KiB ELF checks pass; Kotlin regenerated; Android-only Capacitor sync, 56 unit tests and debug APK assembly pass. Typecheck, mobile build and all JS unit suites pass.
 - New hosted LXMF Verify native Python custody step passed; full hosted workflows remain in progress. Read-only ADB inventory shows only Pixel 7 attached; Poco remains untouched. Physical routing acceptance is not claimed.
+
+## Offline-only correction qualification
+
+- Product source REM `1d2bdcb`, LXMF-rs `038dde2e` on tested baseline `7822b608`.
+- 25 baseline preservation checks pass; independent review confirmed all 17
+  protected REM files match release source exactly. Existing online send bodies
+  retain their policy with failure-capture plumbing only.
+- Current host checks: 511 REM tests; 45 shared/runtime tests; 795 RPC tests
+  (eight existing ignored); 535 daemon tests; strict Clippy, formatting,
+  698-file source-size and embedded dependency isolation pass.
+- All three Android native ABIs and 16 KiB ELF checks pass; Kotlin regenerated.
+  Signed QA candidate SHA-256
+  `9b9490baeb31e93594659d0a7b0fbbb56e66961a503d5852c3621de25b4627c8`.
+- 2026-10-24 15:19–15:20 UTC: Pixel -> Poco chat persisted in about 37 seconds;
+  Poco -> Pixel persisted in about 23 seconds. Both native sender callbacks
+  succeeded. Only RNode BLE interfaces were active; no profile/settings change,
+  queue clearing, manual transmission retry or explicit Connect was used.
+- Device assertions establish recipient persistence of each unique synthetic
+  body; receiver wire IDs were not compared. Exact-wire preservation is covered
+  by host/native tests separately.
+- The candidate is installed on both phones with app data intact. ADB test
+  control is enabled for remaining acceptance; WebView debugging is disabled.
+  It is not a public release. Remaining offline/relay/restart matrix and
+  production packaging remain open; earlier release 1.5.5 remains unchanged.
