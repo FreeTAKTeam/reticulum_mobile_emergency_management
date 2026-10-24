@@ -26,7 +26,7 @@ Preserve the earlier unapproved routing worktree unchanged for reference.
 
 ## Qualified software checkpoint
 
-- LXMF-rs branch `corvo/local-propagation`, immutable revision `0d127f9076eab0fe6c71b37401a7a386dd175062`, draft PR https://github.com/FreeTAKTeam/LXMF-rs/pull/679. REM CI now pins that pushed revision.
+- LXMF-rs branch `corvo/local-propagation`, immutable revision `14880b5447430227d898a58a62d413e6f05622e6`, draft PR https://github.com/FreeTAKTeam/LXMF-rs/pull/679. REM CI now pins that pushed revision.
 - Shared schema, SQL, validation, retention, full standard `/get` and `/offer` handler bodies, and sender-only custody are implemented. Daemon adapters retain the existing writer, authentication, counters, bounded processing and custody behavior.
 - One retained native owner holds transfer admission through Resource completion or observed cancellation. Store leases recover conservatively from SQLite finalization failures; tests cover cancellation, disconnect, timeout, storage rejection, restart and stale completion.
 - Local custody is the only retry/ACK owner after admission. Direct recovery does not create REM pending ACK timers. Authenticated negative application results stay rejected; late results cannot revive expired or evicted payloads.
@@ -64,3 +64,11 @@ Preserve the earlier unapproved routing worktree unchanged for reference.
 - Exact REM CI formatter and strict Clippy commands now pass locally, including the JNI macro. The full 509-test suite and stopped-runtime status regression pass after the fixes.
 - LXMF workspace Clippy passes on the CI stable toolchain (1.99.0). The existing integration guard against ignored errors passes after explicit channel-close and poisoned-lock diagnostics. Runtime cancellation/timeout/disconnect tests remain green.
 - The dependency pin follows LXMF `0d127f90`; hosted checks on both follow-up revisions remain pending. Android native artifact qualification above belongs to REM `677b14e` / LXMF `5d054d87`; final release packaging must rebuild after the pending relay-policy amendment.
+
+## Embedded API completion audit
+
+- The final audit found that shared `/get` extraction alone did not provide the explicit Phase 1 `retrieve_for(authenticated_identity)` embedded API. That gap is now fixed in LXMF `14880b54` without activating Phase 3.
+- The library API derives its destination from the host-authenticated identity, filters expired/terminal rows, checks current permission against the original signed wire, and returns one bounded original recipient ciphertext. It changes no custody/attempt/retry state. The runtime guard retains the shared transfer permit.
+- Tests prove recipient isolation, denied sharing, expiry/retirement/stopped filtering, immutable repeat retrieval, larger-budget retry after skipping oversized entries, and shared admission ownership. All 44 library/protocol/runtime tests pass; strict workspace Clippy, source-size, embedded dependency and silent-failure gates pass.
+- Independent review found no blocking API issue. Authentication remains the host's native Link responsibility, and any later Phase 3 sender must retain the guard until native completion/cancellation. No endpoint, announce, capability or poller was added.
+- Main CI passed for REM `5bbcdb5` and LXMF `0d127f90`; REM's Android plugin/APK/Binder job also passed. The current dependency pin now follows `14880b54`, so its hosted reruns remain separate from that prior evidence.

@@ -65,6 +65,12 @@ bound inventory reception, but cannot undo the Rust relay's completion marks.
 A compatible safe retrieval contract or an explicitly revised policy is needed
 before this part of Phase 2 or the release gate can pass.
 
+The Phase 1 library-only `retrieve_for` API is available without enabling a phone
+service. It derives the recipient from a host-authenticated Link identity, checks
+current sharing permission against the original wire, and returns one bounded
+recipient ciphertext while retaining custody. A guard holds the shared transfer
+admission. Isolation, expiry, denial, budget retry and admission ownership are tested.
+
 Optional phone-hosted `rem.fetch` retrieval remains unimplemented until Phase 2
 field evidence demonstrates asymmetric reachability. No new `lxmf.propagation`
 destination or phone relay announce is introduced.

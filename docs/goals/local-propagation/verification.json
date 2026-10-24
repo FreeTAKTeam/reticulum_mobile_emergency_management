@@ -1,15 +1,15 @@
 {
   "status": "implemented-partial-host-validated",
   "phase_0": "waived_by_user",
-  "lxmf_revision": "0d127f9076eab0fe6c71b37401a7a386dd175062",
+  "lxmf_revision": "14880b5447430227d898a58a62d413e6f05622e6",
   "checks": {
     "rem_rust": {
       "passed": 509,
       "log": "/tmp/local-propagation-rem-ci-followup.log"
     },
     "lxmf_shared_and_runtime": {
-      "passed": 41,
-      "log": "/tmp/local-propagation-library-final.log"
+      "passed": 44,
+      "log": "/tmp/local-propagation-retrieval-api-tests-final.log"
     },
     "daemon": {
       "passed": 680,
@@ -58,7 +58,16 @@
     "rem_strict_clippy": true,
     "rem_fmt": true,
     "lxmf_workspace_strict_clippy_toolchain": "1.99.0",
-    "silent_failure_guard": true
+    "silent_failure_guard": true,
+    "embedded_retrieve_for": {
+      "library_only": true,
+      "recipient_isolation": true,
+      "current_permission_check": true,
+      "retains_custody": true,
+      "bounded_ciphertext": true,
+      "shared_admission_guard": true,
+      "phone_endpoint_enabled": false
+    }
   },
   "unperformed": [
     "physical routing matrix for this implementation",
@@ -71,19 +80,18 @@
     "Generated Kotlin formatter ktlint unavailable; Android compilation succeeded."
   ],
   "hosted_ci_checkpoint": {
-    "rem_revision": "677b14e41ff6d15feb9c7608836b594e5c3313c5",
+    "rem_revision": "5bbcdb5863cad16ff5cb1063c5e58998858dfa34",
+    "lxmf_revision": "0d127f9076eab0fe6c71b37401a7a386dd175062",
     "passed": [
-      "Rust tests",
-      "full Playwright matrix",
-      "all web checks",
-      "Rust dependency audit",
-      "npm dependency audit"
+      "REM main CI",
+      "LXMF main CI",
+      "REM Android plugin/APK/Binder integration"
     ],
-    "fixed_locally": [
-      "formatting",
-      "Clippy",
-      "LXMF ignored-error guard"
+    "runs": [
+      "https://github.com/FreeTAKTeam/reticulum_mobile_emergency_management/actions/runs/40046466566",
+      "https://github.com/FreeTAKTeam/LXMF-rs/actions/runs/40046419224",
+      "https://github.com/FreeTAKTeam/reticulum_mobile_emergency_management/actions/runs/40046466567"
     ],
-    "followup_hosted_checks": "pending"
+    "current_reruns": "pending"
   }
 }
