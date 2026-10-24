@@ -363,6 +363,7 @@ mod tests {
     include!("node/tests/events_event_route_priority_puts_low_hop_live_pee.rs");
     include!("node/tests/lifecycle.rs");
     include!("node/tests/messaging_delivery.rs");
+    include!("node/tests/rnode_connection.rs");
     include!("node/tests/peers_routes.rs");
     include!("node/tests/peers_routes_capabilities.rs");
     include!("node/tests/chat_routing.rs");

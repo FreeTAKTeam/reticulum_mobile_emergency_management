@@ -279,7 +279,21 @@ async fn resolve_peer_route(
     if *state.power_saver_rx.borrow() {
         return Ok(());
     }
-    let destination = parse_address_hash(destination_hex)?;
+    let target = if let Some(destination_hex) =
+        known_lxmf_route_for_app_destination(state, destination_hex).await
+    {
+        Some(ManagedPeerLinkTarget {
+            destination_hex,
+            kind: ManagedPeerLinkKind::LxmfDelivery,
+        })
+    } else {
+        desired_managed_peer_link_target_for_destination(state, destination_hex).await
+    };
+    let destination = parse_address_hash(
+        target
+            .as_ref()
+            .map_or(destination_hex, |target| target.destination_hex.as_str()),
+    )?;
     let attempted_at_ms = now_ms();
     {
         let mut messaging = state.messaging.lock().await;
@@ -288,8 +302,20 @@ async fn resolve_peer_route(
     emit_peer_changed(state, bus, destination_hex).await;
 
     state.transport.request_path(&destination, None, None).await;
-    let desc = ensure_destination_desc(state, destination, None).await?;
+    let desc = ensure_destination_desc(
+        state,
+        destination,
+        target.map(|target| target.kind.destination_name()),
+    )
+    .await?;
     let identity_hex = desc.identity.address_hash.to_hex_string();
+    let app_destination_hex = SingleOutputDestination::new(
+        desc.identity,
+        DestinationName::new(APP_DESTINATION_NAME.0, APP_DESTINATION_NAME.1),
+    )
+    .desc
+    .address_hash
+    .to_hex_string();
     let lxmf_desc = SingleOutputDestination::new(
         desc.identity,
         DestinationName::new(LXMF_DELIVERY_NAME.0, LXMF_DELIVERY_NAME.1),
@@ -299,11 +325,12 @@ async fn resolve_peer_route(
     {
         let mut messaging = state.messaging.lock().await;
         messaging.record_resolution_result(
-            destination_hex,
+            app_destination_hex.as_str(),
             identity_hex.as_str(),
             lxmf_destination_hex.as_str(),
             now_ms(),
         );
+        messaging.record_resolution_error(destination_hex, None);
     }
     let desired_link_target = {
         let messaging = state.messaging.lock().await;

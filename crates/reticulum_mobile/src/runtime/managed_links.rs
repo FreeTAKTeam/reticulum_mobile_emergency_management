@@ -173,11 +173,9 @@ async fn register_desired_managed_peer_link(
     state: &NodeRuntimeState,
     destination_hex: &str,
 ) -> Option<ManagedPeerLinkRegistration> {
-    if !has_active_peer_warmup_interface(state).await {
-        return None;
-    }
     let target = desired_managed_peer_link_target_for_destination(state, destination_hex).await?;
-    let maintained = should_maintain_peer_link(state, destination_hex).await;
+    let maintained = has_active_peer_warmup_interface(state).await
+        && should_maintain_peer_link(state, destination_hex).await;
     if maintained {
         state.managed_peer_links.add_desired(target.clone()).await;
     }
