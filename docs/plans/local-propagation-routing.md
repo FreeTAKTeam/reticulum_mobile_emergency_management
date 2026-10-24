@@ -152,3 +152,24 @@ Do this only if Phase 2 field data shows real asymmetric cases, where the recipi
 Remote possession is something the relay asserts after authentication. It doesn't guarantee that the relay will keep the message or survive a crash.
 
 The user's 2026-10-24 scope correction supersedes the original `7bf5257c` implementation base. Preserve the tested LXMF-rs `7822b608f2cd2debd8170895bc580d01dda5356e` behavior and add only offline custody. Pin the qualified additive revision. Normal online LoRa polling, Sync and send deadlines remain those of release 1.5.5.
+
+## S8 timeout correction (2026-10-24)
+
+**Intent:** A previously verified, saved/team recipient without a usable route must enter encrypted local custody promptly, including after a sender restart.
+**Current behavior:** Only the identity hash survives restart. The public encryption key is lost; an unreachable send spends the normal path-resolution deadline before failing, without a durable outgoing message.
+**Expected outcome:** Persist native-verified public recipient keys in the compiled library. A known eligible recipient with neither a native path nor an active delivery Link bypasses futile online attempts and uses existing encrypted custody only if its live recipient key is missing or no baseline-eligible relay has a native route/Link. A live recipient key plus a usable normal relay preserves baseline propagation. Missing never-learned keys return `UnresolvedRecipient` promptly.
+**Target-Perspective Output:** The message shows Stored locally rather than timing out, then the same message is delivered when TCP restores reachability.
+**Truth Owner:** Native verified identities, compiled LXMF preparation and the existing single SQLite custody owner.
+**Contract Boundary:** REM supplies the destination and existing permission decision. The library reads verified native keys, validates their delivery-address binding on write/read, and prepares the existing signed/encrypted representation. No raw caller key admission.
+**Cutover / Displaced Path:** Only the known unreachable preflight replaces futile legacy path attempts. All routed online sends retain the tested baseline policy. Cached keys never restore or invent a route.
+**Value Density:** One bounded public-key cache and one offline preflight; no new queue, protocol, daemon, dependencies, settings or background timer.
+**Evidence Lane / Acceptance Evidence:** Regression learns a verified identity, restarts with empty native maps, stores a chat within two seconds with encrypted bytes, and recovers the same message after a real transport reconnection. Existing online no-custody and unknown-key tests remain decisive. On Pixel, learn S8 over TCP, remove Pixel's TCP reachability, send once, restore TCP and inspect the same message; recipient confirmation remains separate from sender status.
+**Kill Criteria:** Do not inject keys into global transport maps, restore path tables, weaken recipient validation, preserve plaintext pending intents, alter online timing, or claim the already failed message was stored retroactively.
+**Architecture Slice:** Extract existing daemon identity schema/read/upsert SQL into `lxmf-propagation`; daemon delegates unchanged. Embedded cache uses the existing serialized connection and at most 4,096 entries, evicting oldest key metadata only. `lxmf-runtime` remembers only keys obtained from its native transport and resolves custody preparation from live keys/cache without a path wait. REM announce handling feeds that API; existing saved-peer matching and native route/Link checks select the early offline path.
+**Plan Review Gate:** Requires PRE review before execution.
+
+Tasks run sequentially in the main agent:
+
+1. Shared identity persistence and native offline resolver. Allowed: `lxmf-propagation`, `lxmf-runtime` propagation modules/tests and existing `rns-rpc` identity storage delegation. Verify cache restart/binding/bound, prompt unknown-key rejection without transport-map insertion, and the existing daemon identity restart test. Cache failures must leave ordinary online delivery working. Avoid normal delivery and transport code.
+2. REM verified announce hook and known unreachable preflight, with the narrow restart regression. Allowed: local propagation send, announce hook, closest native tests and dependency pin. Verify the three decisive offline/online tests and preservation checks. Avoid frontend, generated contracts, radio settings and normal send policy.
+3. Review the bounded diff, build and install the production-style MVP on Pixel, then repeat the unreachable-to-TCP chat test. Preserve phone data and report recipient confirmation accurately; do not touch Poco. Publish evidence and update the existing draft PR, without releasing an unqualified artifact.

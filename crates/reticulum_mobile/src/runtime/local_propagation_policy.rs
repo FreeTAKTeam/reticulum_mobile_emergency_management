@@ -166,3 +166,57 @@ async fn local_message_in_custody(
         .map_err(crate::sdk_bridge::map_local_propagation_error)?
         .is_some_and(|record| !record.state.terminal()))
 }
+
+async fn known_recipient_has_no_usable_route(
+    state: &NodeRuntimeState,
+    requested: &str,
+) -> Result<bool, NodeError> {
+    let resolved = resolve_lxmf_destination_hex(state, requested).await;
+    let destination = parse_address_hash(&resolved)?;
+    if state.transport.has_path(&destination).await
+        || state.transport.delivery_link_available(&destination).await
+    {
+        return Ok(false);
+    }
+    let saved = saved_peer_matches_destination(state, requested, &resolved).await;
+    let team_member = state.app_state.get_app_settings()?.is_some_and(|settings| {
+        settings.teams.local_teams.iter().any(|team| {
+            crate::team_membership::destinations_include_peer(
+                &team.member_destinations,
+                requested,
+                Some(&resolved),
+                None,
+            )
+        })
+    });
+    if !saved && !team_member {
+        return Ok(false);
+    }
+    // A live key and usable normal relay still belong to the baseline send path.
+    if state
+        .transport
+        .destination_identity(&destination)
+        .await
+        .is_some()
+        && has_active_relay_transport_interface(state).await
+    {
+        let active = state.active_propagation_node_hex.lock().await.clone();
+        let announces = state.messaging.lock().await.list_announces();
+        let candidates = propagation_sync_candidate_relays(
+            &announces,
+            active.as_deref().unwrap_or(""),
+            state.preferred_propagation_node_hex.as_deref(),
+        );
+        for relay in candidates
+            .iter()
+            .filter_map(|relay| parse_address_hash(relay).ok())
+        {
+            if state.transport.has_path(&relay).await
+                || state.transport.delivery_link_available(&relay).await
+            {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
+}

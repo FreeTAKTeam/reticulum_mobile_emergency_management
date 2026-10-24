@@ -5,9 +5,12 @@ implementation. Normal delivery, Connect, alias handling, caller deadlines,
 packet sizing, regular relay Sync and automatic polling preserve release 1.5.5:
 REM `8070416`, LXMF-rs `7822b608`.
 
-REM runs that existing delivery policy first whenever an interface can carry
-traffic. With no active interface, eligible traffic goes directly to validated
-local admission. Successful submissions return the
+REM runs that existing delivery policy first for routed traffic. With no active
+interface, eligible traffic goes directly to validated local admission. A known
+saved/team recipient with neither a native path nor an active delivery Link also
+uses prompt custody when its live key is missing or no baseline-eligible relay
+has a native path/Link. A live recipient key plus a usable normal relay preserves
+baseline propagation. Successful submissions return the
 original report without writing local custody. At a missing-route failure, or a
 native attempt explicitly classified as unreachable, the offline fallback checks
 current sharing permission and validated recipient identity, then deposits once.
@@ -20,6 +23,13 @@ recipient. If no wire was constructed, preparation occurs once at offline admiss
 Baseline retries remain unchanged; there is no second direct/relay attempt loop
 in the custody fallback. Existing timing may exceed the original plan's proposed
 60/180-second targets; preserving tested online behavior takes precedence.
+
+The shared crate also persists native-verified public recipient keys, validates
+their `lxmf.delivery` address binding on write and read, and bounds embedded key
+metadata to 4,096 entries. Custody preparation can use these keys after restart
+without path discovery or inserting cached routes into transport. A recipient
+whose key was never learned returns `UnresolvedRecipient` promptly. An old failed
+send cannot be recovered retroactively if it never entered custody.
 
 The shared `lxmf-propagation` crate owns encrypted storage, quota, deduplication,
 expiry, eviction and retirement. It imports neither daemon dispatch nor ZeroMQ,

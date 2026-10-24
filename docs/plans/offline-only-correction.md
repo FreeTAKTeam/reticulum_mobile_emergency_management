@@ -17,7 +17,9 @@ release 1.5.5 for all other traffic.
 
 1. Restore protected behavior and the tested dependency baseline. Keep the shared
    daemon-free custody crate additive; do not take unrelated transport updates.
-2. Run the existing delivery flow first whenever any interface can carry traffic.
+2. Run the existing delivery flow first for routed traffic. The [S8 timeout
+   amendment](local-propagation-routing.md#s8-timeout-correction-2026-10-24)
+   adds prompt admission for known unreachable peers and persistent verified keys.
    With no active interface, admit eligible offline traffic directly rather than
    running futile send attempts against a cached Link. A successful send returns its original
    report and never writes custody. No-open-Link alone is not an offline decision.

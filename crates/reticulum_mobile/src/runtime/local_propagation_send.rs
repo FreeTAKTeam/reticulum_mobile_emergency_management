@@ -42,6 +42,21 @@ async fn send_lxmf_with_delivery_policy(
         )
         .await;
     }
+    if custody_eligible && known_recipient_has_no_usable_route(state, requested_destination).await?
+    {
+        return deposit_offline_message(
+            state,
+            bus,
+            requested_destination,
+            body,
+            title,
+            fields,
+            metadata,
+            class,
+            None,
+        )
+        .await;
+    }
     let mut failed_attempt = None;
     let result = send_lxmf_with_legacy_delivery_policy(
         state,

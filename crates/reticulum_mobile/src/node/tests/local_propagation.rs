@@ -208,8 +208,12 @@ async fn online_two_way_chat_never_writes_local_custody() {
         let db =
             rusqlite::Connection::open(Path::new(&storage).join("local-propagation.db")).unwrap();
         db.execute_batch("CREATE TRIGGER reject_online_custody BEFORE INSERT ON propagation_owned BEGIN SELECT RAISE(ABORT,'online traffic entered custody'); END;").unwrap();
+        db.execute_batch("CREATE TRIGGER reject_recipient_cache BEFORE INSERT ON announce_identities BEGIN SELECT RAISE(ABORT,'cache unavailable'); END;").unwrap();
         connections.push(db);
     }
+    node_a.announce_now().unwrap();
+    node_b.announce_now().unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
     for (sender, receiver, body) in [
         (&node_a, &node_b, "online a to b"),
         (&node_b, &node_a, "online b to a"),
@@ -362,3 +366,5 @@ async fn offline_chat_without_validated_recipient_returns_typed_error() {
     assert!(node.list_local_propagation().unwrap().is_empty());
     stop_node(node).await;
 }
+
+include!("local_propagation_restart.rs");
