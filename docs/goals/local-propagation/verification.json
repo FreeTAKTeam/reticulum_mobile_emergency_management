@@ -1,10 +1,10 @@
 {
-  "status": "offline-only-correction-software-qualified-field-matrix-open",
+  "status": "s8-timeout-correction-mvp-sender-qualified-recipient-confirmation-pending",
   "baseline": {
     "rem": "807041681430404f06dbac9b257fa5a192bed7e9",
     "lxmf": "7822b608f2cd2debd8170895bc580d01dda5356e"
   },
-  "lxmf_revision": "f16b3151db4d70dace2f44d011b9aabda76facd5",
+  "lxmf_revision": "ee971c2818b62c62f7feb8262af30bb984ff97da",
   "online_preservation": {
     "checks_passed": 26,
     "artifact": "output/local-propagation/offline-only-correction/baseline-preservation-current.json"
@@ -69,6 +69,24 @@
       "revision": "f16b3151db4d70dace2f44d011b9aabda76facd5",
       "matrix_status": "partial; other 28 cases not run",
       "artifact": "output/local-propagation/offline-only-correction/python-compat-current.json"
+    },
+    "s8_timeout_correction": {
+      "rem_revision": "f752ed67588365c465350ef4c0c9e39a0a4e97de",
+      "lxmf_revision": "ee971c2818b62c62f7feb8262af30bb984ff97da",
+      "host_restart_same_message_recovery": "passed",
+      "host_admission_under_two_seconds": "passed",
+      "online_two_way_with_custody_and_cache_writes_rejected": "passed",
+      "unknown_recipient_prompt_typed_error": "passed",
+      "recipient_binding_corruption_restart_and_bound": "passed",
+      "daemon_identity_restart": "passed",
+      "runtime_propagation_tests": 6,
+      "embedded_storage_tests": 24,
+      "selected_package_clippy": "passed",
+      "source_size_files": 700,
+      "baseline_preservation_checks": 26,
+      "review": "PRE and POST aligned; no blocking findings",
+      "full_suite_on_this_revision": "not rerun; prior checkpoint counts retain their recorded revisions",
+      "artifact": "output/local-propagation/s8-correction/software-verification.json"
     }
   },
   "phones": {
@@ -113,20 +131,23 @@
       "not_for_public_release": true
     },
     "current_candidate": {
-      "path": "/home/pgiuseppe/.codex/worktrees/local-propagation/reticulum_mobile_emergency_management/output/local-propagation/candidate/reticulum-mobile-emergency-management-v1.5.5-hil-9c254fe-f16b315-release.apk",
-      "sha256": "3a4ea646b1652dfc10253f0611a5788fe6e79232abcc96a8ea4dd13e52e660d2",
+      "sha256": "9e8cdf3dd02742a828d57f27702291171586464b626a1ae5db7107f8c2a0f8e9",
       "signer_sha256": "62608481f3ffa0c44d8d36de1055c826e47011fe8b598c8ef9c9e53e46016f1d",
-      "rem_revision": "9c254fe498efe579ff61286cf785fb377a8076d4",
-      "lxmf_revision": "f16b3151db4d70dace2f44d011b9aabda76facd5",
-      "version": "1.5.5-hil-9c254fe-f16b315",
+      "rem_revision": "f752ed67588365c465350ef4c0c9e39a0a4e97de",
+      "lxmf_revision": "ee971c2818b62c62f7feb8262af30bb984ff97da",
+      "version": "1.5.5-mvp-f752ed6-ee971c2",
       "version_code": 262961600,
-      "test_control": true,
+      "test_control": false,
       "webview_debugging": false,
       "not_for_public_release": true,
+      "artifact": "output/local-propagation/candidate/reticulum-mobile-emergency-management-v1.5.5-mvp-f752ed6-ee971c2-release.apk",
       "installed_on": [
         "Pixel 7"
       ],
-      "poco_unchanged": true
+      "data_preserved": true,
+      "poco_unchanged": true,
+      "manifest_test_receiver_disabled": true,
+      "three_abi_native_code_verified": true
     },
     "no_interface_attempt": {
       "started_at": "2026-10-24T15:48:51.525592+00:00",
@@ -135,6 +156,23 @@
       "error": "Pixel interface shutdown timed out",
       "bluetooth_restored_after_stop": true,
       "scope": "Interface-removal precondition timed out. No test message was submitted; no admission, restart or recovery was qualified."
+    },
+    "s8_offline_tcp_recovery": {
+      "passed_sender": true,
+      "recipient_screen_confirmation": "pending",
+      "body": "hello world",
+      "send_count": 1,
+      "s8_verified_announce_learned_over_tcp": true,
+      "pixel_tcp_removed_and_node_restarted": true,
+      "lora_config_preserved": true,
+      "stored_locally_visible": true,
+      "first_ui_observation_seconds": 3.331,
+      "tcp_restored_and_node_restarted": true,
+      "manual_message_resend": false,
+      "specific_single_message_bubble": "Delivered",
+      "receiver_wire_id_compared": false,
+      "scope": "sender-side device evidence; receiver screen confirmation pending; no OS reboot or relay route qualified",
+      "artifact": "output/local-propagation/s8-correction/physical-test.json"
     }
   },
   "release_ready": false,
@@ -273,11 +311,11 @@
     }
   },
   "remaining_acceptance": [
+    "S8 recipient screen confirmation for new hello world",
     "physical relay TCP and LoRa-via-B forwarding scenarios",
-    "physical offline storage, restart and direct recovery",
-    "baseline fallback bounds remain unchanged; proposed60/180second targets are superseded",
-    "production package with ADB test control disabled",
+    "physical OS reboot during persisted states and full release routing matrix",
+    "alternate usable relay preflight guard focused regression",
     "hosted CI on final source and release artifact qualification"
   ],
-  "rem_revision": "9c254fe498efe579ff61286cf785fb377a8076d4"
+  "rem_revision": "f752ed67588365c465350ef4c0c9e39a0a4e97de"
 }
