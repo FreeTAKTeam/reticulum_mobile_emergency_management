@@ -189,6 +189,41 @@ async fn rnode_explicit_connect_uses_lxmf_and_clears_disconnected_aliases() {
             "explicit connect must use the verified LXMF destination"
         );
     }
+    let mut saved = node_a.get_saved_peers().expect("saved contact").remove(0);
+    for destination in [
+        &peer.app_destination_hex,
+        &peer.lxmf_destination_hex,
+        &peer.lxmf_destination_hex,
+        &peer.app_destination_hex,
+    ] {
+        saved.destination_hex = destination.clone();
+        node_a
+            .set_saved_peers(vec![saved.clone()])
+            .expect("migrate contact alias");
+        assert!(
+            node_a
+                .inner
+                .lock()
+                .unwrap()
+                .app_state
+                .get_ignored_peer_destinations()
+                .unwrap()
+                .is_empty(),
+            "retaining a contact through either alias must not block it"
+        );
+    }
+    node_a.set_saved_peers(vec![]).expect("remove contact");
+    assert!(node_a
+        .inner
+        .lock()
+        .unwrap()
+        .app_state
+        .get_ignored_peer_destinations()
+        .unwrap()
+        .contains(&peer.app_destination_hex));
+    node_a
+        .set_saved_peers(vec![saved])
+        .expect("save contact again");
     let body = "Synthetic REM reconnect regression";
     let id = node_a
         .send_lxmf(SendLxmfRequest {

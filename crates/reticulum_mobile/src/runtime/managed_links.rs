@@ -61,7 +61,12 @@ async fn ensure_output_link(
             if let Some(existing) = links.get(&desc.address_hash).cloned() {
                 existing
             } else {
-                let created = state.transport.link(desc).await;
+                let created = state
+                    .transport
+                    .link_observed(desc, |link| {
+                        link.set_establishment_timeout(connect_timeout);
+                    })
+                    .await;
                 links.insert(desc.address_hash, created.clone());
                 created
             }

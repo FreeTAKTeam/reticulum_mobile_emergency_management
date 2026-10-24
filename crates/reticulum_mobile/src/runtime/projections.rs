@@ -235,7 +235,9 @@ async fn apply_saved_peer_management_projection(
 ) -> Result<(), NodeError> {
     let desired_destinations = normalized_saved_peer_destinations(saved_peers);
     let desired_set = desired_destinations.iter().cloned().collect::<HashSet<_>>();
-    clear_ignored_peer_destinations(state, desired_destinations.as_slice()).await;
+    let desired_aliases = saved_peer_management_aliases(state, saved_peers).await;
+    clear_ignored_peer_destinations(state, &desired_aliases.iter().cloned().collect::<Vec<_>>())
+        .await;
 
     let (cleanup_destinations, changed_destinations, desired_targets) = {
         let mut messaging = state.messaging.lock().await;
@@ -257,11 +259,13 @@ async fn apply_saved_peer_management_projection(
                 .any(|destination| removed_saved.contains(destination));
             let still_desired_match = equivalents
                 .iter()
-                .any(|destination| desired_set.contains(destination));
+                .any(|destination| desired_aliases.contains(destination));
             if removed_match && !still_desired_match {
                 cleanup_destinations.extend(equivalents);
             }
         }
+
+        cleanup_destinations.retain(|destination| !desired_aliases.contains(destination));
 
         let (added, removed) =
             messaging.replace_saved_destinations(desired_destinations.iter().map(String::as_str));
