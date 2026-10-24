@@ -1,13 +1,13 @@
 {
-  "status": "offline-only-correction-host-validated-two-way-lora-chat-passed",
+  "status": "offline-only-correction-software-qualified-field-matrix-open",
   "baseline": {
     "rem": "807041681430404f06dbac9b257fa5a192bed7e9",
     "lxmf": "7822b608f2cd2debd8170895bc580d01dda5356e"
   },
-  "lxmf_revision": "038dde2e4b9eb3f80dee9066f3513a307d4d7181",
+  "lxmf_revision": "f16b3151db4d70dace2f44d011b9aabda76facd5",
   "online_preservation": {
-    "checks_passed": 25,
-    "artifact": "output/local-propagation/offline-only-correction/baseline-preservation.json"
+    "checks_passed": 26,
+    "artifact": "output/local-propagation/offline-only-correction/baseline-preservation-current.json"
   },
   "checks": {
     "rem_custody_current": {
@@ -15,23 +15,29 @@
       "log": "/tmp/rem-offline-custody-final.log"
     },
     "shared_and_runtime": {
-      "passed": 45,
-      "log": "/tmp/rem-offline-library-final.log"
+      "passed": 46,
+      "revision": "f16b3151db4d70dace2f44d011b9aabda76facd5",
+      "log": "/tmp/lxmf-offline-final-tests.log"
     },
     "rpc": {
       "passed": 795,
       "ignored": 8,
-      "log": "/tmp/rem-offline-rpc-tests.log"
+      "log": "/tmp/rem-offline-rpc-tests.log",
+      "revision": "038dde2e4b9eb3f80dee9066f3513a307d4d7181",
+      "scope": "prior checkpoint; standard handler bodies unchanged"
     },
     "daemon": {
       "passed": 535,
-      "log": "/tmp/rem-offline-daemon-tests.log"
+      "log": "/tmp/rem-offline-daemon-tests.log",
+      "revision": "038dde2e4b9eb3f80dee9066f3513a307d4d7181",
+      "scope": "prior checkpoint; standard handler bodies unchanged"
     },
     "clippy": "passed",
     "embedded_dependency_isolation": "passed",
     "rem_full": {
-      "passed": 511,
-      "log": "/tmp/rem-offline-tests-final.log"
+      "passed": 514,
+      "revision": "9c254fe498efe579ff61286cf785fb377a8076d4",
+      "log": "/tmp/rem-offline-9c254fe-tests.log"
     },
     "android_native": {
       "abis": [
@@ -41,7 +47,28 @@
       ],
       "bindings_regenerated": true,
       "elf_page_bytes": 16384,
-      "signed_apk_built": true
+      "signed_apk_built": true,
+      "revision": "9c254fe498efe579ff61286cf785fb377a8076d4",
+      "lxmf_revision": "f16b3151db4d70dace2f44d011b9aabda76facd5"
+    },
+    "offline_correction": {
+      "no_interface_admission_and_saver_expiry": "passed",
+      "unresolved_recipient_typed_error": "passed",
+      "stale_direct_and_relay_recovery": "passed",
+      "online_zero_custody_admission": "passed",
+      "retention_reopen_invariance": "passed",
+      "independent_review": "no remaining software blockers",
+      "ordinary_ci_embedded_gate": "wired"
+    },
+    "python_relay_interop": {
+      "passed": 2,
+      "scope": [
+        "propagated_rust_to_python",
+        "propagation_remote_download_rust_to_python"
+      ],
+      "revision": "f16b3151db4d70dace2f44d011b9aabda76facd5",
+      "matrix_status": "partial; other 28 cases not run",
+      "artifact": "output/local-propagation/offline-only-correction/python-compat-current.json"
     }
   },
   "phones": {
@@ -50,15 +77,6 @@
       "apk_sha256": "ce5c832470ae8ef8aa16e19aa976781c5e5b84291e1e4af82d46b0710d9c31fd",
       "data_preserved": true,
       "candidate_test": "pending"
-    },
-    "current_candidate": {
-      "sha256": "9b9490baeb31e93594659d0a7b0fbbb56e66961a503d5852c3621de25b4627c8",
-      "rem_revision": "1d2bdcb288f7d1be1fd39f31a875d2282e8e6a5d",
-      "lxmf_revision": "038dde2e4b9eb3f80dee9066f3513a307d4d7181",
-      "version": "1.5.5-hil-1d2bdcb-038dde2",
-      "test_control": true,
-      "webview_debugging": false,
-      "not_for_public_release": true
     },
     "direct_lora_chat": {
       "passed": true,
@@ -84,6 +102,39 @@
           "receiver_wire_id_compared": false
         }
       ]
+    },
+    "previous_two_way_candidate": {
+      "sha256": "9b9490baeb31e93594659d0a7b0fbbb56e66961a503d5852c3621de25b4627c8",
+      "rem_revision": "1d2bdcb288f7d1be1fd39f31a875d2282e8e6a5d",
+      "lxmf_revision": "038dde2e4b9eb3f80dee9066f3513a307d4d7181",
+      "version": "1.5.5-hil-1d2bdcb-038dde2",
+      "test_control": true,
+      "webview_debugging": false,
+      "not_for_public_release": true
+    },
+    "current_candidate": {
+      "path": "/home/pgiuseppe/.codex/worktrees/local-propagation/reticulum_mobile_emergency_management/output/local-propagation/candidate/reticulum-mobile-emergency-management-v1.5.5-hil-9c254fe-f16b315-release.apk",
+      "sha256": "3a4ea646b1652dfc10253f0611a5788fe6e79232abcc96a8ea4dd13e52e660d2",
+      "signer_sha256": "62608481f3ffa0c44d8d36de1055c826e47011fe8b598c8ef9c9e53e46016f1d",
+      "rem_revision": "9c254fe498efe579ff61286cf785fb377a8076d4",
+      "lxmf_revision": "f16b3151db4d70dace2f44d011b9aabda76facd5",
+      "version": "1.5.5-hil-9c254fe-f16b315",
+      "version_code": 262961600,
+      "test_control": true,
+      "webview_debugging": false,
+      "not_for_public_release": true,
+      "installed_on": [
+        "Pixel 7"
+      ],
+      "poco_unchanged": true
+    },
+    "no_interface_attempt": {
+      "started_at": "2026-10-24T15:48:51.525592+00:00",
+      "finished_at": "2026-10-24T15:49:42.284772+00:00",
+      "pass": false,
+      "error": "Pixel interface shutdown timed out",
+      "bluetooth_restored_after_stop": true,
+      "scope": "Interface-removal precondition timed out. No test message was submitted; no admission, restart or recovery was qualified."
     }
   },
   "release_ready": false,
@@ -222,9 +273,11 @@
     }
   },
   "remaining_acceptance": [
-    "offline recipient and relay handoff",
-    "LoRa through TCP transport relay",
-    "restart/expiry/eviction field cases",
-    "public release packaging without test control"
-  ]
+    "physical relay TCP and LoRa-via-B forwarding scenarios",
+    "physical offline storage, restart and direct recovery",
+    "baseline fallback bounds remain unchanged; proposed60/180second targets are superseded",
+    "production package with ADB test control disabled",
+    "hosted CI on final source and release artifact qualification"
+  ],
+  "rem_revision": "9c254fe498efe579ff61286cf785fb377a8076d4"
 }

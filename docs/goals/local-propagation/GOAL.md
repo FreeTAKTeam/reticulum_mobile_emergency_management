@@ -8,14 +8,15 @@ Preserve the earlier unapproved routing worktree unchanged for reference.
 ## Current scope correction (2026-10-24)
 
 The user rejected changes to online delivery. The [offline-only correction](../../plans/offline-only-correction.md)
-is authoritative. Both phones are restored to the exact signed public 1.5.5 APK
-(`ce5c8324…`) with original radio frequency and telemetry preferences, preserving app data.
+is authoritative. The baseline was restored before installing scoped QA candidates,
+with original radio frequency, telemetry preferences and app data preserved.
+Current device versions and qualification are recorded in `verification.json`.
 
 The corrective library branch starts at the tested `7822b608` rather than the
 newer transport revision. REM's normal delivery body, Connect/aliases, caller
 waits, packet sizing and normal relay Sync/polling are restored. Native custody
-starts only after an eligible unreachable-route failure; it does not run a second
-send loop. Additional offline recipients do not alter the baseline online target set.
+starts only after an eligible unreachable-route failure, or authoritative absence
+of active interfaces; it does not run a second send loop. Additional offline recipients do not alter the baseline online target set.
 
 Earlier implementation/checkpoint evidence below is historical and does not
 qualify this correction. Final source pins, Android rebuilding and hardware
@@ -129,3 +130,23 @@ acceptance remain open. Phase 3 remains deferred.
   control is enabled for remaining acceptance; WebView debugging is disabled.
   It is not a public release. Remaining offline/relay/restart matrix and
   production packaging remain open; earlier release 1.5.5 remains unchanged.
+
+## Current offline edge qualification
+
+- Product REM `9c254fe`, LXMF-rs `f16b3151`; 26 baseline checks pass.
+- Current full REM suite: 514 passed. Shared/runtime: 46 passed; strict Clippy,
+  formatting, 699-file REM source-size and library module-size/isolation checks pass.
+- No-interface admission, explicit unresolved-recipient errors, final expiry during
+  saver and stored-message direct/relay turns have regression coverage. Ordinary
+  online success still writes no custody, including with inserts rejected by SQLite.
+- Frozen-reference Python relay upload and retrieval both pass. This was a two-case
+  subset; it does not qualify the complete compatibility matrix.
+- Three Android ABIs and 16 KiB ELF checks pass; Kotlin regenerated and signed QA
+  APK built. Pixel has this candidate; Poco retains the earlier two-way-tested
+  scoped candidate. No radio profile or Poco preference was changed.
+- The physical no-interface attempt stopped at its interface-removal precondition.
+  Bluetooth was restored. No offline test chat, restart or recovery was performed
+  in that run; this is not a passing acceptance result.
+- Independent plan/correctness/maintainer/verifier reviews found no remaining
+  blocker in the scoped software. Physical matrix and release qualification remain
+  open. Preserve successful Packet/receipt behavior and normal Sync/polling.
