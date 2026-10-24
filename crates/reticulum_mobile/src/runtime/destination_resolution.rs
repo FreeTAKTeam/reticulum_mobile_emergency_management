@@ -179,6 +179,9 @@ async fn resolve_current_lxmf_destination_hex(
 
 async fn resolve_lxmf_destination_hex(state: &NodeRuntimeState, destination_hex: &str) -> String {
     let normalized_destination = destination_hex.to_ascii_lowercase();
+    if let Some(verified) = known_lxmf_route_for_app_destination(state, &normalized_destination).await {
+        return verified;
+    }
     if let Ok(saved_peers) = state.app_state.get_saved_peers() {
         if let Some(peer) = saved_peers.iter().find(|peer| {
             peer.destination_hex
@@ -193,7 +196,6 @@ async fn resolve_lxmf_destination_hex(state: &NodeRuntimeState, destination_hex:
             if let Some(lxmf_destination_hex) = peer.lxmf_destination_hex.as_deref() {
                 return lxmf_destination_hex.to_ascii_lowercase();
             }
-            return peer.destination_hex.to_ascii_lowercase();
         }
     }
     let Some(peer) = peer_for_any_destination_hex(state, &normalized_destination).await else {

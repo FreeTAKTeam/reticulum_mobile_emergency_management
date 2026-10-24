@@ -88,7 +88,8 @@ async fn run_propagation_sync_job(
 
         let result = match state
             .sdk
-            .fetch_propagated_lxmf_from_relay(relay_candidate.as_str(), limit, None)
+            .fetch_propagated_lxmf_from_relay(relay_candidate.as_str(), limit, None,
+                active_interfaces_are_rnode_ble_only(&*state.active_interface_registry.lock().await).then_some(crate::sdk_bridge::LOCAL_PROPAGATION_LORA_TRANSFER_BYTES as usize))
             .await
         {
             Ok(result) => result,

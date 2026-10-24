@@ -13,6 +13,7 @@ fn spawn_peer_maintenance_tasks(
             loop {
                 interval.tick().await;
                 refresh_peer_snapshot(&state).await;
+                if let Err(error)=publish_local_custody(&state,&bus).await {debug!("[local-propagation] projection pending: {error}");}
                 if !*power_saver_rx.borrow() {
                     sync_auto_propagation_node(&state, &bus).await;
                 }
@@ -84,20 +85,19 @@ fn spawn_propagation_maintenance_task(
     let state = state.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(AUTO_PROPAGATION_SYNC_INTERVAL);
+        let mut last_lora_poll:Option<tokio::time::Instant>=None;
         loop {
             interval.tick().await;
             if *power_saver_rx.borrow() {
                 continue;
             }
-            // Automatic relay polling can fan out across several candidates.
-            // Do not put that background workload on an RNode-only LoRa link;
-            // explicit propagation sync and direct sends remain available; a
-            // relay-capable interface resumes polling as soon as it is active.
-            if !has_active_relay_transport_interface(&state).await {
-                continue;
-            }
+            if !has_active_reticulum_interface(&state).await {continue}
+            let lora=active_interfaces_are_rnode_ble_only(&*state.active_interface_registry.lock().await);
+            if lora && last_lora_poll.is_some_and(|last|last.elapsed()<Duration::from_secs(u64::from(crate::sdk_bridge::LOCAL_PROPAGATION_LORA_INTERVAL_SECONDS))) {continue}
+            if lora {last_lora_poll=Some(tokio::time::Instant::now());}
             sync_auto_propagation_node(&state, &bus).await;
             let Some(relay_hex) = state.active_propagation_node_hex.lock().await.clone() else {
+                spawn_local_custody_recovery(&state,&bus,None);
                 continue;
             };
             if state
@@ -111,13 +111,11 @@ fn spawn_propagation_maintenance_task(
             info!(
                 "[sync] automatic propagation sync scheduled relay={relay_hex} limit={AUTO_PROPAGATION_SYNC_LIMIT}"
             );
-            tokio::spawn(run_propagation_sync_job(
-                state.clone(),
-                bus.clone(),
-                Some(AUTO_PROPAGATION_SYNC_LIMIT),
-                requested_at_ms,
-                relay_hex,
-            ));
+            let recovery_state=state.clone();let recovery_bus=bus.clone();
+            tokio::spawn(async move {
+                run_propagation_sync_job(recovery_state.clone(),recovery_bus.clone(),Some(AUTO_PROPAGATION_SYNC_LIMIT),requested_at_ms,relay_hex).await;
+                spawn_local_custody_recovery(&recovery_state,&recovery_bus,None);
+            });
         }
     });
 }
@@ -132,6 +130,14 @@ fn spawn_receipt_listener(
     let state = state.clone();
     tokio::spawn(async move {
         while let Some(message_id_hex) = receipt_rx.recv().await {
+            if let Some(store)=&state.sdk.local_propagation {
+                if let Ok(Some(record))=store.message(&message_id_hex) {
+                    let _=store.delivered(&record.transient_id,&record.message_id,false,(now_ms()/1000).min(i64::MAX as u64) as i64);
+                    let _=publish_local_custody(&state,&bus).await;
+                    // The custody owner also decides whether a late proof is still admissible.
+                    continue;
+                }
+            }
             let maybe_record = state
                 .messaging
                 .lock()

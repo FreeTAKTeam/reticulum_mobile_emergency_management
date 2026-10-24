@@ -312,7 +312,7 @@ fn telemetry_targets_include_direct_and_propagation_fanout() {
 }
 
 #[test]
-fn telemetry_targets_skip_stale_peers_without_stored_route() {
+fn telemetry_targets_keep_saved_stale_peers_for_local_custody() {
     let status = build_status_for_tests();
     let config = build_config_fingerprint_for_tests(HubMode::Autonomous {}, None);
     let mut stale_peer = build_peer_record(
@@ -332,7 +332,8 @@ fn telemetry_targets_skip_stale_peers_without_stored_route() {
         build_runtime_telemetry_destinations(&status, &[stale_peer.clone()], &saved_telemetry_fixtures(&[stale_peer]), None, Some(&config), Some(&test_team_snapshot(&["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"])))
             .expect("telemetry fallback targets");
 
-    assert!(destinations.is_empty());
+    assert_eq!(destinations.len(), 1);
+    assert_eq!(destinations[0].send_mode, SendMode::Auto {});
 }
 
 #[test]

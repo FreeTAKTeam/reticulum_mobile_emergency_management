@@ -84,6 +84,7 @@ pub use types::{
     HouseholdSituation, HouseholdSituationRecord, HouseholdStatus, HubCallerMembershipRecord,
     HubDirectoryPeerRecord, HubDirectorySnapshot, HubMode, HubSettingsRecord, HubTeamMemberRecord,
     HubTeamRecord, InstalledPluginRecord, InterfaceStatusRecord, LegacyImportPayload,
+    LocalPropagationState, LocalPropagationConfig, LocalPropagationRecord,
     LocalTeamRecord, LogLevel, LxmfDeliveryMethod, LxmfDeliveryRepresentation, LxmfDeliveryStatus,
     LxmfDeliveryUpdate, LxmfFallbackStage, MapMarkerCreateRequest, MapMarkerCreateResult,
     MapMarkerMoveRequest, MapMarkerRecord, MapMarkerRenameRequest, MapMarkerSymbolRecord,

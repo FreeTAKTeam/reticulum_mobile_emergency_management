@@ -268,6 +268,18 @@ public abstract class ReticulumNodeAppDataPluginApi extends ReticulumNodeTranspo
     }
 
     @PluginMethod
+    public void listLocalPropagation(PluginCall call) {
+        runStringServiceCall(call, "Failed to list local propagation.",
+            "Invalid local propagation JSON.", ReticulumNodeService::listLocalPropagationJson);
+    }
+
+    @PluginMethod
+    public void getLocalPropagationConfig(PluginCall call) {
+        runStringServiceCall(call, "Failed to get local propagation configuration.",
+            "Invalid local propagation configuration JSON.", ReticulumNodeService::getLocalPropagationConfigJson);
+    }
+
+    @PluginMethod
     public void getLxmfSyncStatus(PluginCall call) {
         runStringServiceCall(
             call,

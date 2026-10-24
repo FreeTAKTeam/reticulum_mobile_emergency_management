@@ -56,6 +56,7 @@ pub(crate) struct LxmfSendReport {
     pub(crate) relay_destination_hex: Option<String>,
     pub(crate) fallback_stage: Option<LxmfFallbackStage>,
     pub(crate) receipt_hash_hex: Option<String>,
+    pub(crate) local_custody: Option<crate::types::LocalPropagationRecord>,
 }
 
 struct RuntimeReceiptBridge {

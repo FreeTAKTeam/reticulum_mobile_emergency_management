@@ -14,6 +14,9 @@ async fn ack_pending_lxmf_delivery(
 
     let detail = metadata.ack_detail().map(ToOwned::to_owned);
     let application_ack_state = application_ack_state_for_mission_metadata(metadata);
+    if acknowledge_local_application_message(state, bus, source_hex, metadata, application_ack_state).await {
+        return;
+    }
     let mut guard = state.pending_lxmf_deliveries.lock().await;
     let mut matched: Option<PendingLxmfDelivery> = None;
 
@@ -207,6 +210,15 @@ async fn acknowledge_chat_delivery(
     };
     if !peer_matches_hex(&source_peer, requested_destination.as_str()) {
         return true;
+    }
+    if let Some(store)=&state.sdk.local_propagation {
+        if let Ok(Some(candidate))=store.message(&message_id_hex) {
+            if peer_matches_hex(&source_peer,&candidate.destination) {
+                let _=store.delivered(&candidate.transient_id,&candidate.message_id,true,(now_ms()/1000).min(i64::MAX as u64) as i64);
+                let _=publish_local_custody(state,bus).await;
+                return true;
+            }
+        }
     }
     let maybe_record = state
         .messaging

@@ -85,7 +85,7 @@ async fn ensure_lxmf_output_link(
             Err(err) => {
                 let stale = state.out_links.lock().await.remove(&desc.address_hash);
                 if let Some(stale) = stale {
-                    stale.lock().await.close();
+                    let _ = state.transport.teardown_link_observed(&stale, || {}).await;
                 }
                 if attempt + 1 == max_attempts.max(1) {
                     log_lxmf_link_activation_failure(
@@ -147,7 +147,7 @@ fn log_lxmf_link_activation_failure(
 async fn clear_lxmf_output_link(state: &SdkTransportState, destination: &AddressHash) {
     let stale = state.out_links.lock().await.remove(destination);
     if let Some(stale) = stale {
-        stale.lock().await.close();
+        let _ = state.transport.teardown_link_observed(&stale, || {}).await;
     }
 }
 

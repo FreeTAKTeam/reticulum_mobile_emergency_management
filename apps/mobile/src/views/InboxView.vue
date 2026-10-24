@@ -10,8 +10,7 @@ import { useMessagingStore } from "../stores/messagingStore";
 import { useNodeStore } from "../stores/nodeStore";
 import { useSosStore } from "../stores/sosStore";
 import { useTelemetryStore } from "../stores/telemetryStore";
-import { isDraftConversationId } from "../stores/messagingModel";
-import type { DiscoveredPeer } from "../types/domain";
+import { findConversationForSelection } from "../stores/messagingModel";
 import { registerBackNavigationHandler } from "../utils/androidBackNavigation";
 import { runDetachedStoreTask } from "../utils/detachedStoreTask";
 import {
@@ -91,21 +90,8 @@ const selectedPeerDisplayName = computed(() =>
   || safeTrim(selectedPeer.value?.label)
   || selectedDestinationHex.value,
 );
-function findConversationForSelection(
-  destinationHex: string,
-  peer: Pick<DiscoveredPeer, "destination" | "lxmfDestinationHex"> | null = null,
-) {
-  const matches = messagingStore.conversations.filter((conversation) =>
-    destinationsMatch(conversation.destinationHex, destinationHex)
-    || destinationsMatch(conversation.destinationHex, peer?.destination ?? "")
-    || destinationsMatch(conversation.destinationHex, peer?.lxmfDestinationHex ?? ""),
-  );
-  return matches.find((conversation) => !isDraftConversationId(conversation.conversationId))
-    ?? matches[0]
-    ?? null;
-}
 const activeThreadConversation = computed(() =>
-  findConversationForSelection(explicitDestinationHex.value, selectedPeer.value),
+  findConversationForSelection(messagingStore.conversations, explicitDestinationHex.value, selectedPeer.value),
 );
 const selectedDestinationHex = computed(() =>
   safeTrim(selectedConversation.value?.destinationHex)
@@ -306,7 +292,7 @@ async function send(bodyUtf8: string): Promise<void> {
   }
   await messagingStore.sendMessage(destinationHex, bodyUtf8);
   const matchingConversation = messagingStore.selectedConversation
-    ?? findConversationForSelection(destinationHex, selectedPeer.value);
+    ?? findConversationForSelection(messagingStore.conversations, destinationHex, selectedPeer.value);
   if (matchingConversation) {
     messagingStore.selectConversation(matchingConversation.conversationId);
   }
@@ -485,6 +471,7 @@ onUnmounted(() => {
           :target-message-id="messagingStore.selectedTargetMessageId"
           :sos-map-targets="sosMapTargetsByMessageId"
           :messages="activeThreadMessages"
+          :local-propagation="messagingStore.localPropagation"
           :chat-disabled="Boolean(chatDisabledReason)"
           :chat-disabled-reason="chatDisabledReason"
           @back="showConversationList"

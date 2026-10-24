@@ -78,6 +78,8 @@ export interface ReticulumNodePlugin {
   listMessages(options: { conversationId?: string }): Promise<{ items: Record<string, unknown>[] }>;
   deleteConversation(options: { conversationId: string }): Promise<void>;
   getLxmfSyncStatus(): Promise<Record<string, unknown>>;
+  listLocalPropagation(): Promise<{ items: Record<string, unknown>[] }>;
+  getLocalPropagationConfig(): Promise<Record<string, unknown>>;
   listTelemetryDestinations(): Promise<{ items: string[] }>;
   legacyImportCompleted(): Promise<{ completed: boolean }>;
   importLegacyState(options: { payload: Record<string, unknown> }): Promise<void>;

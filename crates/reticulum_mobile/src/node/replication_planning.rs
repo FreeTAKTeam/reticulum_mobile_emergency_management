@@ -225,25 +225,21 @@ fn build_mission_replication_targets(
         if self_destination_hex.as_deref() == Some(app_destination_hex.as_str()) {
             continue;
         }
-        if direct_destination_set.contains(app_destination_hex.as_str()) {
+        if replication_target_already_selected(&app_destination_hex, &direct_destination_set, peers) {
             continue;
         }
-        if has_active_relay {
-            let relay_ready = saved_peers.iter().any(|peer| {
+        let eligible = peers.iter().find(|peer| {
+            peer_destination_hashes(peer).any(|hash| hash == app_destination_hex)
+        }).map(peer_supports_mission_traffic).unwrap_or_else(|| {
+            saved_peers.iter().any(|peer| {
                 saved_peer_target_destination(peer).as_deref() == Some(app_destination_hex.as_str())
-                    && saved_peer_has_stored_propagation_route(peer)
-            }) || peers.iter().any(|peer| {
-                normalize_hex_32(peer.destination_hex.as_str()).as_deref()
-                    == Some(app_destination_hex.as_str())
-                    && peer_supports_mission_traffic(peer)
-                    && peer_has_stored_propagation_route(peer)
-            });
-            if !relay_ready {
-                continue;
-            }
-        } else {
+                    && saved_peer_supports_mission_traffic(peer)
+            })
+        });
+        if !eligible {
             continue;
         }
+        direct_destination_set.insert(app_destination_hex.clone());
         relay_targets.push(MissionReplicationTarget {
             app_destination_hex,
             send_mode: if has_active_relay {
@@ -358,4 +354,11 @@ fn build_sos_replication_targets(
     }
 
     finish_replication_targets(direct_targets, relay_targets)
+}
+
+fn replication_target_already_selected(destination: &str, selected: &HashSet<String>, peers: &[PeerRecord]) -> bool {
+    selected.contains(destination) || peers.iter().any(|peer| {
+        peer_destination_hashes(peer).any(|alias| alias == destination)
+            && peer_destination_hashes(peer).any(|alias| selected.contains(&alias))
+    })
 }

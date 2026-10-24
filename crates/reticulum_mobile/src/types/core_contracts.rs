@@ -90,6 +90,12 @@ pub enum SendOutcome {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum LxmfDeliveryStatus {
+    StoredLocally {},
+    Uploading {},
+    UploadedUnverified {},
+    RelayHolds {},
+    Expired {},
+    Evicted {},
     Sent {},
     SentToPropagation {},
     Delivered {},

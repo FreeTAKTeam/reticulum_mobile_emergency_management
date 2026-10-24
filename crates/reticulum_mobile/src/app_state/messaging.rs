@@ -19,6 +19,28 @@ impl AppStateStore {
             .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))
     }
 
+    pub(crate) fn message_for_wire(&self, id: &str) -> Result<Option<MessageRecord>, NodeError> {
+        let connection = self.connect()?;
+        let by_id: Option<String> = connection
+            .query_row(
+                "SELECT json FROM messages WHERE message_id_hex=?1",
+                [id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| {
+                crate::error_context::contextual_node_error(NodeError::IoError {}, error)
+            })?;
+        let raw = match by_id {
+            Some(raw) => Some(raw),
+            None => connection.query_row(
+                "SELECT json FROM messages WHERE CASE WHEN json_valid(json) THEN json_extract(json, '$.last_wire_message_id_hex') END=?1 LIMIT 1",
+                [id], |row| row.get::<_, String>(0),
+            ).optional().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?,
+        };
+        raw.map(|raw| deserialize_json(&raw)).transpose()
+    }
+
     pub fn list_messages(
         &self,
         conversation_id: Option<&str>,

@@ -1,0 +1,67 @@
+{
+  "status": "implemented-partial-host-validated",
+  "phase_0": "waived_by_user",
+  "lxmf_revision": "5d054d8750fafbd98f394225f083a9d356b65ca7",
+  "checks": {
+    "rem_rust": {
+      "passed": 509,
+      "log": "/tmp/local-propagation-rem-qualified.log"
+    },
+    "lxmf_shared_and_runtime": {
+      "passed": 41,
+      "log": "/tmp/local-propagation-library-final.log"
+    },
+    "daemon": {
+      "passed": 680,
+      "log": "/tmp/local-propagation-daemon-final.log"
+    },
+    "android_app_unit": {
+      "passed": 56,
+      "log": "/tmp/local-propagation-android-final-tests.log"
+    },
+    "javascript_unit": {
+      "source_size": 7,
+      "app": 171,
+      "node_client": 44,
+      "log": "/tmp/local-propagation-unit-final.log"
+    },
+    "android_native": {
+      "abis": [
+        "arm64-v8a",
+        "armeabi-v7a",
+        "x86_64"
+      ],
+      "elf_page_bytes": 16384,
+      "generated": "Kotlin",
+      "log": "/tmp/local-propagation-android-final-codegen.log"
+    },
+    "playwright": {
+      "desktop": true,
+      "mobile": true,
+      "scope": "local-propagation status and eviction notice in web mock",
+      "log": "/tmp/local-propagation-e2e.log"
+    },
+    "source_size": {
+      "files": 697,
+      "ratcheted_exceptions": 0
+    },
+    "embedded_rpc_zeromq_excluded": true,
+    "typecheck": true,
+    "mobile_build": true,
+    "python_interop": {
+      "upload": true,
+      "retrieval": true,
+      "scope": "shared daemon handlers, not native outbox field acceptance"
+    }
+  },
+  "unperformed": [
+    "physical routing matrix for this implementation",
+    "new release publication",
+    "iOS build",
+    "hosted CI completion"
+  ],
+  "open_contract": "Safe capped LoRa retrieval requires the proposed relay custody correction; capped requests currently fail before dispatch.",
+  "warnings": [
+    "Generated Kotlin formatter ktlint unavailable; Android compilation succeeded."
+  ]
+}

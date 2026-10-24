@@ -1,13 +1,9 @@
 async fn has_active_reticulum_interface(state: &NodeRuntimeState) -> bool {
-    !state.active_interface_registry.lock().await.is_empty()
+    active_interfaces_include_relay_transport(&*state.active_interface_registry.lock().await)
 }
 
-fn active_interfaces_include_relay_transport(
-    active_interfaces: &HashMap<AddressHash, InterfaceStatusRecord>,
-) -> bool {
-    active_interfaces
-        .values()
-        .any(|interface| !interface_label_is_rnode_ble(&interface.label))
+fn active_interfaces_include_relay_transport(active_interfaces:&HashMap<AddressHash,InterfaceStatusRecord>)->bool {
+    !active_interfaces.is_empty()
 }
 
 fn active_interfaces_are_rnode_ble_only(
@@ -62,11 +58,6 @@ async fn destination_uses_rnode_ble_route(
         })
         .and_then(|announce| parse_address_hash(announce.interface_hex.as_str()).ok())
         .is_some_and(|interface| active_interface_is_rnode_ble(&active_interfaces, &interface))
-}
-
-async fn has_active_relay_transport_interface(state: &NodeRuntimeState) -> bool {
-    let active_interfaces = state.active_interface_registry.lock().await;
-    active_interfaces_include_relay_transport(&active_interfaces)
 }
 
 #[expect(
@@ -277,4 +268,9 @@ async fn acknowledge_pending_with_buffered_ack(
         );
         false
     }
+}
+
+async fn has_active_peer_warmup_interface(state: &NodeRuntimeState) -> bool {
+    state.active_interface_registry.lock().await.values()
+        .any(|interface| !interface_label_is_rnode_ble(&interface.label))
 }

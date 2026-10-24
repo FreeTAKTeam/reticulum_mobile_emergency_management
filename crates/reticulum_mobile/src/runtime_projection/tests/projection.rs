@@ -260,3 +260,22 @@ fn remove_conversation_messages_removes_alias_matches_from_snapshot() {
         assert_eq!(messages[0].message_id_hex, "keep-message");
     });
 }
+
+#[test]
+fn terminal_custody_notice_survives_projection_restart() {
+    use crate::types::{LocalPropagationRecord, LocalPropagationState};
+    let path = temporary_projection_path("custody");
+    let journal = RuntimeProjectionJournal::new(Some(path.clone()), EventBus::new());
+    let entry = LocalPropagationRecord {
+        transient_id_hex: "aa".repeat(32), message_id_hex: "bb".repeat(32), destination_hex: "cc".repeat(16),
+        state: LocalPropagationState::Evicted, encrypted_bytes: 0,
+        admitted_at_ms: 1000, expires_at_ms: 2000, may_exist_on_relay: true,
+    };
+    assert!(journal.record_local_propagation(entry.clone()).unwrap());
+    journal.persist_current_snapshot().unwrap();
+    assert!(!journal.record_local_propagation(entry.clone()).unwrap());
+    let restored = RuntimeProjectionJournal::new(Some(path.clone()), EventBus::new())
+        .load_snapshot().expect("durable custody projection");
+    assert_eq!(restored.local_propagation, vec![entry]);
+    std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}

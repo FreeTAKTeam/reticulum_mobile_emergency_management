@@ -111,10 +111,11 @@ fn publication_test_node(name: &str) -> (Node, mpsc::Receiver<Command>, PeerReco
 }
 
 #[test]
-fn telemetry_m2_coalesces_before_route_and_survives_reconstruction() {
+fn telemetry_m2_coalesces_before_runtime_and_survives_reconstruction() {
     let (node, mut commands, peer) = publication_test_node("telemetry-m2-coalesce");
     {
         let inner = node.inner.lock().unwrap();
+        inner.status.lock().unwrap().running = false;
         inner.peers_snapshot.lock().unwrap().clear();
         let mut saved = inner.app_state.get_saved_peers().unwrap();
         saved[0].last_route_seen_at_ms = None;
@@ -139,6 +140,7 @@ fn telemetry_m2_coalesces_before_route_and_survives_reconstruction() {
             PublicationState::QueuedNoRoute
         );
         assert!(inner.peers_snapshot.lock().unwrap().is_empty());
+        inner.status.lock().unwrap().running = true;
         *inner.peers_snapshot.lock().unwrap() = vec![peer.clone()];
         inner
             .status
@@ -318,7 +320,7 @@ fn telemetry_m2_zero_targets_is_local_and_old_ack_cannot_accept_new_fix() {
     app_state.record_telemetry_delivery(&update).unwrap();
     assert_eq!(
         app_state.telemetry_publication().unwrap().recipients[0].state,
-        PublicationState::QueuedNoRoute
+        PublicationState::QueuedForDelivery
     );
     update.command_id = Some("current".to_string());
     update.status = crate::types::LxmfDeliveryStatus::Delivered {};

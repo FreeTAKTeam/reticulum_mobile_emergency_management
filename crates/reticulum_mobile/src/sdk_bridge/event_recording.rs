@@ -4,12 +4,34 @@ impl RuntimeLxmfSdk {
         relay_hex: &str,
         limit: Option<u32>,
         direct_iface_hex: Option<&str>,
+        transfer_limit_bytes: Option<usize>,
     ) -> Result<PropagationFetchResult, NodeError> {
+        // Stock /get permanently completes individually over-budget entries. Never use it
+        // as a temporary LoRa airtime cap; bounded inventory/retrieval needs relay support.
+        if transfer_limit_bytes.is_some() {
+            return Err(crate::error_context::contextual_node_error(NodeError::NetworkError {},
+                "This relay has no safe bounded LoRa retrieval contract; local upload and direct recovery remain available"));
+        }
         let relay_hex = relay_hex.trim();
         if relay_hex.is_empty() {
             return Err(NodeError::InvalidConfig {});
         }
-        compat_fetch_propagated_lxmf(&self.transport, relay_hex, limit, direct_iface_hex).await
+        let owner = self.local_propagation.as_ref().map(|store| store.try_transfer())
+            .transpose().map_err(map_sdk_error_to_node_error)?;
+        let relay_hash = parse_address_hash(relay_hex)?;
+        let relay_hex = relay_hex.to_owned();
+        let direct_iface_hex = direct_iface_hex.map(ToOwned::to_owned);
+        let transport = self.transport.clone();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        // Cancellation of the waiter must not release custody while native Resources run.
+        tokio::spawn(async move {
+            let _owner = owner;
+            let result = compat_fetch_propagated_lxmf(&transport, &relay_hex, limit,
+                direct_iface_hex.as_deref(), transfer_limit_bytes).await;
+            clear_lxmf_output_link(&transport, &relay_hash).await;
+            let _ = tx.send(result);
+        });
+        rx.await.map_err(|_| NodeError::InternalError {})?
     }
 
     fn record_event(&self, event_type: &str, severity: Severity, payload: JsonValue) {

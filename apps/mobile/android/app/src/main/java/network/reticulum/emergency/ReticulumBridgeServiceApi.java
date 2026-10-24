@@ -99,6 +99,14 @@ public abstract class ReticulumBridgeServiceApi extends Service {
         return ReticulumBridge.updateBatteryState(percent, charging);
     }
 
+    public String listLocalPropagationJson() {
+        return ReticulumBridge.listLocalPropagationJson();
+    }
+
+    public String getLocalPropagationConfigJson() {
+        return ReticulumBridge.getLocalPropagationConfigJson();
+    }
+
     public String getPowerStateJson() {
         return ReticulumBridge.getPowerStateJson();
     }

@@ -12,6 +12,7 @@ include!("jni_bridge/wire_events.rs");
 include!("jni_bridge/lifecycle_api.rs");
 include!("jni_bridge/delivery_api.rs");
 include!("jni_bridge/messaging_api.rs");
+include!("jni_bridge/local_propagation_api.rs");
 include!("jni_bridge/state_api.rs");
 include!("jni_bridge/community_power_onboarding_api.rs");
 include!("jni_bridge/household_situation_api.rs");

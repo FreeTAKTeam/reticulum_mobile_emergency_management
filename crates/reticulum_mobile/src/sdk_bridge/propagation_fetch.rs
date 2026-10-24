@@ -3,6 +3,7 @@ async fn compat_fetch_propagated_lxmf(
     relay_hex: &str,
     limit: Option<u32>,
     direct_iface_hex: Option<&str>,
+    transfer_limit_bytes: Option<usize>,
 ) -> Result<PropagationFetchResult, NodeError> {
     let relay_hash = parse_address_hash(relay_hex)?;
     let relay_desc = resolve_propagation_destination_desc(state, relay_hash).await?;
@@ -72,7 +73,7 @@ async fn compat_fetch_propagated_lxmf(
             rmpv::Value::Array(vec![
                 fetch_ids,
                 rmpv::Value::Nil,
-                rmpv::Value::from(PROPAGATION_FETCH_TRANSFER_LIMIT_KB),
+                rmpv::Value::from(transfer_limit_bytes.map(|bytes|bytes as f64/1000.0).unwrap_or(PROPAGATION_FETCH_TRANSFER_LIMIT_KB as f64)),
             ]),
             PROPAGATION_FETCH_CONTROL_TIMEOUT,
             direct_iface,
