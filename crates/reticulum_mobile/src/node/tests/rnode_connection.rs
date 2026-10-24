@@ -68,6 +68,13 @@ async fn pending_relay_fetch_does_not_block_explicit_peer_connection() {
     node_a
         .request_peer_identity(node_b.get_status().lxmf_destination_hex)
         .expect("resolve recipient");
+    assert!(
+        !matches!(
+            node_a.get_lxmf_sync_status().unwrap().phase,
+            SyncPhase::RequestSent {}
+        ),
+        "an unreachable cached relay must not start an automatic LoRa fetch"
+    );
     node_a
         .set_active_propagation_node(Some("cccccccccccccccccccccccccccccccc".to_owned()))
         .expect("select unavailable relay");

@@ -4,6 +4,7 @@ async fn run_propagation_sync_job(
     limit: Option<u32>,
     requested_at_ms: u64,
     relay_hex: String,
+    automatic: bool,
 ) {
     let mut announces = state.messaging.lock().await.list_announces();
     let mut relay_candidates = propagation_sync_candidate_relays(
@@ -31,6 +32,9 @@ async fn run_propagation_sync_job(
             break;
         };
         attempted_relays.insert(relay_candidate.clone());
+        if automatic && !automatic_propagation_poll_is_routed(&state, &relay_candidate).await {
+            continue;
+        }
         let attempt_number = attempted_relays.len();
         *state.active_propagation_node_hex.lock().await = Some(relay_candidate.clone());
         let active_status = from_sdk_sync_status(

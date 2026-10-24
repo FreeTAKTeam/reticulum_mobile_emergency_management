@@ -275,6 +275,7 @@ fn spawn_sync_request_command(
             limit,
             requested_at_ms,
             relay_hex,
+            false,
         ));
         Ok(())
     });

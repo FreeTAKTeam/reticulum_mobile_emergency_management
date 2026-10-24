@@ -94,10 +94,13 @@ fn spawn_propagation_maintenance_task(
             if !has_active_reticulum_interface(&state).await {continue}
             let lora=active_interfaces_are_rnode_ble_only(&*state.active_interface_registry.lock().await);
             if lora && last_lora_poll.is_some_and(|last|last.elapsed()<Duration::from_secs(u64::from(crate::sdk_bridge::LOCAL_PROPAGATION_LORA_INTERVAL_SECONDS))) {continue}
-            if lora {last_lora_poll=Some(tokio::time::Instant::now());}
             sync_auto_propagation_node(&state, &bus).await;
             let Some(relay_hex) = state.active_propagation_node_hex.lock().await.clone() else {
                 spawn_local_custody_recovery(&state,&bus,None);
+                continue;
+            };
+            let Some(relay_hex) = routed_automatic_propagation_relay(&state, &relay_hex).await else {
+                spawn_local_custody_recovery(&state, &bus, None);
                 continue;
             };
             if state
@@ -107,17 +110,38 @@ fn spawn_propagation_maintenance_task(
             {
                 continue;
             }
+            if lora { last_lora_poll = Some(tokio::time::Instant::now()); }
             let requested_at_ms = now_ms();
             info!(
                 "[sync] automatic propagation sync scheduled relay={relay_hex} limit={AUTO_PROPAGATION_SYNC_LIMIT}"
             );
             let recovery_state=state.clone();let recovery_bus=bus.clone();
             tokio::spawn(async move {
-                run_propagation_sync_job(recovery_state.clone(),recovery_bus.clone(),Some(AUTO_PROPAGATION_SYNC_LIMIT),requested_at_ms,relay_hex).await;
+                run_propagation_sync_job(recovery_state.clone(),recovery_bus.clone(),Some(AUTO_PROPAGATION_SYNC_LIMIT),requested_at_ms,relay_hex,true).await;
                 spawn_local_custody_recovery(&recovery_state,&recovery_bus,None);
             });
         }
     });
+}
+
+async fn automatic_propagation_poll_is_routed(state: &NodeRuntimeState, relay: &str) -> bool {
+    let lora = active_interfaces_are_rnode_ble_only(&*state.active_interface_registry.lock().await);
+    if !lora {
+        return true;
+    }
+    let Ok(destination) = parse_address_hash(relay) else { return false; };
+    state.transport.has_path(&destination).await
+}
+
+async fn routed_automatic_propagation_relay(state: &NodeRuntimeState, active: &str) -> Option<String> {
+    let announces = state.messaging.lock().await.list_announces();
+    for relay in propagation_sync_candidate_relays(&announces, active,
+        state.preferred_propagation_node_hex.as_deref()) {
+        if automatic_propagation_poll_is_routed(state, &relay).await {
+            return Some(relay);
+        }
+    }
+    None
 }
 
 fn spawn_receipt_listener(
