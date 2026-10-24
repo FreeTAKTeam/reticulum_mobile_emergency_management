@@ -18,8 +18,8 @@ public class MainActivity extends BridgeActivity {
         // Register custom plugin before bridge startup.
         registerPlugin(ReticulumNodePlugin.class);
         registerPlugin(TelemetryLocationPlugin.class);
-        configureWebViewDebugging();
         super.onCreate(savedInstanceState);
+        configureWebViewDebugging();
         installCapacitorTriggerEventShim();
         Log.i(TAG, "MainActivity initialized and ReticulumNode plugin registered.");
     }
