@@ -86,10 +86,42 @@ async fn run_propagation_sync_job(
         )
         .await;
 
+        let import_state = state.clone();
+        let import_bus = bus.clone();
+        let destination_hex = state
+            .lxmf_destination
+            .lock()
+            .await
+            .desc
+            .address_hash
+            .to_hex_string();
         let result = match state
             .sdk
-            .fetch_propagated_lxmf_from_relay(relay_candidate.as_str(), limit, None,
-                active_interfaces_are_rnode_ble_only(&*state.active_interface_registry.lock().await).then_some(crate::sdk_bridge::LOCAL_PROPAGATION_LORA_TRANSFER_BYTES as usize))
+            .fetch_propagated_lxmf_from_relay(
+                relay_candidate.as_str(),
+                limit,
+                active_interfaces_are_rnode_ble_only(
+                    &*state.active_interface_registry.lock().await,
+                )
+                .then_some(crate::sdk_bridge::LOCAL_PROPAGATION_LORA_TRANSFER_BYTES as usize),
+                move |wire| {
+                    let state = import_state.clone();
+                    let bus = import_bus.clone();
+                    let destination_hex = destination_hex.clone();
+                    async move {
+                        emit_received_payload(
+                            &state,
+                            &bus,
+                            &state.sdk,
+                            destination_hex,
+                            wire,
+                            None,
+                            true,
+                        )
+                        .await
+                    }
+                },
+            )
             .await
         {
             Ok(result) => result,
@@ -121,42 +153,15 @@ async fn run_propagation_sync_job(
             }
         };
 
-        let destination_hex = result.destination_hex.clone();
-        let available_count = result.available_count;
-        let fetched_count = result.fetched_count;
-        let fetched_entry_count = result.fetched_entry_count;
-        let extracted_payload_count = result.extracted_payload_count;
-        let failed_count = result.failed_count;
-        let malformed_count = result.malformed_count;
-        let decrypt_failed_count = result.decrypt_failed_count;
-        let imported_count =
-            crate::numeric::usize_to_u32_saturating(result.imported_wires.len());
-        emit_sync_status_update(
-            &state,
-            &bus,
-            sdkmsg::SyncPhase::Receiving,
-            requested_at_ms,
-            0,
-            Some(format!(
-                "available={available_count} fetched_entries={fetched_entry_count} extracted_payloads={extracted_payload_count} decrypt_failed={decrypt_failed_count}"
-            )),
-            false,
-        )
-        .await;
-        for wire in result.imported_wires {
-            emit_received_payload(
-                &state,
-                &bus,
-                &state.sdk,
-                destination_hex.clone(),
-                wire,
-                None,
-                true,
-            )
-            .await;
-        }
+        let imported_count = crate::numeric::usize_to_u32_saturating(result.imported);
         let detail = format!(
-            "available={available_count} fetched={fetched_count} fetched_entries={fetched_entry_count} extracted_payloads={extracted_payload_count} imported={imported_count} malformed={malformed_count} decrypt_failed={decrypt_failed_count} failed={failed_count}"
+            "available={} fetched={} imported={} confirmed={} deferred={} failed={}",
+            result.available,
+            result.fetched,
+            result.imported,
+            result.confirmed,
+            result.deferred,
+            result.failed,
         );
         emit_sync_status_update(
             &state,
@@ -168,9 +173,7 @@ async fn run_propagation_sync_job(
             true,
         )
         .await;
-        info!(
-            "[sync] propagation sync complete relay={relay_candidate} {detail}"
-        );
+        info!("[sync] propagation sync complete relay={relay_candidate} {detail}");
         state
             .propagation_sync_inflight
             .store(false, Ordering::Release);
@@ -316,8 +319,8 @@ async fn resolve_peer_route(
     emit_peer_resolved_for_destination(state, bus, destination_hex).await;
     if !*state.power_saver_rx.borrow() {
         if let Some(target) = desired_link_target {
-        add_desired_managed_peer_link_and_schedule(state, bus, target, "saved-peer-resolution")
-            .await;
+            add_desired_managed_peer_link_and_schedule(state, bus, target, "saved-peer-resolution")
+                .await;
         }
         sync_auto_propagation_node(state, bus).await;
     }

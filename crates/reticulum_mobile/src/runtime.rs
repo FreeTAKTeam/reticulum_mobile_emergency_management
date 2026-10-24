@@ -30,6 +30,7 @@ include!("runtime/local_propagation_history.rs");
 include!("runtime/local_propagation_recovery.rs");
 include!("runtime/map_marker_receive.rs");
 include!("runtime/receive.rs");
+include!("runtime/receive_persistence.rs");
 include!("runtime/ack_handlers.rs");
 include!("runtime/hub_team_selection.rs");
 include!("runtime/hub.rs");
@@ -193,8 +194,6 @@ pub async fn run_node(
             identity: identity.clone(),
             transport: transport.clone(),
             lxmf_destination: lxmf_destination.clone(),
-            known_destinations: known_destinations.clone(),
-            out_links: out_links.clone(),
             active_propagation_node_hex: active_propagation_node_hex.clone(),
         },
         config.storage_dir.as_deref(),

@@ -1,6 +1,6 @@
 # Daemon-free local propagation and LoRa/TCP routing
 
-Status: plan only. It does not authorise source, phone or release changes.
+Status: approved for implementation; Phase 0 waived by the user. The receiver-confirmed `/get` correction was explicitly approved on 2026-10-24; see [the amendment](local-propagation-relay-correction.md).
 Supersedes the earlier unapproved routing draft. Keep that draft for reference and do not merge its incidental cleanup.
 
 ## Goal
@@ -65,7 +65,7 @@ Each phase ends at a gate. A later phase doesn't start until the earlier gate ha
   - the store schema, single-writer database access, validation, deduplication and retention
   - the standard propagation handlers
 
-  Then make `rns-rpc`/`reticulumd` delegate to it. Don't change the schema, the custody semantics or the bounded inventory processing. Add a feature split so the embedded build pulls in neither the RPC dispatch nor ZeroMQ.
+  Then make `rns-rpc`/`reticulumd` delegate to it. Keep the schema and bounded inventory processing unchanged. Preserve custody semantics except the approved receiver-confirmed `/get` correction: response construction and transfer-size exclusion must not complete receiver custody. Add a feature split so the embedded build pulls in neither the RPC dispatch nor ZeroMQ.
 - **Embedded API.** The service is built from the existing transport, identity, storage and lifecycle handles. It provides:
   - `deposit_own(prepared_message)`: there is deliberately no raw-ciphertext-plus-claimed-owner entry point
   - `status()`, `recover()`
@@ -79,7 +79,7 @@ Each phase ends at a gate. A later phase doesn't start until the earlier gate ha
   - restart in the middle of a deposit, an upload, a verification and a retirement
   - "transport completes, then storage rejects": the local copy must be kept
 - **Dependency proof.** Check `cargo tree -e features` for the embedded feature set in CI and fail the build if `rns-rpc` dispatch or `zmq` appears.
-- **Gate:** the `reticulumd` tests pass unchanged through the shared crate, and Python interop passes for relay upload and retrieval.
+- **Gate:** the `reticulumd` tests pass through the shared crate, with only the approved `/get` custody expectations corrected, and Python interop passes for relay upload and retrieval.
 
 ### Phase 2: REM integration (durable outbox and relay recovery)
 

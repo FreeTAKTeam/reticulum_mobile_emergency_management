@@ -49,21 +49,42 @@ consumer projections succeed. Replay reconciles unchanged persisted notices too.
 Retry rows use the latest wire ID as well as their logical message ID. The UI keeps
 expiry/eviction visible and states that a relay copy may survive local expiry.
 
-## Constrained retrieval gate
+## Constrained retrieval
 
-The provisional LoRa interval is 300 seconds and transfer budget is 2048 bytes;
-these are conservative unmeasured values following the Phase 0 waiver. Uploads use the budget. Safe constrained remote retrieval is not complete.
+The provisional LoRa interval is 300 seconds, with one fetched message per poll
+and a 2048-byte cap on each inventory or payload response. These remain
+conservative unmeasured values following the Phase 0 waiver. An unpaginated
+inventory exceeding the native cap defers retrieval; it never counts as empty.
+Larger messages stay at the relay for a later unconstrained connection.
 
-Pinned Python `lxmd` skips oversized `/get` wants without deleting them, but its
-inventory is unpaginated. Current Rust relay policy marks individually oversized
-wants transfer-limited and fetched wants transferred before recipient import;
-those marks can suppress later retrieval. This pre-existing daemon behavior was
-preserved during extraction, as required by the plan. REM therefore refuses a
-capped `/get` before transmitting; it does not risk hiding larger remote messages.
-TCP retrieval retains its existing behavior. Native response-size enforcement can
-bound inventory reception, but cannot undo the Rust relay's completion marks.
-A compatible safe retrieval contract or an explicitly revised policy is needed
-before this part of Phase 2 or the release gate can pass.
+The approved relay correction keeps `/get` wants retryable after response
+construction, size exclusion, interruption or cancellation. Only authenticated
+receiver `haves` retire recipient custody. Peering `/offer`, schema and
+recipient isolation remain unchanged. Stock Python already retains these wants;
+older Rust relays need this correction for safe retries. Existing historical
+completion marks are not rewritten by this amendment.
+
+The compiled LXMF-rs client uses native retained RequestReceipts and Resource
+limits, fetches one correlated transient at a time, verifies the original sender,
+and calls the native application importer. Only durable import sends `haves`;
+its control response is awaited. Rust's `true` and Python's `[]` responses are
+accepted. A retained task holds the shared transfer permit through native Link
+cleanup even after caller cancellation. REM's former control codecs and crypto
+compatibility implementation are removed; existing response wrappers and legacy
+salt support live in the compiled library.
+
+Chat must be durably saved and free of mission-envelope fields. Supported single
+EAM, event and telemetry operations, complete checklist batches and complete
+marker batches can confirm. Partial, malformed, mixed or otherwise unproven
+bundles remain relay-held. A supported idempotent operation counts as saved;
+unknown handling and database failures do not. SOS confirmation remains deferred
+until all of its separate projections can prove persistence.
+
+Sender verification uses native identity lookup and a bounded path request when
+needed. REM does not persist public signing keys today: after restart, an offline
+sender without an available cached announce cannot yet be verified. Its message
+stays at the relay until identity resolution succeeds. This amendment adds no new
+identity cache, schema or polling loop.
 
 The Phase 1 library-only `retrieve_for` API is available without enabling a phone
 service. It derives the recipient from a host-authenticated Link identity, checks

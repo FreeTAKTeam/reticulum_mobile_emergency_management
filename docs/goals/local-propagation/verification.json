@@ -1,29 +1,30 @@
 {
   "status": "implemented-partial-host-validated",
   "phase_0": "waived_by_user",
-  "lxmf_revision": "14880b5447430227d898a58a62d413e6f05622e6",
+  "lxmf_revision": "2e04e012b05402195e02e05e8cdcd5accad23fb9",
   "checks": {
     "rem_rust": {
-      "passed": 509,
-      "log": "/tmp/local-propagation-rem-ci-followup.log"
+      "passed": 499,
+      "log": "/tmp/local-propagation-rem-relay-tests.log"
     },
     "lxmf_shared_and_runtime": {
-      "passed": 44,
-      "log": "/tmp/local-propagation-retrieval-api-tests-final.log"
+      "passed": 50,
+      "log": "/tmp/local-propagation-relay-native-current-tests.log"
     },
     "daemon": {
-      "passed": 680,
-      "log": "/tmp/local-propagation-daemon-final.log"
+      "passed": 681,
+      "log": "/tmp/local-propagation-relay-daemon-tests.log"
     },
     "android_app_unit": {
       "passed": 56,
-      "log": "/tmp/local-propagation-android-final-tests.log"
+      "debug_apk_built": true,
+      "log": "/tmp/local-propagation-relay-android-tests.log"
     },
     "javascript_unit": {
       "source_size": 7,
       "app": 171,
       "node_client": 44,
-      "log": "/tmp/local-propagation-unit-final.log"
+      "log": "/tmp/local-propagation-relay-js-unit.log"
     },
     "android_native": {
       "abis": [
@@ -33,9 +34,10 @@
       ],
       "elf_page_bytes": 16384,
       "generated": "Kotlin",
-      "log": "/tmp/local-propagation-android-final-codegen.log",
-      "rem_revision": "677b14e41ff6d15feb9c7608836b594e5c3313c5",
-      "lxmf_revision": "5d054d8750fafbd98f394225f083a9d356b65ca7"
+      "lxmf_revision": "2e04e012b05402195e02e05e8cdcd5accad23fb9",
+      "rem_source": "receiver-confirmed correction in this commit",
+      "source_fingerprint_sha256": "9b4e173d62e12bb0eba9c6ba8f78167733079f38fdd4cc7d8c4e3dc51e60580f",
+      "log": "/tmp/local-propagation-relay-android-codegen.log"
     },
     "playwright": {
       "desktop": true,
@@ -44,7 +46,7 @@
       "log": "/tmp/local-propagation-e2e.log"
     },
     "source_size": {
-      "files": 697,
+      "files": 694,
       "ratcheted_exceptions": 0
     },
     "embedded_rpc_zeromq_excluded": true,
@@ -53,7 +55,11 @@
     "python_interop": {
       "upload": true,
       "retrieval": true,
-      "scope": "shared daemon handlers, not native outbox field acceptance"
+      "scope": "shared daemon handlers, not native outbox field acceptance",
+      "correction_logs": [
+        "/tmp/local-propagation-relay-correction-python-upload.log",
+        "/tmp/local-propagation-relay-correction-python-retrieval.log"
+      ]
     },
     "rem_strict_clippy": true,
     "rem_fmt": true,
@@ -67,17 +73,48 @@
       "bounded_ciphertext": true,
       "shared_admission_guard": true,
       "phone_endpoint_enabled": false
-    }
+    },
+    "native_python_retrieval": {
+      "passed": true,
+      "log": "/tmp/local-propagation-native-python-live-final.log",
+      "scope": "embedded native client against pinned stock Python relay: failed import retained, durable retry confirmed then retired; loopback TCP, not physical LoRa"
+    },
+    "receiver_confirmed_retrieval": {
+      "native_response_caps": true,
+      "one_payload_per_lora_poll": true,
+      "durable_import_before_haves": true,
+      "shared_admission_after_caller_drop": true,
+      "partial_malformed_database_failure_unconfirmed": true,
+      "signature_and_recipient_verified": true,
+      "historical_relay_marks_rewritten": false
+    },
+    "android_native_previous": {
+      "abis": [
+        "arm64-v8a",
+        "armeabi-v7a",
+        "x86_64"
+      ],
+      "elf_page_bytes": 16384,
+      "generated": "Kotlin",
+      "log": "/tmp/local-propagation-android-final-codegen.log",
+      "rem_revision": "677b14e41ff6d15feb9c7608836b594e5c3313c5",
+      "lxmf_revision": "5d054d8750fafbd98f394225f083a9d356b65ca7"
+    },
+    "android_only_capacitor_sync": true,
+    "typecheck_log": "/tmp/local-propagation-relay-typecheck.log",
+    "mobile_build_log": "/tmp/local-propagation-relay-mobile-build.log"
   },
   "unperformed": [
     "physical routing matrix for this implementation",
     "new release publication",
     "iOS build",
-    "hosted CI completion"
+    "full hosted CI completion for receiver-confirmed correction"
   ],
-  "open_contract": "Safe capped LoRa retrieval requires the proposed relay custody correction; capped requests currently fail before dispatch.",
+  "open_contract": "Receiver-confirmed correction approved and implemented. Physical routing matrix and release qualification remain open.",
   "warnings": [
-    "Generated Kotlin formatter ktlint unavailable; Android compilation succeeded."
+    "Generated Kotlin formatter ktlint unavailable; Android compilation succeeded.",
+    "Unpaginated inventories exceeding the cap, missing signer identities and unsupported or partial bundles remain relay-held.",
+    "Older Rust relays need the correction; existing historical completion marks are not rewritten."
   ],
   "hosted_ci_checkpoint": {
     "rem_revision": "5bbcdb5863cad16ff5cb1063c5e58998858dfa34",
@@ -92,6 +129,6 @@
       "https://github.com/FreeTAKTeam/LXMF-rs/actions/runs/40046419224",
       "https://github.com/FreeTAKTeam/reticulum_mobile_emergency_management/actions/runs/40046466567"
     ],
-    "current_reruns": "pending"
+    "current_reruns": "pending for receiver-confirmed correction; native Python custody step already passed in LXMF Verify run 40050884367"
   }
 }
