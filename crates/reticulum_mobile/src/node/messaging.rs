@@ -34,6 +34,8 @@ impl Node {
     }
 
     pub fn send_lxmf(&self, request: SendLxmfRequest) -> Result<String, NodeError> {
+        // Auto chat can use a 180-second LoRa attempt before returning durable custody.
+        const CHAT_COMMAND_TIMEOUT: Duration = Duration::from_secs(240);
         let (tx, active_config, hub_directory_snapshot, peers_snapshot, saver_active) = {
             let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             let snapshot = inner
@@ -89,7 +91,7 @@ impl Node {
             },
         )?;
         resp_rx
-            .recv_timeout(SEND_COMMAND_TIMEOUT)
+            .recv_timeout(CHAT_COMMAND_TIMEOUT)
             .unwrap_or(Err(NodeError::Timeout {}))
     }
 

@@ -66,6 +66,8 @@ export interface ReticulumNodeClient extends MapMarkerClient, PluginMapSessionCl
   listPeers(): Promise<PeerRecord[]>;
   listConversations(): Promise<ConversationRecord[]>;
   listMessages(conversationId?: string): Promise<MessageRecord[]>;
+  listLocalPropagation(): Promise<import("./contracts-local-propagation").LocalPropagationRecord[]>;
+  getLocalPropagationConfig(): Promise<import("./contracts-local-propagation").LocalPropagationConfig>;
   deleteConversation(conversationId: string): Promise<void>;
   getLxmfSyncStatus(): Promise<SyncStatus>;
   listTelemetryDestinations(): Promise<string[]>;

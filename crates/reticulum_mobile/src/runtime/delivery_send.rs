@@ -19,7 +19,7 @@ async fn send_lxmf_with_delivery_policy(
     const ACCEPTED_RESULT_RETRY_DELAY: Duration = Duration::from_secs(1);
     let has_active_relay = has_active_propagation_relay(state).await;
     let has_active_relay_transport =
-        has_active_relay && has_active_relay_transport_interface(state).await;
+        has_active_relay && has_active_reticulum_interface(state).await;
     let rnode_only_transport = {
         let active_interfaces = state.active_interface_registry.lock().await;
         active_interfaces_are_rnode_ble_only(&active_interfaces)
@@ -121,6 +121,13 @@ async fn send_lxmf_with_delivery_policy(
         } else {
             None
         };
+    if state.sdk.local_propagation.is_some() && !is_accepted_result
+        && matches!(send_mode,SendMode::Auto {}|SendMode::PropagationOnly {})
+        && matches!(traffic_class, OutboundTrafficClass::Chat {} | OutboundTrafficClass::Event {}
+            | OutboundTrafficClass::Eam {} | OutboundTrafficClass::Checklist {} | OutboundTrafficClass::Telemetry {}) {
+        return send_with_local_custody(state,bus,requested_destination_hex,body,title,fields_bytes,metadata,
+            send_mode,traffic_class,send_task_class,direct_attempts).await;
+    }
     let prefer_propagation = matches!(send_mode, SendMode::Auto {})
         && !is_accepted_result
         && has_active_relay_transport
@@ -414,68 +421,4 @@ async fn send_lxmf_with_delivery_policy(
     .await?;
     report.fallback_stage = Some(LxmfFallbackStage::AfterDirectRetryBudget {});
     Ok(report)
-}
-
-async fn send_lxmf_via_propagation_candidates(
-    state: &NodeRuntimeState,
-    destination: AddressHash,
-    request: (&str, OutboundTrafficClass),
-    body: &[u8],
-    title: Option<String>,
-    fields_bytes: Option<Vec<u8>>,
-    metadata: Option<MissionSyncMetadata>,
-) -> Result<LxmfSendReport, NodeError> {
-    let (requested_destination_hex, traffic_class) = request;
-    let active_relay = state.active_propagation_node_hex.lock().await.clone();
-    let active_relay_hex = active_relay.as_deref().unwrap_or("");
-    let announces = state.messaging.lock().await.list_announces();
-    let mut relay_candidates = propagation_sync_candidate_relays(
-        announces.as_slice(),
-        active_relay_hex,
-        state.preferred_propagation_node_hex.as_deref(),
-    );
-    if relay_candidates.is_empty() {
-        return Err(delivery_route_unavailable_error());
-    }
-
-    let mut last_error = None;
-    for (index, relay_candidate) in relay_candidates.drain(..).enumerate() {
-        ensure_current_telemetry_delivery(state, traffic_class, requested_destination_hex, metadata.as_ref())?;
-        let attempt_number = index + 1;
-        info!(
-            "[lxmf][mission] propagation send relay attempt relay={relay_candidate} attempt={attempt_number}/{PROPAGATION_SYNC_MAX_RELAY_ATTEMPTS} destination={requested_destination_hex}",
-        );
-
-        match state
-            .sdk
-            .send_lxmf_via_propagation_relay(
-                destination,
-                body,
-                title.clone(),
-                fields_bytes.clone(),
-                metadata.clone(),
-                relay_candidate.clone(),
-            )
-            .await
-        {
-            Ok(report) if lxmf_send_succeeded(report.outcome) => {
-                return Ok(report);
-            }
-            Ok(report) => {
-                info!(
-                    "[lxmf][mission] propagation send relay attempt failed relay={} destination={} outcome={:?}",
-                    relay_candidate, requested_destination_hex, report.outcome,
-                );
-                last_error = Some(NodeError::NetworkError {});
-            }
-            Err(err) => {
-                info!(
-                    "[lxmf][mission] propagation send relay attempt failed relay={relay_candidate} destination={requested_destination_hex} reason={err}",
-                );
-                last_error = Some(err);
-            }
-        }
-    }
-
-    Err(last_error.unwrap_or(NodeError::NetworkError {}))
 }

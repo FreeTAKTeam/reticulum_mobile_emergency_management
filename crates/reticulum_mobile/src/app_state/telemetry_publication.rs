@@ -95,6 +95,10 @@ impl AppStateStore {
                     State::Failed
                 }
                 _ => match update.status {
+                    crate::types::LxmfDeliveryStatus::StoredLocally {} => State::StoredLocally,
+                    crate::types::LxmfDeliveryStatus::Uploading {} => State::QueuedForDelivery,
+                    crate::types::LxmfDeliveryStatus::Expired {}
+                    | crate::types::LxmfDeliveryStatus::Evicted {} => State::Failed,
                     crate::types::LxmfDeliveryStatus::TimedOut {} => State::TimedOut,
                     crate::types::LxmfDeliveryStatus::Failed {} => State::Failed,
                     crate::types::LxmfDeliveryStatus::Delivered {} => State::TransportDelivered,
@@ -111,6 +115,55 @@ impl AppStateStore {
             );
             recipient.detail = update.detail.clone();
             recipient.updated_at_ms = update.updated_at_ms;
+        })
+    }
+}
+
+impl AppStateStore {
+    pub(crate) fn record_local_telemetry_custody(
+        &self,
+        command_id: &str,
+        entry: &crate::types::LocalPropagationRecord,
+    ) -> Result<Option<ProjectionInvalidation>, NodeError> {
+        use crate::telemetry_publication::TelemetryPublicationState as State;
+        use crate::types::LocalPropagationState as Custody;
+        self.update_telemetry_publication(|publication| {
+            let Some(row) = publication
+                .recipients
+                .iter_mut()
+                .find(|row| row.command_id == command_id)
+            else {
+                return;
+            };
+            if matches!(row.state, State::Acknowledged | State::Rejected) {
+                return;
+            }
+            let (state, detail) = match entry.state {
+                Custody::StoredLocally => (State::StoredLocally, "Stored locally"),
+                Custody::Uploading => (State::QueuedForDelivery, "Uploading"),
+                Custody::UploadedUnverified => (State::Transmitted, "Uploaded (unverified)"),
+                Custody::RelayHolds => (State::Transmitted, "Relay holds message"),
+                Custody::Delivered => (State::TransportDelivered, "Delivered"),
+                Custody::Acknowledged => (State::Acknowledged, "Acknowledged"),
+                Custody::Expired => (State::Failed, "Expired"),
+                Custody::Evicted => (State::Failed, "Evicted from local storage"),
+            };
+            let detail = if entry.may_exist_on_relay {
+                format!("{detail}; a copy may remain on the relay after local expiry")
+            } else {
+                detail.to_owned()
+            };
+            if row.state == state
+                && row.custody_message_id_hex.as_deref() == Some(entry.message_id_hex.as_str())
+                && row.detail.as_deref() == Some(detail.as_str())
+            {
+                return;
+            }
+            row.state = state;
+            row.custody_message_id_hex = Some(entry.message_id_hex.clone());
+            row.message_id_hex = Some(entry.message_id_hex.clone());
+            row.detail = Some(detail);
+            row.updated_at_ms = now_ms();
         })
     }
 }

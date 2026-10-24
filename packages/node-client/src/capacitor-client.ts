@@ -1,3 +1,4 @@
+import { toLocalPropagationRecord } from "./local-propagation-converters";
 import type { AnnounceRecord, AppSettingsRecord, ChecklistDeleteOptions, ChecklistRecord, ChecklistTemplateRecord, ChecklistUserTaskStatus, ConversationRecord, EamProjectionRecord, EamReadinessSummaryRecord, EamTeamSummaryRecord, EventProjectionRecord, InstalledPluginRecord, LegacyImportPayload, LogLevel, MessageRecord, NodeClientEvents, NodeConfig, NodeStatus, OperationalSummary, PacketSendOptions, PeerRecord, PluginCapabilityRecord, PluginSensorRecord, ReticulumNodeClient, RnodeBleDeviceRecord, RnodeBlePairResult, RnodeBluetoothDeviceRecord, RnodeBluetoothMode, RnodeUsbDeviceRecord, RnodeUsbPairResult, SavedPeerRecord, SendLxmfRequest, SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord, SosSettingsRecord, SosStatusRecord, SosTriggerSource, SyncStatus, TelemetryPositionRecord } from "./contracts";
 import { ReticulumNodePluginInstance, type PluginListenerHandle } from "./capacitor-plugin";
 import { configToPlugin, sosAudioToPlugin, sosSettingsToPlugin, toOperationalSummary, toSosAlertRecord, toSosAudioRecord, toSosLocationRecord, toSosSettingsRecord, toSosStatusRecord } from "./client-config-converters";
@@ -74,6 +75,7 @@ export class CapacitorReticulumNodeClient extends CapacitorMapMarkerClient imple
       await register("messageReceived", toMessageRecord);
       await register("messageUpdated", toMessageRecord);
       await register("syncUpdated", toSyncStatus);
+      await register("localPropagationUpdated", (raw) => ({ entry: toLocalPropagationRecord(raw.entry) }));
       await register("hubDirectoryUpdated", toHubDirectoryUpdatedEvent);
       await register("operationalNotice", toOperationalNoticeEvent);
       await register("projectionInvalidated", toProjectionInvalidationEvent);

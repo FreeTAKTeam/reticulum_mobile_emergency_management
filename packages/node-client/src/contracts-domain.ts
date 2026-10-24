@@ -484,6 +484,7 @@ export interface NodeClientEvents {
   messageReceived: MessageRecord;
   messageUpdated: MessageRecord;
   syncUpdated: SyncStatus;
+  localPropagationUpdated: { entry: import("./contracts-local-propagation").LocalPropagationRecord };
   hubDirectoryUpdated: HubDirectoryUpdatedEvent;
   operationalNotice: NodeOperationalNoticeEvent;
   projectionInvalidated: ProjectionInvalidationEvent;

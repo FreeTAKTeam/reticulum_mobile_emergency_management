@@ -61,7 +61,12 @@ async fn ensure_output_link(
             if let Some(existing) = links.get(&desc.address_hash).cloned() {
                 existing
             } else {
-                let created = state.transport.link(desc).await;
+                let created = state
+                    .transport
+                    .link_observed(desc, |link| {
+                        link.set_establishment_timeout(connect_timeout);
+                    })
+                    .await;
                 links.insert(desc.address_hash, created.clone());
                 created
             }
@@ -173,11 +178,9 @@ async fn register_desired_managed_peer_link(
     state: &NodeRuntimeState,
     destination_hex: &str,
 ) -> Option<ManagedPeerLinkRegistration> {
-    if !has_active_reticulum_interface(state).await {
-        return None;
-    }
     let target = desired_managed_peer_link_target_for_destination(state, destination_hex).await?;
-    let maintained = should_maintain_peer_link(state, destination_hex).await;
+    let maintained = has_active_peer_warmup_interface(state).await
+        && should_maintain_peer_link(state, destination_hex).await;
     if maintained {
         state.managed_peer_links.add_desired(target.clone()).await;
     }
@@ -190,9 +193,11 @@ async fn add_desired_managed_peer_link_and_schedule(
     target: ManagedPeerLinkTarget,
     reason: &str,
 ) {
-    if !should_maintain_peer_link(state, &target.destination_hex).await { return; }
+    if !should_maintain_peer_link(state, &target.destination_hex).await {
+        return;
+    }
     state.managed_peer_links.add_desired(target.clone()).await;
-    if !has_active_relay_transport_interface(state).await {
+    if !has_active_peer_warmup_interface(state).await {
         info!(
             "[link][maintain] destination={} status=deferred reason={} detail=no-proactive-session-transport",
             target.destination_hex, reason,
@@ -268,7 +273,7 @@ async fn ensure_managed_peer_link(
     bus: &EventBus,
     target: ManagedPeerLinkTarget,
 ) -> Result<(), NodeError> {
-    if !has_active_reticulum_interface(state).await {
+    if !has_active_peer_warmup_interface(state).await {
         return Err(NodeError::NetworkError {});
     }
     let Ok(destination) = parse_address_hash(target.destination_hex.as_str()) else {
@@ -333,7 +338,7 @@ async fn maintain_managed_peer_links_once(state: &NodeRuntimeState, bus: &EventB
     // deadline. RNode-only operation still establishes links through explicit
     // connect and send paths; warm-link maintenance is reserved for transports
     // that can sustain background sessions.
-    if !has_active_relay_transport_interface(state).await {
+    if !has_active_peer_warmup_interface(state).await {
         return;
     }
     let targets = state.managed_peer_links.desired_targets().await;
@@ -432,6 +437,13 @@ async fn register_pending_lxmf_delivery(
 ) -> Option<RegisteredPendingLxmfDelivery> {
     if !report.track_delivery_timeout {
         return None;
+    }
+    // Deposited wires keep their native custody owner even after direct recovery.
+    if let Some(store) = &state.sdk.local_propagation {
+        match store.message(&report.message_id_hex) {
+            Ok(None) => {}
+            Ok(Some(_)) | Err(_) => return None,
+        }
     }
     let metadata = report.metadata.as_ref()?;
     let tracking_key = metadata.tracking_key()?.to_string();

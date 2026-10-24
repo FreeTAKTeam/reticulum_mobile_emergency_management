@@ -1,6 +1,7 @@
 import {
   type ConversationRecord,
   type MessageRecord,
+  type LocalPropagationRecord,
 } from "@reticulum/node-client";
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
@@ -40,6 +41,7 @@ const getProjectionClient = createProjectionClientAccessor("messaging");
 export const useMessagingStore = defineStore("messaging", () => {
   const nodeStore = useNodeStore();
   const byMessageId = ref<StoredMessages>({});
+  const localPropagation = ref<Record<string, LocalPropagationRecord>>({});
   const nativeConversations = ref<ConversationRecord[]>([]);
   const selectedConversationId = ref<string>("");
   const selectedTargetMessageId = ref<string>("");
@@ -117,6 +119,7 @@ export const useMessagingStore = defineStore("messaging", () => {
     refreshMessages,
     resolvedConversationIds,
   } = createMessagingProjectionController({
+    localPropagation,
     byMessageId,
     cleanups,
     findNativeConversationByDestination,
@@ -383,6 +386,7 @@ export const useMessagingStore = defineStore("messaging", () => {
   }
 
   return {
+    localPropagation,
     initialized,
     hydrated,
     selectedConversationId,

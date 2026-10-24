@@ -315,6 +315,7 @@ pub struct Node {
 include!("node/lifecycle.rs");
 include!("node/status.rs");
 include!("node/messaging.rs");
+include!("node/local_propagation.rs");
 include!("node/messaging_policy.rs");
 include!("node/legacy.rs");
 include!("node/settings.rs");
@@ -340,6 +341,7 @@ include!("node/event_subscription.rs");
 #[cfg(test)]
 mod tests {
     include!("node/tests/support.rs");
+    include!("node/tests/local_propagation.rs");
     include!("node/tests/checklist_contracts_checklist_create_online_args_match_support.rs");
     include!("node/tests/checklist_contracts_checklist_upload_snapshot_uses_compressed_.rs");
     include!("node/tests/checklist_contracts_create_online_checklist_rejects_invalid_pa.rs");
@@ -349,6 +351,7 @@ mod tests {
     include!("node/tests/telemetry_m2.rs");
     include!("node/tests/telemetry_m2_receive.rs");
     include!("node/tests/telemetry_m2_coalescing.rs");
+    include!("node/tests/telemetry_local_custody.rs");
     include!("node/tests/sos_events.rs");
     include!("node/tests/eam_build_eam_replication_payload_emits_numeri.rs");
     include!("node/tests/eam_eam_replication_targets_include_saved_dire.rs");
@@ -360,6 +363,7 @@ mod tests {
     include!("node/tests/events_event_route_priority_puts_low_hop_live_pee.rs");
     include!("node/tests/lifecycle.rs");
     include!("node/tests/messaging_delivery.rs");
+    include!("node/tests/rnode_connection.rs");
     include!("node/tests/peers_routes.rs");
     include!("node/tests/peers_routes_capabilities.rs");
     include!("node/tests/chat_routing.rs");

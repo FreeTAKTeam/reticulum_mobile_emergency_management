@@ -109,6 +109,8 @@ pub(crate) struct RuntimeProjectionSnapshot {
     peers: Vec<PersistedPeerRecord>,
     messages: Vec<PersistedMessageRecord>,
     sync_status: PersistedSyncStatus,
+    #[serde(default)]
+    local_propagation: Vec<crate::types::LocalPropagationRecord>,
     updated_at_ms: u64,
 }
 
@@ -165,6 +167,7 @@ pub(crate) struct RuntimeProjectionJournal {
     snapshot: Arc<StdMutex<RuntimeProjectionSnapshot>>,
     pending: Arc<StdMutex<Vec<PendingInvalidation>>>,
     flush_scheduled: Arc<AtomicBool>,
+    persist_lock: Arc<StdMutex<()>>,
 }
 
 include!("runtime_projection/journal_io.rs");
@@ -177,6 +180,7 @@ impl RuntimeProjectionJournal {
             snapshot: Arc::new(StdMutex::new(RuntimeProjectionSnapshot::default())),
             pending: Arc::new(StdMutex::new(Vec::new())),
             flush_scheduled: Arc::new(AtomicBool::new(false)),
+            persist_lock: Arc::new(StdMutex::new(())),
         }
     }
 
@@ -438,41 +442,9 @@ impl RuntimeProjectionJournal {
             return;
         }
 
-        let snapshot = match self.snapshot.lock() {
-            Ok(v) => v.clone(),
-            Err(_) => return,
-        };
-
-        if let Some(path) = self.path.as_ref() {
-            if let Some(parent) = path.parent() {
-                if let Err(err) = fs::create_dir_all(parent) {
-                    warn!(
-                        "[projection] failed to create projection directory {}: {}",
-                        parent.display(),
-                        err
-                    );
-                }
-            }
-
-            let temp_path = path.with_extension("json.tmp");
-            match serde_json::to_vec_pretty(&snapshot) {
-                Ok(raw) => {
-                    if let Err(err) = fs::write(&temp_path, raw) {
-                        warn!(
-                            "[projection] failed to write projection snapshot {}: {}",
-                            temp_path.display(),
-                            err
-                        );
-                    } else if let Err(err) = fs::rename(&temp_path, path) {
-                        warn!(
-                            "[projection] failed to replace projection snapshot {} -> {}: {}",
-                            temp_path.display(),
-                            path.display(),
-                            err
-                        );
-                    }
-                }
-                Err(err) => warn!("[projection] failed to serialize projection snapshot: {err}"),
+        if self.path.is_some() {
+            if let Err(error)=self.persist_current_snapshot() {
+                warn!("[projection] failed to persist runtime snapshot: {error}");
             }
         }
 
@@ -482,3 +454,5 @@ impl RuntimeProjectionJournal {
         }
     }
 }
+
+include!("runtime_projection/local_propagation.rs");

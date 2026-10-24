@@ -57,6 +57,7 @@ fn node_capability_check_accepts_msgpack_hex_app_data() {
 
 struct TcpRelayHandle {
     addr: SocketAddr,
+    packets: Arc<AsyncMutex<Vec<reticulum::packet::Packet>>>,
     shutdown: Arc<Notify>,
     task: tokio::task::JoinHandle<()>,
 }
@@ -71,11 +72,13 @@ impl TcpRelayHandle {
         let clients: Arc<AsyncMutex<HashMap<usize, mpsc::UnboundedSender<Vec<u8>>>>> =
             Arc::new(AsyncMutex::new(HashMap::new()));
         let next_client_id = Arc::new(AtomicUsize::new(1));
+        let packets = Arc::new(AsyncMutex::new(Vec::new()));
 
         let task = {
             let shutdown = shutdown.clone();
             let clients = clients.clone();
             let next_client_id = next_client_id.clone();
+            let packets = packets.clone();
             tokio::spawn(async move {
                 loop {
                     tokio::select! {
@@ -100,8 +103,10 @@ impl TcpRelayHandle {
                             });
 
                             let reader_clients = clients.clone();
+                            let packets = packets.clone();
                             tokio::spawn(async move {
                                 let mut buf = vec![0u8; 4096];
+                                let mut frames = Vec::new();
                                 loop {
                                     let read = match read_half.read(&mut buf).await {
                                         Ok(0) => break,
@@ -109,6 +114,7 @@ impl TcpRelayHandle {
                                         Err(_) => break,
                                     };
                                     let chunk = buf[..read].to_vec();
+                                    capture_relay_packets(&mut frames, &chunk, &packets).await;
                                     let mut guard = reader_clients.lock().await;
                                     let mut dead_clients = Vec::new();
                                     for (peer_id, sender) in guard.iter() {
@@ -133,6 +139,7 @@ impl TcpRelayHandle {
 
         Self {
             addr,
+            packets,
             shutdown,
             task,
         }

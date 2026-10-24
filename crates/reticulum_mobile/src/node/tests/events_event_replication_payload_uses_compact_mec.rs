@@ -398,7 +398,7 @@ async fn targeted_upsert_event_replicates_to_native_peer_projection() {
     assert_eq!(
         replication_targets.len(),
         1,
-        "expected one event replication target"
+        "expected one event replication target; peers={:?}", node_a.list_peers().unwrap()
     );
     assert_eq!(
         replication_targets[0].app_destination_hex,

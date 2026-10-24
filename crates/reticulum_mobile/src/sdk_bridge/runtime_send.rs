@@ -1,5 +1,5 @@
 impl RuntimeLxmfSdk {
-    pub(crate) async fn new(runtime_id: String, transport: SdkTransportState) -> Self {
+    pub(crate) async fn new(runtime_id: String, transport: SdkTransportState, storage_dir: Option<&str>) -> Result<Self,NodeError> {
         let source_destination = transport.lxmf_destination.lock().await.desc.address_hash;
         let backend = InProcessBackend::new(InProcessBackendConfig::new(
             runtime_id,
@@ -8,11 +8,16 @@ impl RuntimeLxmfSdk {
             transport.identity.clone(),
             source_destination,
         ));
-        Self {
+        let local_propagation=storage_dir.map(str::trim).filter(|dir|!dir.is_empty())
+            .map(|dir|backend.local_propagation(std::path::Path::new(dir).join("local-propagation.db"),lxmf_runtime::propagation_store::StoreLimits::default()))
+            .transpose().map_err(map_local_propagation_error)?;
+        Ok(Self {
             client: Arc::new(Client::new(backend)),
             transport,
             send_sequence: AtomicU64::new(0),
-        }
+            local_propagation,
+            local_recovery_inflight:Arc::new(AtomicBool::new(false)),
+        })
     }
 
     pub(crate) async fn start(&self) -> Result<(), NodeError> {
@@ -39,6 +44,7 @@ impl RuntimeLxmfSdk {
     }
 
     pub(crate) async fn shutdown(&self) -> Result<(), NodeError> {
+        if let Some(store)=&self.local_propagation {store.stop().map_err(map_local_propagation_error)?;}
         let client = self.client.clone();
         tokio::task::spawn_blocking(move || {
             client
@@ -242,6 +248,7 @@ impl RuntimeLxmfSdk {
             .is_some_and(|value| value.command_present && value.tracking_key().is_some());
 
         Ok(LxmfSendReport {
+            local_custody:None,
             outcome,
             message_id_hex: report.message_id.0,
             resolved_destination_hex: report.resolved_destination,

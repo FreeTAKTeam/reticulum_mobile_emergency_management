@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
-import type { MessageRecord } from "@reticulum/node-client";
+import type { MessageRecord, LocalPropagationRecord } from "@reticulum/node-client";
 
 import ListWindowControls from "../ListWindowControls.vue";
 import { useListWindow } from "../../composables/useListWindow";
@@ -31,6 +31,7 @@ const props = defineProps<{
   targetMessageId?: string;
   sosMapTargets?: Record<string, SosMessageMapTarget>;
   messages: MessageRecord[];
+  localPropagation?: Record<string, LocalPropagationRecord>;
   chatDisabled?: boolean;
   chatDisabledReason?: string;
 }>();
@@ -126,7 +127,18 @@ function messageBodySegments(message: MessageRecord): MessageBodySegment[] {
   return segments.length > 0 ? segments : [{ type: "text", text: body }];
 }
 
+function custodyFor(message: MessageRecord): LocalPropagationRecord | undefined {
+  return props.localPropagation?.[message.lastWireMessageIdHex ?? message.messageIdHex]
+    ?? props.localPropagation?.[message.messageIdHex];
+}
+
 function messageStateLabel(state: string): string {
+  const custodyLabels: Record<string, string> = {
+    StoredLocally: "Stored locally", Uploading: "Uploading",
+    UploadedUnverified: "Uploaded (unverified)", RelayHolds: "Relay holds message",
+    Acknowledged: "Acknowledged", Expired: "Expired", Evicted: "Evicted from local storage",
+  };
+  if (custodyLabels[state]) return custodyLabels[state];
   if (state === "SentDirect" || state === "Delivered") {
     return "Delivered";
   }
@@ -355,9 +367,12 @@ watch(
             Open position on telemetry map
           </a>
           <div class="bubble-meta">
-            <span>{{ messageStateLabel(message.state) }}</span>
+            <span>{{ messageStateLabel(custodyFor(message)?.state ?? message.state) }}</span>
             <span>{{ new Date(message.receivedAtMs ?? message.sentAtMs ?? message.updatedAtMs).toLocaleTimeString() }}</span>
           </div>
+          <p v-if="custodyFor(message)?.mayExistOnRelay" class="bubble-error" role="status">
+            A copy may remain on the relay after local expiry.
+          </p>
           <p v-if="isRetryableMessage(message)" class="bubble-error">
             {{ messageFailureDetail(message) }}
           </p>

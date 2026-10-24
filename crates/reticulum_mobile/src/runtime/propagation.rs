@@ -4,6 +4,7 @@ async fn run_propagation_sync_job(
     limit: Option<u32>,
     requested_at_ms: u64,
     relay_hex: String,
+    automatic: bool,
 ) {
     let mut announces = state.messaging.lock().await.list_announces();
     let mut relay_candidates = propagation_sync_candidate_relays(
@@ -31,6 +32,9 @@ async fn run_propagation_sync_job(
             break;
         };
         attempted_relays.insert(relay_candidate.clone());
+        if automatic && !automatic_propagation_poll_is_routed(&state, &relay_candidate).await {
+            continue;
+        }
         let attempt_number = attempted_relays.len();
         *state.active_propagation_node_hex.lock().await = Some(relay_candidate.clone());
         let active_status = from_sdk_sync_status(
@@ -86,9 +90,42 @@ async fn run_propagation_sync_job(
         )
         .await;
 
+        let import_state = state.clone();
+        let import_bus = bus.clone();
+        let destination_hex = state
+            .lxmf_destination
+            .lock()
+            .await
+            .desc
+            .address_hash
+            .to_hex_string();
+        let lora_transfer_limit =
+            active_interfaces_are_rnode_ble_only(&*state.active_interface_registry.lock().await)
+                .then_some(crate::sdk_bridge::LOCAL_PROPAGATION_LORA_TRANSFER_BYTES as usize);
         let result = match state
             .sdk
-            .fetch_propagated_lxmf_from_relay(relay_candidate.as_str(), limit, None)
+            .fetch_propagated_lxmf_from_relay(
+                relay_candidate.as_str(),
+                limit,
+                lora_transfer_limit,
+                move |wire| {
+                    let state = import_state.clone();
+                    let bus = import_bus.clone();
+                    let destination_hex = destination_hex.clone();
+                    async move {
+                        emit_received_payload(
+                            &state,
+                            &bus,
+                            &state.sdk,
+                            destination_hex,
+                            wire,
+                            None,
+                            true,
+                        )
+                        .await
+                    }
+                },
+            )
             .await
         {
             Ok(result) => result,
@@ -120,42 +157,15 @@ async fn run_propagation_sync_job(
             }
         };
 
-        let destination_hex = result.destination_hex.clone();
-        let available_count = result.available_count;
-        let fetched_count = result.fetched_count;
-        let fetched_entry_count = result.fetched_entry_count;
-        let extracted_payload_count = result.extracted_payload_count;
-        let failed_count = result.failed_count;
-        let malformed_count = result.malformed_count;
-        let decrypt_failed_count = result.decrypt_failed_count;
-        let imported_count =
-            crate::numeric::usize_to_u32_saturating(result.imported_wires.len());
-        emit_sync_status_update(
-            &state,
-            &bus,
-            sdkmsg::SyncPhase::Receiving,
-            requested_at_ms,
-            0,
-            Some(format!(
-                "available={available_count} fetched_entries={fetched_entry_count} extracted_payloads={extracted_payload_count} decrypt_failed={decrypt_failed_count}"
-            )),
-            false,
-        )
-        .await;
-        for wire in result.imported_wires {
-            emit_received_payload(
-                &state,
-                &bus,
-                &state.sdk,
-                destination_hex.clone(),
-                wire,
-                None,
-                true,
-            )
-            .await;
-        }
+        let imported_count = crate::numeric::usize_to_u32_saturating(result.imported);
         let detail = format!(
-            "available={available_count} fetched={fetched_count} fetched_entries={fetched_entry_count} extracted_payloads={extracted_payload_count} imported={imported_count} malformed={malformed_count} decrypt_failed={decrypt_failed_count} failed={failed_count}"
+            "available={} fetched={} imported={} confirmed={} deferred={} failed={}",
+            result.available,
+            result.fetched,
+            result.imported,
+            result.confirmed,
+            result.deferred,
+            result.failed,
         );
         emit_sync_status_update(
             &state,
@@ -167,9 +177,7 @@ async fn run_propagation_sync_job(
             true,
         )
         .await;
-        info!(
-            "[sync] propagation sync complete relay={relay_candidate} {detail}"
-        );
+        info!("[sync] propagation sync complete relay={relay_candidate} {detail}");
         state
             .propagation_sync_inflight
             .store(false, Ordering::Release);
@@ -275,7 +283,21 @@ async fn resolve_peer_route(
     if *state.power_saver_rx.borrow() {
         return Ok(());
     }
-    let destination = parse_address_hash(destination_hex)?;
+    let target = if let Some(destination_hex) =
+        known_lxmf_route_for_app_destination(state, destination_hex).await
+    {
+        Some(ManagedPeerLinkTarget {
+            destination_hex,
+            kind: ManagedPeerLinkKind::LxmfDelivery,
+        })
+    } else {
+        desired_managed_peer_link_target_for_destination(state, destination_hex).await
+    };
+    let destination = parse_address_hash(
+        target
+            .as_ref()
+            .map_or(destination_hex, |target| target.destination_hex.as_str()),
+    )?;
     let attempted_at_ms = now_ms();
     {
         let mut messaging = state.messaging.lock().await;
@@ -284,8 +306,20 @@ async fn resolve_peer_route(
     emit_peer_changed(state, bus, destination_hex).await;
 
     state.transport.request_path(&destination, None, None).await;
-    let desc = ensure_destination_desc(state, destination, None).await?;
+    let desc = ensure_destination_desc(
+        state,
+        destination,
+        target.map(|target| target.kind.destination_name()),
+    )
+    .await?;
     let identity_hex = desc.identity.address_hash.to_hex_string();
+    let app_destination_hex = SingleOutputDestination::new(
+        desc.identity,
+        DestinationName::new(APP_DESTINATION_NAME.0, APP_DESTINATION_NAME.1),
+    )
+    .desc
+    .address_hash
+    .to_hex_string();
     let lxmf_desc = SingleOutputDestination::new(
         desc.identity,
         DestinationName::new(LXMF_DELIVERY_NAME.0, LXMF_DELIVERY_NAME.1),
@@ -295,11 +329,12 @@ async fn resolve_peer_route(
     {
         let mut messaging = state.messaging.lock().await;
         messaging.record_resolution_result(
-            destination_hex,
+            app_destination_hex.as_str(),
             identity_hex.as_str(),
             lxmf_destination_hex.as_str(),
             now_ms(),
         );
+        messaging.record_resolution_error(destination_hex, None);
     }
     let desired_link_target = {
         let messaging = state.messaging.lock().await;
@@ -315,8 +350,8 @@ async fn resolve_peer_route(
     emit_peer_resolved_for_destination(state, bus, destination_hex).await;
     if !*state.power_saver_rx.borrow() {
         if let Some(target) = desired_link_target {
-        add_desired_managed_peer_link_and_schedule(state, bus, target, "saved-peer-resolution")
-            .await;
+            add_desired_managed_peer_link_and_schedule(state, bus, target, "saved-peer-resolution")
+                .await;
         }
         sync_auto_propagation_node(state, bus).await;
     }

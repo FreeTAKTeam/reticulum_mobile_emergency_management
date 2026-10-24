@@ -36,6 +36,8 @@ public final class ReticulumBridge {
     public static native int setAppSettingsJson(String payloadJson);
     public static native int updateBatteryState(int percent, boolean charging);
     public static native String getPowerStateJson();
+    public static native String listLocalPropagationJson();
+    public static native String getLocalPropagationConfigJson();
     public static native String publishCommunityStatusJson();
     public static native String setSituationJson(String payloadJson);
     public static native String getHouseholdSituationJson();

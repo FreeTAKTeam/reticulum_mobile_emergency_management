@@ -68,7 +68,7 @@ enum SendOutcome {
   "DroppedNoRoute"
 };
 
-enum LxmfDeliveryStatus { "Sent", "SentToPropagation", "Delivered", "Acknowledged", "Failed", "TimedOut" };
+enum LxmfDeliveryStatus { "StoredLocally", "Uploading", "UploadedUnverified", "RelayHolds", "Expired", "Evicted", "Sent", "SentToPropagation", "Delivered", "Acknowledged", "Failed", "TimedOut" };
 
 enum TransportDeliveryState {
   "Queued",
@@ -189,6 +189,10 @@ enum ProjectionScope {
 
 [Error]
 enum NodeError {
+  "UnresolvedRecipient",
+  "PayloadTooLarge",
+  "StoreFull",
+  "Expired",
   "InvalidConfig",
   "IoError",
   "NetworkError",
@@ -202,6 +206,26 @@ enum NodeError {
   "LxmfPacketBuildError",
   "EventStreamClosed",
   "InternalError"
+};
+
+enum LocalPropagationState { "StoredLocally", "Uploading", "UploadedUnverified", "RelayHolds", "Delivered", "Acknowledged", "Expired", "Evicted" };
+
+dictionary LocalPropagationRecord {
+  string transient_id_hex;
+  string message_id_hex;
+  string destination_hex;
+  LocalPropagationState state;
+  u64 encrypted_bytes;
+  u64 admitted_at_ms;
+  u64 expires_at_ms;
+  boolean may_exist_on_relay;
+};
+
+dictionary LocalPropagationConfig {
+  u64 capacity_bytes;
+  u32 retention_seconds;
+  u32 lora_poll_interval_seconds;
+  u32 lora_transfer_limit_bytes;
 };
 
 // Configuration & status dictionaries.
@@ -1081,6 +1105,7 @@ dictionary PluginEventRecord {
 // Event stream from the node to the UI.
 [Enum]
 interface NodeEvent {
+  LocalPropagationUpdated(LocalPropagationRecord entry);
   StatusChanged(NodeStatus status);
   InterfaceStatusChanged(InterfaceStatusRecord status);
   AnnounceReceived(
@@ -1121,6 +1146,9 @@ interface EventSubscription {
 };
 
 interface Node {
+  [Throws=NodeError]
+  sequence<LocalPropagationRecord> list_local_propagation();
+  LocalPropagationConfig get_local_propagation_config();
   [Throws=NodeError]
   constructor();
 

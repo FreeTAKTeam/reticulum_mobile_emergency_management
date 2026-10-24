@@ -9,8 +9,8 @@ fn handle_inbound_checklist_upload(ctx: &InboundChecklistCommand<'_>) -> bool {
     let _ = (command_map, content_bytes);
     let mut persisted_any = false;
 
-    let Some(checklist_uid) = msgpack_get_checklist_arg(args, "checklist_uid")
-        .and_then(msgpack_checklist_uid)
+    let Some(checklist_uid) =
+        msgpack_get_checklist_arg(args, "checklist_uid").and_then(msgpack_checklist_uid)
     else {
         return false;
     };
@@ -20,29 +20,25 @@ fn handle_inbound_checklist_upload(ctx: &InboundChecklistCommand<'_>) -> bool {
     else {
         return false;
     };
-    let Ok(mut checklist) =
-        serde_json::from_str::<ChecklistRecord>(snapshot_json.as_str())
-    else {
+    let Ok(mut checklist) = serde_json::from_str::<ChecklistRecord>(snapshot_json.as_str()) else {
         return false;
     };
     checklist.uid = checklist_uid.clone();
-    let existing = app_state
-        .get_checklist_any(checklist_uid.as_str())
-        .unwrap_or_default();
+    let existing = match app_state.get_checklist_any(checklist_uid.as_str()) {
+        Ok(existing) => existing,
+        Err(_) => return false,
+    };
+    let already_saved = existing.is_some();
     let Some(checklist) = merge_uploaded_checklist_snapshot(
         existing,
         checklist,
         timestamp.as_str(),
         source_identity.as_deref(),
     ) else {
-        return false;
+        return already_saved;
     };
-    persisted_any |= upsert_inbound_checklist(
-        app_state,
-        bus,
-        &checklist,
-        "checklist-received-upload",
-    );
+    persisted_any |=
+        upsert_inbound_checklist(app_state, bus, &checklist, "checklist-received-upload");
 
     persisted_any
 }

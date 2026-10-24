@@ -256,6 +256,7 @@ fn stop_clears_running_state_and_commands_fail_after_stop() {
     let status = node.get_status();
     assert!(!status.running);
     assert!(matches!(node.announce_now(), Err(NodeError::NotRunning {})));
+    assert!(matches!(node.list_local_propagation(), Err(NodeError::NotRunning {})));
     assert!(matches!(
         node.request_peer_identity("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()),
         Err(NodeError::NotRunning {})

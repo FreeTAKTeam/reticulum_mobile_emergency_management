@@ -1,6 +1,7 @@
 package network.reticulum.emergency;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
@@ -69,11 +70,15 @@ public class ReticulumNodePluginBaseTest {
     }
 
     @Test
-    public void capacitorDiscoversEveryPublicPluginMethod() {
+    public void capacitorDiscoversEveryPublicPluginMethod() throws Exception {
         final long methodCount = Arrays.stream(ReticulumNodePlugin.class.getMethods())
             .filter(method -> method.isAnnotationPresent(PluginMethod.class))
             .count();
 
-        assertEquals(115L, methodCount);
+        assertEquals(117L, methodCount);
+        for (String name : new String[] { "listLocalPropagation", "getLocalPropagationConfig" }) {
+            assertTrue(ReticulumNodePlugin.class.getMethod(name, PluginCall.class)
+                .isAnnotationPresent(PluginMethod.class));
+        }
     }
 }

@@ -35,6 +35,53 @@ fn equivalent_peer_destinations(peer: &sdkmsg::PeerRecord) -> impl Iterator<Item
     .flatten()
 }
 
+async fn saved_peer_management_aliases(
+    state: &NodeRuntimeState,
+    saved_peers: &[SavedPeerRecord],
+) -> HashSet<String> {
+    let mut aliases = saved_peers
+        .iter()
+        .flat_map(|peer| {
+            [
+                Some(peer.destination_hex.as_str()),
+                peer.lxmf_destination_hex.as_deref(),
+                peer.identity_hex.as_deref(),
+            ]
+        })
+        .flatten()
+        .filter_map(normalize_hex_32)
+        .collect::<HashSet<_>>();
+    for desc in state.known_destinations.lock().await.values() {
+        let identity = desc.identity.address_hash.to_hex_string();
+        let app = SingleOutputDestination::new(
+            desc.identity,
+            DestinationName::new(APP_DESTINATION_NAME.0, APP_DESTINATION_NAME.1),
+        )
+        .desc
+        .address_hash
+        .to_hex_string();
+        let lxmf = SingleOutputDestination::new(
+            desc.identity,
+            DestinationName::new(LXMF_DELIVERY_NAME.0, LXMF_DELIVERY_NAME.1),
+        )
+        .desc
+        .address_hash
+        .to_hex_string();
+        if [&identity, &app, &lxmf]
+            .iter()
+            .any(|alias| aliases.contains(*alias))
+        {
+            aliases.extend([identity, app, lxmf]);
+        }
+    }
+    for peer in state.messaging.lock().await.list_peers() {
+        if equivalent_peer_destinations(&peer).any(|alias| aliases.contains(alias)) {
+            aliases.extend(equivalent_peer_destinations(&peer).map(ToOwned::to_owned));
+        }
+    }
+    aliases
+}
+
 fn peer_is_current_send_target(peer: &sdkmsg::PeerRecord) -> bool {
     !peer.stale && (peer.active_link || peer.announce_last_seen_at_ms.is_some())
 }
@@ -179,6 +226,11 @@ async fn resolve_current_lxmf_destination_hex(
 
 async fn resolve_lxmf_destination_hex(state: &NodeRuntimeState, destination_hex: &str) -> String {
     let normalized_destination = destination_hex.to_ascii_lowercase();
+    if let Some(verified) =
+        known_lxmf_route_for_app_destination(state, &normalized_destination).await
+    {
+        return verified;
+    }
     if let Ok(saved_peers) = state.app_state.get_saved_peers() {
         if let Some(peer) = saved_peers.iter().find(|peer| {
             peer.destination_hex
@@ -193,7 +245,6 @@ async fn resolve_lxmf_destination_hex(state: &NodeRuntimeState, destination_hex:
             if let Some(lxmf_destination_hex) = peer.lxmf_destination_hex.as_deref() {
                 return lxmf_destination_hex.to_ascii_lowercase();
             }
-            return peer.destination_hex.to_ascii_lowercase();
         }
     }
     let Some(peer) = peer_for_any_destination_hex(state, &normalized_destination).await else {

@@ -69,14 +69,18 @@ fn spawn_connect_peer_command(
         let destination_hex_copy = destination_hex.clone();
         let result = async {
             let dest = parse_address_hash(&destination_hex)?;
+            let mut destinations = vec![
+                destination_hex.clone(),
+                canonical_app_destination_hex(&state, &destination_hex).await,
+            ];
+            if let Some(peer) = peer_for_any_destination_hex(&state, &destination_hex).await {
+                destinations.extend(equivalent_peer_destinations(&peer).map(ToOwned::to_owned));
+            }
             let directory_member = state
                 .hub_directory_snapshot
                 .lock()
                 .map_err(|error| {
-                    crate::error_context::contextual_node_error(
-                        NodeError::InternalError {},
-                        error,
-                    )
+                    crate::error_context::contextual_node_error(NodeError::InternalError {}, error)
                 })?
                 .as_ref()
                 .is_some_and(|snapshot| {
@@ -91,12 +95,10 @@ fn spawn_connect_peer_command(
                         .await?;
                 emit_peer_changed(&state, &bus, saved_peer.destination_hex.as_str()).await;
             }
-            clear_ignored_peer_destinations(&state, std::slice::from_ref(&destination_hex)).await;
-            state.sdk.record_peer_changed(
-                destination_hex.as_str(),
-                PeerState::Connecting {},
-                None,
-            );
+            clear_ignored_peer_destinations(&state, &destinations).await;
+            state
+                .sdk
+                .record_peer_changed(destination_hex.as_str(), PeerState::Connecting {}, None);
             resolve_peer_route(&state, &bus, &destination_hex).await?;
             let target = match register_desired_managed_peer_link(&state, &destination_hex).await {
                 Some(registration) => registration.target,
@@ -122,10 +124,11 @@ fn spawn_connect_peer_command(
         }
         .await;
         if let Err(err) = &result {
-            state.messaging.lock().await.record_resolution_error(
-                destination_hex_copy.as_str(),
-                Some(err.to_string()),
-            );
+            state
+                .messaging
+                .lock()
+                .await
+                .record_resolution_error(destination_hex_copy.as_str(), Some(err.to_string()));
             emit_peer_changed(&state, &bus, &destination_hex_copy).await;
             state.sdk.record_peer_changed(
                 &destination_hex_copy,
@@ -272,6 +275,7 @@ fn spawn_sync_request_command(
             limit,
             requested_at_ms,
             relay_hex,
+            false,
         ));
         Ok(())
     });

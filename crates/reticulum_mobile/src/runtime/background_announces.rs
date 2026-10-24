@@ -239,6 +239,8 @@ fn spawn_announce_receiver(state: &NodeRuntimeState, bus: &EventBus) {
                         }
                     }
                     sync_auto_propagation_node(&state, &bus).await;
+                    let recipient=SingleOutputDestination::new(desc.identity,DestinationName::new(LXMF_DELIVERY_NAME.0,LXMF_DELIVERY_NAME.1)).desc.address_hash.to_hex_string();
+                    spawn_local_custody_recovery(&state,&bus,Some(recipient));
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,

@@ -187,6 +187,10 @@ fn lxmf_delivery_status_for(report: &LxmfSendReport) -> LxmfDeliveryStatus {
 
 fn node_error_code(err: &NodeError) -> &'static str {
     match err {
+        NodeError::UnresolvedRecipient {}=>"UnresolvedRecipient",
+        NodeError::PayloadTooLarge {}=>"PayloadTooLarge",
+        NodeError::StoreFull {}=>"StoreFull",
+        NodeError::Expired {}=>"Expired",
         NodeError::InvalidConfig {} => "InvalidConfig",
         NodeError::IoError {} => "IoError",
         NodeError::NetworkError {} => "NetworkError",

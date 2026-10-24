@@ -18,8 +18,8 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  # Immutable LXMF-rs v0.14.0 release commit (rusqlite 0.40, shared with r3akt-map-core).
-  LXMF_RS_REF: 7822b608f2cd2debd8170895bc580d01dda5356e
+  # Immutable daemon-free local propagation implementation (LXMF-rs PR #679).
+  LXMF_RS_REF: eb0088f181bd2c3eaead55dbdaef720c8be5b8cb
 
 jobs:
   web:

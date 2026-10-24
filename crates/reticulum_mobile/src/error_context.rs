@@ -82,6 +82,10 @@ pub(crate) fn node_error_code_is_retryable(code: &str) -> bool {
 
 pub(crate) fn node_error_code(error: &NodeError) -> &'static str {
     match error {
+        NodeError::UnresolvedRecipient {} => "UnresolvedRecipient",
+        NodeError::PayloadTooLarge {} => "PayloadTooLarge",
+        NodeError::StoreFull {} => "StoreFull",
+        NodeError::Expired {} => "Expired",
         NodeError::InvalidConfig {} => "InvalidConfig",
         NodeError::IoError {} => "IoError",
         NodeError::NetworkError {} => "NetworkError",

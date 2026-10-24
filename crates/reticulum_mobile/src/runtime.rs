@@ -23,8 +23,14 @@ include!("runtime/team_link_policy.rs");
 include!("runtime/ack_tracking.rs");
 include!("runtime/ack_retries.rs");
 include!("runtime/delivery_send.rs");
+include!("runtime/propagation_send.rs");
+include!("runtime/local_propagation_policy.rs");
+include!("runtime/local_propagation_send.rs");
+include!("runtime/local_propagation_history.rs");
+include!("runtime/local_propagation_recovery.rs");
 include!("runtime/map_marker_receive.rs");
 include!("runtime/receive.rs");
+include!("runtime/receive_persistence.rs");
 include!("runtime/ack_handlers.rs");
 include!("runtime/hub_team_selection.rs");
 include!("runtime/hub.rs");
@@ -38,6 +44,7 @@ include!("runtime/background_receivers.rs");
 include!("runtime/background_links.rs");
 include!("runtime/command_executor.rs");
 include!("runtime/command_send_bytes.rs");
+include!("runtime/command_send_lxmf.rs");
 include!("runtime/command_tasks.rs");
 include!("runtime/command_queries.rs");
 
@@ -181,20 +188,28 @@ pub async fn run_node(
         projection_journal_path(config.storage_dir.as_deref()),
         bus.clone(),
     ));
-    let sdk = Arc::new(
-        RuntimeLxmfSdk::new(
-            identity.address_hash().to_hex_string(),
-            SdkTransportState {
-                identity: identity.clone(),
-                transport: transport.clone(),
-                lxmf_destination: lxmf_destination.clone(),
-                known_destinations: known_destinations.clone(),
-                out_links: out_links.clone(),
-                active_propagation_node_hex: active_propagation_node_hex.clone(),
-            },
-        )
-        .await,
-    );
+    let sdk = match RuntimeLxmfSdk::new(
+        identity.address_hash().to_hex_string(),
+        SdkTransportState {
+            identity: identity.clone(),
+            transport: transport.clone(),
+            lxmf_destination: lxmf_destination.clone(),
+            active_propagation_node_hex: active_propagation_node_hex.clone(),
+        },
+        config.storage_dir.as_deref(),
+    )
+    .await
+    {
+        Ok(sdk) => Arc::new(sdk),
+        Err(error) => {
+            bus.emit(NodeEvent::Error {
+                code: node_error_code(&error).to_owned(),
+                message: format!("local propagation initialization failed: {error}"),
+            });
+            mark_runtime_stopped(&status, &bus);
+            return;
+        }
+    };
 
     let state = NodeRuntimeState {
         status: status.clone(),
@@ -333,6 +348,7 @@ pub async fn run_node(
     spawn_payload_receivers(&state, &bus);
     spawn_delivery_tracking_tasks(&state, &bus, &receipt_message_ids);
     spawn_link_event_listener(&state, &bus, power_saver_rx.clone());
+    spawn_inbound_custody_listener(&state, &bus);
     spawn_periodic_hub_refresh(&config, &state, &bus, power_saver_rx.clone());
     let command_executor = RuntimeCommandExecutor::new();
 

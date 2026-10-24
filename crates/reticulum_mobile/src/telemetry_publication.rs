@@ -27,6 +27,8 @@ pub(crate) struct TelemetryRecipient {
     pub detail: Option<String>,
     pub updated_at_ms: u64,
     pub attempt_route: Option<String>,
+    #[serde(default)]
+    pub custody_message_id_hex: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,5 +57,24 @@ impl TelemetryPublication {
             "recipients": self.recipients,
             "last_receive_failure": self.last_receive_failure,
         })
+    }
+}
+
+impl TelemetryPublication {
+    pub(crate) fn recover_uncertain_sends(&mut self) {
+        for row in &mut self.recipients {
+            if row.custody_message_id_hex.is_none()
+                && matches!(
+                    row.state,
+                    TelemetryPublicationState::QueuedForDelivery
+                        | TelemetryPublicationState::Transmitted
+                        | TelemetryPublicationState::TransportDelivered
+                )
+            {
+                row.state = TelemetryPublicationState::QueuedNoRoute;
+                row.attempt_route = None;
+                row.detail = Some("recovering uncertain delivery after restart".to_string());
+            }
+        }
     }
 }

@@ -445,3 +445,42 @@ fn hub_team_directories_are_durable_and_scoped_by_hub_identity() {
 
     std::fs::remove_dir_all(storage_dir).expect("cleanup storage");
 }
+
+#[test]
+fn custody_history_lookup_resolves_logical_and_wire_ids_without_loading_other_rows() {
+    let storage = test_storage_dir("custody-message-lookup");
+    let store = AppStateStore::new(storage.to_str()).expect("store");
+    let mut row = message(
+        "logical",
+        "aa",
+        MessageDirection::Outbound {},
+        "aa",
+        None,
+        1,
+    );
+    row.last_wire_message_id_hex = Some("wire".to_owned());
+    store.upsert_message(&row).expect("history");
+    store.connect().expect("connection").execute(
+        "INSERT INTO messages(message_id_hex,conversation_id,updated_at_ms,json) VALUES('unrelated','aa',2,'invalid json')", [],
+    ).expect("unrelated corrupt legacy row");
+    assert_eq!(
+        store
+            .message_for_wire("logical")
+            .expect("logical lookup")
+            .unwrap()
+            .body_utf8,
+        row.body_utf8
+    );
+    assert_eq!(
+        store
+            .message_for_wire("wire")
+            .expect("wire lookup")
+            .unwrap()
+            .message_id_hex,
+        "logical"
+    );
+    assert!(store
+        .message_for_wire("absent")
+        .expect("missing lookup")
+        .is_none());
+}

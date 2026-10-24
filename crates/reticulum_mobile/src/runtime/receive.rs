@@ -6,7 +6,8 @@ async fn emit_received_payload(
     payload: Vec<u8>,
     fallback_fields_bytes: Option<Vec<u8>>,
     expected_lxmf: bool,
-) {
+) -> bool {
+    let mut durably_imported = false;
     match LxmfMessage::from_wire(payload.as_slice()) {
         Ok(message) => {
             let wire_message_id_hex = LxmfWireMessage::unpack(payload.as_slice())
@@ -50,8 +51,22 @@ async fn emit_received_payload(
                 .as_deref()
                 .and_then(parse_mission_sync_metadata);
             let persisted_telemetry = if !is_sos_message {
-                persist_received_telemetry_if_present(state, bus, TelemetryReceiveContext { metadata: metadata.as_ref(), fields_bytes: fields_bytes.as_deref(), body: message.content.as_slice(), source_hex: source_hex.as_deref(), destination_hex: &destination_hex, message_id_hex: wire_message_id_hex.as_deref() }).await
-            } else { false };
+                persist_received_telemetry_if_present(
+                    state,
+                    bus,
+                    TelemetryReceiveContext {
+                        metadata: metadata.as_ref(),
+                        fields_bytes: fields_bytes.as_deref(),
+                        body: message.content.as_slice(),
+                        source_hex: source_hex.as_deref(),
+                        destination_hex: &destination_hex,
+                        message_id_hex: wire_message_id_hex.as_deref(),
+                    },
+                )
+                .await
+            } else {
+                false
+            };
             if let Some(metadata) = metadata.as_ref().filter(|_| !is_sos_message) {
                 if metadata.is_mission_related() {
                     info!(
@@ -97,16 +112,20 @@ async fn emit_received_payload(
                     Some(metadata),
                     fields_bytes.as_deref(),
                 );
+                durably_imported = received_mission_is_durable(
+                    fields_bytes.as_deref(),
+                    persisted_eam,
+                    persisted_event,
+                    persisted_telemetry,
+                    persisted_checklist,
+                    persisted_marker,
+                );
                 send_operational_ack_if_needed(
                     state,
                     bus,
                     source_hex.as_deref(),
                     Some(metadata),
-                    persisted_eam
-                        || persisted_event
-                        || persisted_telemetry
-                        || persisted_checklist
-                        || persisted_marker,
+                    durably_imported,
                 )
                 .await;
             }
@@ -235,15 +254,18 @@ async fn emit_received_payload(
                         received_at_ms: Some(now_ms()),
                         updated_at_ms: now_ms(),
                     };
-                    upsert_message_record(state, bus, record, true).await;
-                    send_chat_delivery_ack_if_needed(
-                        state,
-                        bus,
-                        source_hex.as_deref(),
-                        message_id_hex.as_str(),
-                        body_utf8.as_str(),
-                    )
-                    .await;
+                    durably_imported = upsert_message_record(state, bus, record, true).await
+                        && received_fields_are_plain_chat(fields_bytes.as_deref());
+                    if durably_imported {
+                        send_chat_delivery_ack_if_needed(
+                            state,
+                            bus,
+                            source_hex.as_deref(),
+                            message_id_hex.as_str(),
+                            body_utf8.as_str(),
+                        )
+                        .await;
+                    }
                 }
             }
             sdk.record_packet_received(
@@ -258,7 +280,7 @@ async fn emit_received_payload(
                 bytes: message.content,
                 fields_bytes,
             });
-            return;
+            return durably_imported;
         }
         Err(err) if expected_lxmf => {
             let prefix = hex::encode(payload.iter().take(16).copied().collect::<Vec<_>>());
@@ -275,7 +297,7 @@ async fn emit_received_payload(
                     "Failed to decode LXMF payload for destination {destination_hex}: {err}"
                 ),
             });
-            return;
+            return false;
         }
         Err(_) => {}
     }
@@ -298,4 +320,5 @@ async fn emit_received_payload(
         bytes: payload,
         fields_bytes: fallback_fields_bytes,
     });
+    false
 }

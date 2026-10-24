@@ -1,5 +1,9 @@
 export const NODE_ERROR_CODES = [
   "InvalidConfig",
+  "UnresolvedRecipient",
+  "PayloadTooLarge",
+  "StoreFull",
+  "Expired",
   "IoError",
   "NetworkError",
   "ReticulumError",

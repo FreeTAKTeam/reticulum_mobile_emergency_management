@@ -51,17 +51,24 @@ fn persist_received_map_marker_if_present(
         return false;
     }
     let mut applied = false;
+    let mut all_saved = true;
     for (event_type, payload) in fields_bytes.map(map_marker_events).unwrap_or_default() {
+        if !supported_marker_receive_event(&event_type) {
+            return false;
+        }
         match apply_map_marker_event(app_state, &event_type, &payload) {
             Ok(Some(invalidation)) => {
                 crate::node::emit_map_marker_invalidation(app_state, bus, invalidation);
                 applied = true;
             }
             Ok(None) => applied = true,
-            Err(error) => warn!("[lxmf][marker] replica rejected event={event_type} error={error}"),
+            Err(error) => {
+                all_saved = false;
+                warn!("[lxmf][marker] replica rejected event={event_type} error={error}");
+            }
         }
     }
-    applied
+    applied && all_saved
 }
 
 /// RCH also sends markers to older REM builds as telemetry; markers are a
@@ -82,7 +89,9 @@ pub(crate) fn is_marker_telemetry(fields_bytes: &[u8]) -> bool {
                 let telemetry = command
                     .get("command_type")
                     .and_then(serde_json::Value::as_str)
-                    .is_some_and(|value| canonical_command_type(value) == "mission.registry.telemetry.upsert");
+                    .is_some_and(|value| {
+                        canonical_command_type(value) == "mission.registry.telemetry.upsert"
+                    });
                 let args = command.get("args");
                 let has = |key: &str| args.and_then(|args| args.get(key)).is_some();
                 telemetry && has("object_destination_hash") && has("marker_type")

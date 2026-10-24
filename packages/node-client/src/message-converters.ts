@@ -94,6 +94,7 @@ export function toPacketSentEvent(raw: Record<string, unknown>): PacketSentEvent
 export function toLxmfDeliveryStatus(raw: unknown): LxmfDeliveryStatus {
   const value = String(raw ?? "");
   const valid: LxmfDeliveryStatus[] = [
+    "StoredLocally", "Uploading", "UploadedUnverified", "RelayHolds", "Expired", "Evicted",
     "Sent",
     "SentToPropagation",
     "Delivered",
