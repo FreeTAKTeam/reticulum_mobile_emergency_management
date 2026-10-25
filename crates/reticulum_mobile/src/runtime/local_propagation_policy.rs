@@ -47,6 +47,44 @@ fn local_wire_metadata(wire: &[u8]) -> Option<MissionSyncMetadata> {
     parse_mission_sync_metadata(&rmp_serde::to_vec(&fields).ok()?)
 }
 
+fn local_custody_kind(
+    kind: &lxmf_runtime::propagation_store::MessageKind,
+) -> r3akt_mesh_delivery::CustodyKind {
+    use lxmf_runtime::propagation_store::MessageKind;
+    use r3akt_mesh_delivery::CustodyKind;
+    match kind {
+        MessageKind::Chat => CustodyKind::Chat,
+        MessageKind::Application => CustodyKind::Mission,
+        MessageKind::Telemetry { key } => CustodyKind::Telemetry { key: key.clone() },
+    }
+}
+
+fn local_custody_storage_kind(
+    kind: r3akt_mesh_delivery::CustodyKind,
+) -> lxmf_runtime::propagation_store::MessageKind {
+    use lxmf_runtime::propagation_store::MessageKind;
+    use r3akt_mesh_delivery::CustodyKind;
+    match kind {
+        CustodyKind::Chat => MessageKind::Chat,
+        CustodyKind::Mission => MessageKind::Application,
+        CustodyKind::Telemetry { key } => MessageKind::Telemetry { key },
+    }
+}
+
+#[test]
+fn local_custody_kind_preserves_mission_class_and_telemetry_key() {
+    use lxmf_runtime::propagation_store::MessageKind;
+    use r3akt_mesh_delivery::CustodyKind;
+    assert_eq!(local_custody_storage_kind(CustodyKind::Mission), MessageKind::Application);
+    for kind in [
+        CustodyKind::Chat,
+        CustodyKind::Mission,
+        CustodyKind::Telemetry { key: "recipient-fix".to_owned() },
+    ] {
+        assert_eq!(local_custody_kind(&local_custody_storage_kind(kind.clone())), kind);
+    }
+}
+
 fn local_recovery_allowed(
     state: &NodeRuntimeState,
     status: &lxmf_runtime::propagation_store::Status,
@@ -60,12 +98,12 @@ fn local_recovery_allowed(
         return false;
     }
     let metadata = local_wire_metadata(wire);
-    let class = match status.kind {
-        lxmf_runtime::propagation_store::MessageKind::Chat => OutboundTrafficClass::Chat {},
-        lxmf_runtime::propagation_store::MessageKind::Telemetry { .. } => {
+    let class = match local_custody_kind(&status.kind) {
+        r3akt_mesh_delivery::CustodyKind::Chat => OutboundTrafficClass::Chat {},
+        r3akt_mesh_delivery::CustodyKind::Telemetry { .. } => {
             OutboundTrafficClass::Telemetry {}
         }
-        lxmf_runtime::propagation_store::MessageKind::Mission => {
+        r3akt_mesh_delivery::CustodyKind::Mission => {
             let command = metadata
                 .as_ref()
                 .and_then(|metadata| metadata.command_type.as_deref())
