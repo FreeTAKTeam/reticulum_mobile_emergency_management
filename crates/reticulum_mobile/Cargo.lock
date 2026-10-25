@@ -1101,6 +1101,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "r3akt-mesh-delivery"
+version = "0.1.0"
+source = "git+https://github.com/FreeTAKTeam/R3AKTClient.git?rev=e6d742fa281371f5346470e08cb723ec1dfd5723#e6d742fa281371f5346470e08cb723ec1dfd5723"
+dependencies = [
+ "chrono",
+ "hex",
+ "rmp-serde",
+ "rmpv",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "r3akt-profile-rch"
 version = "0.1.0"
 source = "git+https://github.com/FreeTAKTeam/Reticulum-Community-Hub.git?rev=19de27f419373c543fe6154aab2a3c027938b65d#19de27f419373c543fe6154aab2a3c027938b65d"
@@ -1233,6 +1247,7 @@ dependencies = [
  "lxmf-sdk",
  "lxmf-wire",
  "r3akt-map-core",
+ "r3akt-mesh-delivery",
  "rand_core",
  "reticulum-mobile-jni-boundary",
  "reticulum-rs",

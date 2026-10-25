@@ -170,14 +170,15 @@ async fn deposit_offline_message(
     }
     let now = crate::numeric::u64_to_i64_saturating(now_ms() / 1000);
     let kind = match class {
-        OutboundTrafficClass::Chat {} => lxmf_runtime::propagation_store::MessageKind::Chat,
+        OutboundTrafficClass::Chat {} => r3akt_mesh_delivery::CustodyKind::Chat,
         OutboundTrafficClass::Telemetry {} => {
-            lxmf_runtime::propagation_store::MessageKind::Telemetry {
+            r3akt_mesh_delivery::CustodyKind::Telemetry {
                 key: "latest-fix".to_owned(),
             }
         }
-        _ => lxmf_runtime::propagation_store::MessageKind::Mission,
+        _ => r3akt_mesh_delivery::CustodyKind::Mission,
     };
+    let kind = local_custody_storage_kind(kind);
     let expiry = if matches!(class, OutboundTrafficClass::Telemetry {}) {
         let settings = state
             .app_state
