@@ -67,3 +67,20 @@ optional phone-hosted Phase 3 retrieval is deferred.
 Host tests qualify storage and the offline boundary separately from physical
 acceptance. No new release is qualified until the rebuilt scoped candidate passes
 the required hardware routing matrix.
+
+## Custody classification ownership
+
+R3AKT custody meaning comes from the shared `r3akt-mesh-delivery::CustodyKind`
+in the R3AKTClient shared Rust workspace, pinned to `6525086c2938e16a361a426f06f600dec495f1a2`.
+The native CI pins LXMF-rs `cfce4644851f86a918655703ab42379af33f52bc`.
+REM's native adapter maps `Mission` to LXMF's
+generic `MessageKind::Application` and maps it back before mission permission
+checks. `Chat` and keyed `Telemetry` pass through unchanged. The persisted
+application discriminator remains `1`; existing custody records, recipient
+ciphertext, retention and recovery do not require migration or deletion.
+
+This boundary change passes all 516 native tests, including classification and
+existing custody recovery cases. A locked check also passes with the pinned
+shared crate. Strict Clippy on Rust 1.96 reports existing errors in unchanged
+files (clone-to-slice, `is_multiple_of` and large-error lints); that broader
+cleanup is separate. No new hardware or production acceptance is claimed.
