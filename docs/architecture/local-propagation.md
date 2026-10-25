@@ -71,8 +71,9 @@ the required hardware routing matrix.
 ## Custody classification ownership
 
 R3AKT custody meaning comes from the shared `r3akt-mesh-delivery::CustodyKind`
-in the R3AKTClient shared Rust workspace, pinned to `6525086c2938e16a361a426f06f600dec495f1a2`.
-The native CI pins LXMF-rs `cfce4644851f86a918655703ab42379af33f52bc`.
+in the R3AKTClient shared Rust workspace, pinned to merged commit
+`e6d742fa281371f5346470e08cb723ec1dfd5723`.
+The native CI pins LXMF-rs merged commit `ea30c23da03bc12ddd2b08aa9ac0a0763536f6f9`.
 REM's native adapter maps `Mission` to LXMF's
 generic `MessageKind::Application` and maps it back before mission permission
 checks. `Chat` and keyed `Telemetry` pass through unchanged. The persisted
