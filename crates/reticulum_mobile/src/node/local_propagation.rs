@@ -100,7 +100,7 @@ pub(crate) fn local_custody_recipient_allowed(
     Ok(targets.iter().any(|target| {
         destination_matches_peer_set(
             destination,
-            &[target.app_destination_hex.clone()],
+            std::slice::from_ref(&target.app_destination_hex),
             &saved,
             peers,
         )

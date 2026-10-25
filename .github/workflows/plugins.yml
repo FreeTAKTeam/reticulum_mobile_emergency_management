@@ -34,7 +34,7 @@ jobs:
           java-version: 21
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.88"
+          toolchain: "1.99.1"
           components: rustfmt
       - name: Install dependencies
         working-directory: rem

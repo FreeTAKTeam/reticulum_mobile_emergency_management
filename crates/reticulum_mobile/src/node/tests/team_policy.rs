@@ -137,8 +137,8 @@ fn event_and_telemetry_targets_follow_active_team_without_tier_gate() {
         }];
         let targets = build_runtime_event_replication_targets(
             &build_status_for_tests(),
-            &[peer.clone()],
-            &[saved.clone()],
+            std::slice::from_ref(&peer),
+            std::slice::from_ref(&saved),
             None,
             None,
             Some(&snapshot),
@@ -147,7 +147,7 @@ fn event_and_telemetry_targets_follow_active_team_without_tier_gate() {
         assert_eq!(targets.len(), members.len());
         let telemetry = build_runtime_telemetry_destinations(
             &build_status_for_tests(),
-            &[peer.clone()], &saved_telemetry_fixtures(&[peer.clone()]),
+            std::slice::from_ref(&peer), &saved_telemetry_fixtures(std::slice::from_ref(&peer)),
             None,
             None,
             Some(&snapshot),

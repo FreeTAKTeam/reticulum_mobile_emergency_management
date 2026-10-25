@@ -115,6 +115,10 @@ impl RuntimeLxmfSdk {
         clippy::too_many_arguments,
         reason = "send boundary keeps payload, metadata, mode, and retry identity explicit"
     )]
+    #[allow(
+        clippy::result_large_err,
+        reason = "the capture closure returns the SDK client's error type unchanged"
+    )]
     pub(crate) async fn send_lxmf_with_direct_attempt(
         &self,
         destination: AddressHash,

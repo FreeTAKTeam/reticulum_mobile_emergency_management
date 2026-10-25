@@ -2,7 +2,7 @@
 fn telemetry_m2_aliases_preserve_membership_and_one_delivery_identity() {
     let status = build_status_for_tests();
     let peer = build_peer_record(&"a".repeat(32), &"b".repeat(32), true, true, true);
-    let mut saved = saved_telemetry_fixtures(&[peer.clone()]);
+    let mut saved = saved_telemetry_fixtures(std::slice::from_ref(&peer));
     let snapshot = test_team_snapshot(&[&peer.destination_hex]);
     let mut fix = build_telemetry();
     fix.updated_at_ms = 123;
@@ -13,7 +13,7 @@ fn telemetry_m2_aliases_preserve_membership_and_one_delivery_identity() {
         }
         let targets = build_runtime_telemetry_destinations(
             &status,
-            &[peer.clone()],
+            std::slice::from_ref(&peer),
             &saved,
             None,
             None,
@@ -65,7 +65,7 @@ fn telemetry_m2_aliases_preserve_membership_and_one_delivery_identity() {
     let config = build_config_fingerprint_for_tests(HubMode::Autonomous {}, None);
     let targets = build_runtime_telemetry_destinations(
         &status,
-        &[peer.clone()],
+        std::slice::from_ref(&peer),
         &saved,
         None,
         Some(&config),
@@ -331,7 +331,7 @@ fn telemetry_m2_retry_authorization_rechecks_current_fix_and_contact() {
             &app_state,
             &status,
             &config,
-            &[peer.clone()],
+            std::slice::from_ref(&peer),
             Some(&snapshot),
             (&peer.destination_hex, &command)
         )
@@ -362,14 +362,14 @@ fn telemetry_m2_retry_authorization_rechecks_current_fix_and_contact() {
             &app_state,
             &status,
             &config,
-            &[peer.clone()],
+            std::slice::from_ref(&peer),
             Some(&snapshot),
             (&peer.destination_hex, &command)
         )
         .unwrap()
     );
     app_state
-        .set_saved_peers(&saved_telemetry_fixtures(&[peer.clone()]))
+        .set_saved_peers(&saved_telemetry_fixtures(std::slice::from_ref(&peer)))
         .unwrap();
     fix.updated_at_ms += 1;
     node.record_local_telemetry_fix(fix).unwrap();
@@ -378,7 +378,7 @@ fn telemetry_m2_retry_authorization_rechecks_current_fix_and_contact() {
             &app_state,
             &status,
             &config,
-            &[peer.clone()],
+            std::slice::from_ref(&peer),
             Some(&snapshot),
             (&peer.destination_hex, &command)
         )
@@ -390,7 +390,7 @@ fn telemetry_m2_retry_authorization_rechecks_current_fix_and_contact() {
             &app_state,
             &status,
             &config,
-            &[peer.clone()],
+            std::slice::from_ref(&peer),
             Some(&snapshot),
             (&peer.destination_hex, &command)
         )

@@ -292,7 +292,7 @@ fn local_custody_should_try_direct(
     recipient_event: bool,
     relay_route: bool,
 ) -> bool {
-    direct_route && (recipient_event || status.attempts % 2 == 0 || status.uploaded || !relay_route)
+    direct_route && (recipient_event || status.attempts.is_multiple_of(2) || status.uploaded || !relay_route)
 }
 
 async fn acknowledge_local_application_message(

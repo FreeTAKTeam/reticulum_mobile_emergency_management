@@ -110,7 +110,7 @@ fn fixture_flow_creates_a_marker_and_reads_only_selected_objects() {
     let no_session = call(&node, RANGEFINDER, "map.session.list", &json!({})).expect("list");
     assert_eq!(no_session["items"], json!([]));
     let session = node
-        .start_plugin_map_session(RANGEFINDER, &[selected.clone()])
+        .start_plugin_map_session(RANGEFINDER, std::slice::from_ref(&selected))
         .expect("operator start");
     let events = drained(&node);
     assert_eq!(events[0].0, RANGEFINDER);
@@ -194,7 +194,7 @@ fn sessions_stop_from_operator_plugin_revocation_and_binder_death() {
     let node = node("stop");
     let marker = operator_marker(&node, "Target");
     let first = node
-        .start_plugin_map_session(RANGEFINDER, &[marker.clone()])
+        .start_plugin_map_session(RANGEFINDER, std::slice::from_ref(&marker))
         .expect("start");
     drained(&node);
 
@@ -216,7 +216,7 @@ fn sessions_stop_from_operator_plugin_revocation_and_binder_death() {
 
     // The plugin stops its own session.
     let second = node
-        .start_plugin_map_session(RANGEFINDER, &[marker.clone()])
+        .start_plugin_map_session(RANGEFINDER, std::slice::from_ref(&marker))
         .expect("start");
     drained(&node);
     let stopped = call(
@@ -234,7 +234,7 @@ fn sessions_stop_from_operator_plugin_revocation_and_binder_death() {
 
     // Revoking mapSelectionRead ends the session and denies further reads.
     let third = node
-        .start_plugin_map_session(RANGEFINDER, &[marker.clone()])
+        .start_plugin_map_session(RANGEFINDER, std::slice::from_ref(&marker))
         .expect("start");
     drained(&node);
     node.grant_plugin_capabilities(
@@ -259,7 +259,7 @@ fn sessions_stop_from_operator_plugin_revocation_and_binder_death() {
         .expect("regrant");
 
     // Binder death: the host ends sessions without queueing events for a dead connection.
-    node.start_plugin_map_session(RANGEFINDER, &[marker.clone()])
+    node.start_plugin_map_session(RANGEFINDER, std::slice::from_ref(&marker))
         .expect("start");
     node.start_plugin_map_session(OTHER, &[marker])
         .expect("other start");
@@ -295,7 +295,7 @@ fn session_operations_negotiate_api_1_3_and_capability() {
         "1.2 operations still work"
     );
     assert!(node
-        .start_plugin_map_session(LEGACY, &[marker.clone()])
+        .start_plugin_map_session(LEGACY, std::slice::from_ref(&marker))
         .is_err());
 
     let future = node
