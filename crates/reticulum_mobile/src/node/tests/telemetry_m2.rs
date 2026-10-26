@@ -97,7 +97,7 @@ fn publication_test_node(name: &str) -> (Node, mpsc::Receiver<Command>, PeerReco
         false,
         false,
     );
-    node.set_saved_peers(saved_telemetry_fixtures(&[peer.clone()]))
+    node.set_saved_peers(saved_telemetry_fixtures(std::slice::from_ref(&peer)))
         .unwrap();
     set_test_team(&node, vec![peer.destination_hex.clone()]);
     let (tx, rx) = mpsc::channel(16);

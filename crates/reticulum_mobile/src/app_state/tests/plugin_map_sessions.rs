@@ -117,7 +117,7 @@ fn plugin_map_session_start_is_bounded_and_queues_selected_objects_only() {
     );
     for _ in 1..PLUGIN_MAP_SESSION_MAX_PER_PLUGIN {
         store
-            .start_plugin_map_session(SESSION_PLUGIN, &[other.clone()])
+            .start_plugin_map_session(SESSION_PLUGIN, std::slice::from_ref(&other))
             .expect("more sessions");
     }
     assert!(
@@ -142,7 +142,7 @@ fn plugin_map_session_requires_api_1_3_and_the_selection_capability() {
         )
         .expect("grant without selection");
     assert!(store
-        .start_plugin_map_session(SESSION_PLUGIN, &[marker.clone()])
+        .start_plugin_map_session(SESSION_PLUGIN, std::slice::from_ref(&marker))
         .is_err());
 
     store
@@ -159,7 +159,7 @@ fn plugin_map_session_requires_api_1_3_and_the_selection_capability() {
         .expect("grant");
     assert!(
         store
-            .start_plugin_map_session(SESSION_PLUGIN, &[marker.clone()])
+            .start_plugin_map_session(SESSION_PLUGIN, std::slice::from_ref(&marker))
             .is_err(),
         "API 1.2 plugin"
     );
@@ -173,7 +173,7 @@ fn plugin_map_sessions_end_when_capability_is_revoked_or_plugin_disabled() {
     let store = session_store("map-session-revoke");
     let marker = session_marker(&store, "Target");
     store
-        .start_plugin_map_session(SESSION_PLUGIN, &[marker.clone()])
+        .start_plugin_map_session(SESSION_PLUGIN, std::slice::from_ref(&marker))
         .expect("start");
     drained_events(&store);
     assert!(store
@@ -312,7 +312,7 @@ fn plugin_map_sessions_do_not_survive_restart_and_host_stop_can_skip_notificatio
         .expect("enable");
     let marker = session_marker(&store, "Target");
     let (session, _) = store
-        .start_plugin_map_session(SESSION_PLUGIN, &[marker.clone()])
+        .start_plugin_map_session(SESSION_PLUGIN, std::slice::from_ref(&marker))
         .expect("start");
     drained_events(&store);
 
@@ -350,7 +350,7 @@ fn plugin_map_session_event_backlog_is_bounded() {
     let store = session_store("map-session-backlog");
     let marker = session_marker(&store, "Target");
     store
-        .start_plugin_map_session(SESSION_PLUGIN, &[marker.clone()])
+        .start_plugin_map_session(SESSION_PLUGIN, std::slice::from_ref(&marker))
         .expect("start");
     for _ in 0..300 {
         store
@@ -419,7 +419,7 @@ fn plugin_removal_keeps_shared_markers_and_a_new_signer_loses_ownership() {
         .record_plugin_map_marker(SESSION_PLUGIN, &marker)
         .expect("own");
     store
-        .start_plugin_map_session(SESSION_PLUGIN, &[marker.clone()])
+        .start_plugin_map_session(SESSION_PLUGIN, std::slice::from_ref(&marker))
         .expect("start");
 
     store.sync_discovered_plugins(&[]).expect("uninstall");

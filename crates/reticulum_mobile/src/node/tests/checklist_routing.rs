@@ -10,7 +10,7 @@ fn checklist_participants_cannot_bypass_the_active_team_roster() {
     for snapshot in [None, Some(HubDirectorySnapshot::yellow_only(1))] {
         let targets = build_runtime_checklist_replication_targets(
             &build_status_for_tests(),
-            &[peer.clone()],
+            std::slice::from_ref(&peer),
             &[],
             None,
             None,

@@ -251,7 +251,7 @@ fn telemetry_targets_use_direct_for_saved_peers_when_relay_is_active() {
 
     let destinations = build_runtime_telemetry_destinations(
         &status,
-        &[peer.clone()], &saved_telemetry_fixtures(&[peer]),
+        std::slice::from_ref(&peer), &saved_telemetry_fixtures(std::slice::from_ref(&peer)),
         Some("56565656565656565656565656565656"),
         Some(&config),
         Some(&test_team_snapshot(&["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"])),
@@ -406,7 +406,7 @@ fn telemetry_targets_use_relay_for_fresh_route_without_active_link_when_relay_ex
 
     let destinations = build_runtime_telemetry_destinations(
         &status,
-        &[peer.clone()], &saved_telemetry_fixtures(&[peer]),
+        std::slice::from_ref(&peer), &saved_telemetry_fixtures(std::slice::from_ref(&peer)),
         Some("56565656565656565656565656565656"),
         Some(&config),
         Some(&test_team_snapshot(&["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"])),

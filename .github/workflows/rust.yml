@@ -143,10 +143,10 @@ jobs:
           path: LXMF-rs
           ref: ${{ env.LXMF_RS_REF }}
 
-      - name: Install Rust 1.88
+      - name: Install Rust 1.99.1
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.88"
+          toolchain: "1.99.1"
           components: rustfmt, clippy
 
       - name: Check locked Rust dependencies
@@ -198,10 +198,10 @@ jobs:
           path: LXMF-rs
           ref: main
 
-      - name: Install Rust 1.88
+      - name: Install Rust 1.99.1
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.88"
+          toolchain: "1.99.1"
           components: rustfmt, clippy
 
       - name: Generate ephemeral lockfile for current LXMF

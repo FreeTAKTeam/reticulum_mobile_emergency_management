@@ -188,7 +188,7 @@ fn ensure_telemetry_destination_authorized(
     if targets.iter().any(|target| {
         destination_matches_peer_set(
             destination,
-            &[target.app_destination_hex.clone()],
+            std::slice::from_ref(&target.app_destination_hex),
             saved,
             peers,
         )
@@ -252,7 +252,7 @@ pub(crate) fn telemetry_delivery_is_current(
             .any(|target| {
                 destination_matches_peer_set(
                     request.0,
-                    &[target.app_destination_hex.clone()],
+                    std::slice::from_ref(&target.app_destination_hex),
                     &saved,
                     peers,
                 )

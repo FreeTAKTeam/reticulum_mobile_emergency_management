@@ -273,7 +273,7 @@ impl Node {
             };
             let peer = peers.iter().find(|peer| {
                 crate::team_membership::destinations_include_peer(
-                    &[target.app_destination_hex.clone()],
+                    std::slice::from_ref(&target.app_destination_hex),
                     &peer.destination_hex,
                     peer.lxmf_destination_hex.as_deref(),
                     peer.identity_hex.as_deref(),
@@ -282,7 +282,7 @@ impl Node {
             let route_ready = peer.is_some_and(|peer| peer.active_link || peer_has_current_known_lxmf_route(peer));
             let stored_route = saved.iter().any(|saved_peer| {
                 crate::team_membership::destinations_include_peer(
-                    &[target.app_destination_hex.clone()], &saved_peer.destination_hex,
+                    std::slice::from_ref(&target.app_destination_hex), &saved_peer.destination_hex,
                     saved_peer.lxmf_destination_hex.as_deref(), saved_peer.identity_hex.as_deref(),
                 ) && saved_peer.lxmf_destination_hex.as_deref().and_then(normalize_hex_32).is_some()
             });
