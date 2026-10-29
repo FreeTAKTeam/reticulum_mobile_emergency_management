@@ -225,11 +225,49 @@ bash ./gradlew :rem-plugin-sdk:assembleDebug :plugin-test-fixture:assembleDebug 
 ```
 
 The fixture APKs are integration aids, not public examples. BLE Heart Rate and Watch Status Server
-are supported plugins built and distributed as separate APK artifacts; neither is embedded or
-automatically installed by REM.
+are supported plugins built as separate APKs. Complete offline releases carry their installers
+alongside the ATN Rangefinder installer; REM does not install any of them automatically.
 
 The example plugins log cleanup failures from scan stop, GATT disconnect/close,
 socket close, and callback delivery. Cleanup remains best-effort and must not
 replace the primary operation result, but exceptions are never silently
 discarded. Tests cover reconnect policy, sample bounds/rate limits,
 configuration validation, SDK packaging, discovery, and Binder integration.
+
+## Offline release packages
+
+Each offline release contains `rem-complete.apk`, `rem-light.apk`, the individually signed
+`ble-heart-rate.apk`, `watch-status.apk`, and `atn-rangefinder.apk`, plus `SHA256SUMS` and
+`BUILD-INFO.txt`. Transfer either the complete APK or the light APK and the desired individual
+plugin APKs. Both REM APKs use the same application ID, version, and signing certificate.
+
+On the first launch of the complete APK, REM copies its three bundled plugin installers into
+`Downloads/REM Plugins`. Android 8 and 9 require the user to grant storage access for this copy.
+If access is denied or copying fails, reopening REM retries. Install only the desired APKs from
+that folder with the Android file manager, then refresh Settings → Plugins and approve, grant,
+enable, and configure them. Android's installation confirmation and publisher trust remain in
+force. REM never installs plugins automatically. Plugin names include the APK SHA-256; a new
+release leaves previous installers in place. The light APK does not copy installers.
+
+### Building the packages
+
+Use a clean, release-ready REM checkout with Node dependencies and its pinned LXMF-rs checkout
+in the location required by `crates/reticulum_mobile/Cargo.toml`. Configure the Android SDK,
+NDK, Rust Android targets, REM signing, and the existing Heart Rate and Watch Status signing
+properties. Point `ATN_SOURCE` to an ATN git repository and `ATN_COMMIT` to the full commit to
+build; the script exports that commit to a temporary directory and does not use its working-tree
+changes. `ATN_GRADLE` must point to Gradle 8.11.1. Set `ANDROID_HOME`, `ANDROID_NDK_HOME`,
+`REM_VERSION`, `REM_VERSION_CODE`, `ATN_KEYSTORE`, `ATN_KEY_ALIAS`, `ATN_STORE_PASSWORD`, and
+`ATN_KEY_PASSWORD` in the environment, then run:
+
+```sh
+bash tools/build-offline-release.sh
+```
+
+Keep signing passwords and keys outside version control. The script builds both bundled REM
+plugins, builds the ATN Rust and Android APK using the locally built REM SDK, signs the ATN APK,
+and builds both REM variants. It verifies APK signatures, plugin package IDs, the REM signer,
+and equality of bundled and standalone APK bytes before writing `output/offline-release-<version>`.
+It does not publish, install, or verify real hardware. Android version codes must increase for
+updates, and all plugin signing keys must remain consistent across releases. REM host fingerprints
+are derived from the actual signed light APK and applied to all plugin builds.
