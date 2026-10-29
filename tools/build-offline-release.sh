@@ -36,7 +36,7 @@ git -C "$ATN_SOURCE" archive "$ATN_COMMIT" | tar -x -C "$work/atn"
 
 cd "$root"
 npm run node-client:build
-npm run mobile:build
+VITE_APP_VERSION="$REM_VERSION" npm run mobile:build
 (cd apps/mobile && npx cap sync android)
 bash tools/codegen/generate-uniffi-bindings.sh kotlin
 common=("-PappVersionName=$REM_VERSION" "-PappVersionCode=$REM_VERSION_CODE" '-PabiFilters=arm64-v8a,armeabi-v7a,x86_64')
