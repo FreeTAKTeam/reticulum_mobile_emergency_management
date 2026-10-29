@@ -91,8 +91,8 @@ iOS compilation and CocoaPods are not release gates for `1.4`.
 3. Set release-time metadata. `appVersionName` is `1.4` and
    `appVersionCode` is the UTC `yyDDDHHmm` value.
 4. Build signed Android release artifacts:
-   - Linux/macOS, from `apps/mobile/android`: `bash ./gradlew assembleRelease bundleRelease`
-   - Windows, from the same directory: `gradlew.bat assembleRelease bundleRelease`
+   - Linux/macOS, from `apps/mobile/android`: `bash ./gradlew :app:assembleRelease :app:bundleRelease`
+   - Windows, from the same directory: `gradlew.bat :app:assembleRelease :app:bundleRelease`
 
 Outputs:
 
@@ -131,3 +131,5 @@ adb shell dumpsys package network.reticulum.emergency | grep -E 'versionCode|ver
 
 The APK and AAB must be built from the exact merged `main` commit. Release
 sidecars contain one lowercase SHA-256 digest and asset filename per line.
+
+For complete and light offline APK distributions, see [Offline release packages](../../docs/plugins/android-plugin-system.md#offline-release-packages).

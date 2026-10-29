@@ -30,6 +30,10 @@ async function refresh(): Promise<void> {
         Plugin APKs are installed separately. Android permissions belong to the plugin app;
         each plugin's page controls what it may do inside REM.
       </p>
+      <p class="section-note">
+        In the complete edition, installers are saved in Downloads → REM Plugins. Open the
+        file manager to install the plugins you want, then refresh this list.
+      </p>
       <div class="actions">
         <button type="button" :disabled="refreshing" @click="refresh">Refresh installed plugins</button>
       </div>

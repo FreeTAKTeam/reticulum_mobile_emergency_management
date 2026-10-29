@@ -3,6 +3,7 @@ package network.reticulum.emergency;
 import android.os.Bundle;
 import android.util.Log;
 import android.webkit.WebView;
+import network.reticulum.emergency.plugins.BundledPluginExporter;
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
@@ -20,6 +21,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(TelemetryLocationPlugin.class);
         configureWebViewDebugging();
         super.onCreate(savedInstanceState);
+        BundledPluginExporter.start(this);
         installCapacitorTriggerEventShim();
         Log.i(TAG, "MainActivity initialized and ReticulumNode plugin registered.");
     }
@@ -28,6 +30,12 @@ public class MainActivity extends BridgeActivity {
     public void onResume() {
         super.onResume();
         installCapacitorTriggerEventShim();
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        BundledPluginExporter.onPermissionResult(this, requestCode, grantResults);
     }
 
     private void installCapacitorTriggerEventShim() {
