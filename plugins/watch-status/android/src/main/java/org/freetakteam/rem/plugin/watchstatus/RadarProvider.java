@@ -48,7 +48,7 @@ final class RadarProvider {
             final Throwable cause = error.getCause();
             if (cause instanceof RadarFailure) {
                 final RadarFailure failure = (RadarFailure) cause;
-                if ("PermissionDenied".equals(failure.code)) access.revoke();
+                if ("PermissionDenied".equals(failure.code) && !access.revokeCurrent(ticket)) access.requireCurrent(ticket);
                 throw failure;
             }
             throw new RadarFailure("HostError", 503);

@@ -4,7 +4,7 @@ const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
 
-test("pairing renewal uses the trusted host configuration action envelope", () => {
+test("persistent pairing replacement and forgetting use the trusted configuration channel", () => {
   const controls = new Map();
   const messages = [];
   let connect;
@@ -24,9 +24,17 @@ test("pairing renewal uses the trusted host configuration action envelope", () =
   connect({ data: "rem-plugin-config-v1", ports: [port] });
   controls.get("renewRadar").click();
   assert.deepEqual(messages.at(-1), { type: "action", action: "radar.renew" });
-  assert.equal(controls.get("status").textContent, "Renewing…");
+  assert.equal(controls.get("status").textContent, "Replacing pairing code…");
   port.onmessage({ data: JSON.stringify({ type: "state", running: true, radarEnabled: true,
-    radarSessionActive: true, radarExpiresInMs: 8 * 60 * 60 * 1000, radarToken: "fixture-code", snapshotAgeMs: -1 }) });
-  assert.equal(controls.get("radarSession").textContent, "Expires in 480 minutes");
+    radarSessionActive: true, radarPairingPersistent: true, radarToken: "fixture-code", snapshotAgeMs: -1 }) });
+  assert.equal(controls.get("radarSession").textContent, "Saved · does not expire");
   assert.equal(controls.get("status").textContent, "Configuration loaded");
+  assert.equal(controls.get("forgetRadar").disabled, false);
+  controls.get("forgetRadar").click();
+  assert.deepEqual(messages.at(-1), { type: "action", action: "radar.forget" });
+  port.onmessage({ data: JSON.stringify({ type: "state", running: true, radarEnabled: false,
+    radarSessionActive: false, radarPairingPersistent: false, radarToken: "", snapshotAgeMs: -1 }) });
+  assert.equal(controls.get("radarToken").value, "");
+  assert.equal(controls.get("forgetRadar").disabled, true);
+  assert.equal(controls.get("renewRadar").disabled, true);
 });

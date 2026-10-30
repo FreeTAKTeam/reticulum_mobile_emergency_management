@@ -5,7 +5,7 @@ import android.content.SharedPreferences;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-final class WatchStatusSettings {
+final class WatchStatusSettings implements RadarAccess.Credentials {
     static final int DEFAULT_PORT = 29_863;
     private static final String PREFS = "watch-status-plugin";
     private final SharedPreferences preferences;
@@ -18,13 +18,24 @@ final class WatchStatusSettings {
     int port() { return normalizePort(preferences.getInt("port", DEFAULT_PORT)); }
     boolean radarEnabled() { return preferences.getBoolean("radarEnabled", false); }
 
+    @Override public String read() { return preferences.getString("radarPairingToken", ""); }
+
+    @Override public void write(String token) {
+        final SharedPreferences.Editor editor = preferences.edit();
+        if (token.isEmpty()) editor.remove("radarPairingToken");
+        else editor.putString("radarPairingToken", token);
+        if (!editor.commit()) throw new IllegalStateException("Unable to save radar pairing");
+    }
+
     void update(JSONObject request) throws JSONException {
         final boolean enabled = request.has("enabled") ? request.getBoolean("enabled") : enabled();
         final int requestedPort = request.has("port") ? request.getInt("port") : port();
         if (!isValidPort(requestedPort)) throw new JSONException("Port must be between 1024 and 65535");
         final boolean radar = request.has("radarEnabled") ? request.getBoolean("radarEnabled") : radarEnabled();
-        preferences.edit().putBoolean("enabled", enabled).putInt("port", requestedPort)
-            .putBoolean("radarEnabled", radar).apply();
+        final SharedPreferences.Editor editor = preferences.edit().putBoolean("enabled", enabled).putInt("port", requestedPort)
+            .putBoolean("radarEnabled", radar);
+        if (!radar) editor.remove("radarPairingToken");
+        if (!editor.commit()) throw new IllegalStateException("Unable to save server settings");
     }
 
     JSONObject json(boolean running, String bindError, long snapshotAgeMs) throws JSONException {

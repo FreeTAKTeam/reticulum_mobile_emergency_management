@@ -5,28 +5,78 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicLong;
 import org.json.JSONObject;
 import org.junit.Test;
 
 public class RadarAccessAndBrokerTest {
-    @Test public void sessionsDefaultOffRequireExactBearerExpireAndInvalidateTickets() throws Exception {
-        final AtomicLong time = new AtomicLong(100);
-        final RadarAccess access = new RadarAccess(time::get);
+    static final class MemoryCredentials implements RadarAccess.Credentials {
+        String token = "";
+        @Override public String read() { return token; }
+        @Override public void write(String value) { token = value; }
+    }
+
+    @Test public void pairingPersistsAcrossAccessRecreationAndSuspendsOnlyRuntimeTickets() throws Exception {
+        final MemoryCredentials saved = new MemoryCredentials();
+        final RadarAccess access = new RadarAccess(saved);
         assertFalse(access.active());
         assertThrows(RadarFailure.class, () -> access.authorize(null));
-        access.renew();
+        access.resume();
         final String token = access.configuration().getString("radarToken");
         assertEquals(64, token.length());
         assertThrows(RadarFailure.class, () -> access.authorize("Bearer wrong"));
         final RadarAccess.Ticket ticket = access.authorize("Bearer " + token);
         assertNotEquals(token, ticket.sessionId);
+        access.resume(); // Ordinary settings saves do not change the active source session.
+        access.requireCurrent(ticket);
+        assertEquals(ticket.sessionId, access.authorize("Bearer " + token).sessionId);
+        access.pause(); // Server/host stops pause access, not pairing.
+        assertThrows(RadarFailure.class, () -> access.requireCurrent(ticket));
+        assertThrows(RadarFailure.class, () -> access.authorize("Bearer " + token));
+        assertTrue(access.configuration().getBoolean("radarPairingPersistent"));
+        access.resume();
+        assertNotEquals(ticket.sessionId, access.authorize("Bearer " + token).sessionId);
+        final RadarAccess restarted = new RadarAccess(saved);
+        assertFalse(restarted.active());
+        restarted.resume();
+        assertEquals(token, restarted.configuration().getString("radarToken"));
+        assertNotEquals(ticket.sessionId, restarted.authorize("Bearer " + token).sessionId);
+        assertTrue(restarted.configuration().getBoolean("radarPairingPersistent"));
+    }
+
+    @Test public void explicitReplacementAndRevocationPersistAndInvalidateTickets() throws Exception {
+        final MemoryCredentials saved = new MemoryCredentials();
+        final RadarAccess access = new RadarAccess(saved);
+        access.resume();
+        final String token = saved.token;
+        final RadarAccess.Ticket ticket = access.authorize("Bearer " + token);
         access.renew();
         assertThrows(RadarFailure.class, () -> access.requireCurrent(ticket));
         assertThrows(RadarFailure.class, () -> access.authorize("Bearer " + token));
-        time.addAndGet(RadarAccess.LIFETIME_MS);
+        final RadarAccess restarted = new RadarAccess(saved);
+        restarted.resume();
+        assertThrows(RadarFailure.class, () -> restarted.authorize("Bearer " + token));
+        final String replacement = saved.token;
+        access.revoke();
         assertFalse(access.active());
+        assertEquals("", saved.token);
         assertEquals("", access.configuration().getString("radarToken"));
+        final RadarAccess afterForget = new RadarAccess(saved);
+        afterForget.resume();
+        assertThrows(RadarFailure.class, () -> afterForget.authorize("Bearer " + replacement));
+    }
+
+    @Test public void corruptStorageIsReplacedAndWriteFailureCannotExposeUnpersistedPairing() throws Exception {
+        final MemoryCredentials saved = new MemoryCredentials();
+        saved.token = "corrupt";
+        final RadarAccess access = new RadarAccess(saved);
+        access.resume();
+        assertTrue(saved.token.matches("[a-f0-9]{64}"));
+        final RadarAccess failed = new RadarAccess(new RadarAccess.Credentials() {
+            @Override public String read() { return ""; }
+            @Override public void write(String token) { throw new IllegalStateException("Write failed"); }
+        });
+        assertThrows(IllegalStateException.class, failed::resume);
+        assertFalse(failed.active());
     }
 
     @Test public void simultaneousOperationalAndRadarRepliesAreCorrelatedAndLateRepliesIgnored() throws Exception {

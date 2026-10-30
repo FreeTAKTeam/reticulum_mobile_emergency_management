@@ -9,6 +9,7 @@ const status = document.getElementById("status");
 const radarEnabled = document.getElementById("radarEnabled");
 const radarToken = document.getElementById("radarToken");
 const renewRadar = document.getElementById("renewRadar");
+const forgetRadar = document.getElementById("forgetRadar");
 function send(message) { if (port) port.postMessage(JSON.stringify(message)); }
 function handleResponse(response) {
   if (response.type === "state") render(response);
@@ -23,9 +24,11 @@ function render(state) {
   radarEnabled.checked = state.radarEnabled === true;
   radarToken.value = state.radarToken || "";
   document.getElementById("radarUrl").textContent = state.radarUrl || "Unavailable";
-  document.getElementById("radarSession").textContent = state.radarSessionActive
-    ? `Expires in ${Math.ceil(state.radarExpiresInMs / 60000)} minutes` : "Off / renew to pair";
+  document.getElementById("radarSession").textContent = state.radarPairingPersistent
+    ? (state.radarSessionActive ? "Saved · does not expire" : "Saved · reconnects when server starts")
+    : (state.radarEnabled ? "Not paired · replace pairing code to pair" : "Off · enable radar to pair");
   renewRadar.disabled = !state.running || !state.radarEnabled;
+  forgetRadar.disabled = !state.radarPairingPersistent;
   status.textContent = "Configuration loaded";
 }
 window.addEventListener("message", (event) => {
@@ -44,8 +47,12 @@ document.getElementById("save").addEventListener("click", () => {
   send({ type: "update", enabled: enabled.checked, port: Number(portInput.value), radarEnabled: radarEnabled.checked });
 });
 renewRadar.addEventListener("click", () => {
-  status.textContent = "Renewing…";
+  status.textContent = "Replacing pairing code…";
   send({ type: "action", action: "radar.renew" });
+});
+forgetRadar.addEventListener("click", () => {
+  status.textContent = "Forgetting pairing…";
+  send({ type: "action", action: "radar.forget" });
 });
 document.getElementById("revealRadarToken").addEventListener("change", (event) => {
   radarToken.type = event.target.checked ? "text" : "password";

@@ -24,8 +24,8 @@ public final class WatchStatusPluginService extends RemPluginService {
     private final AtomicBoolean requestPending = new AtomicBoolean(false);
     private final WatchStatusServer server = new WatchStatusServer();
     private final HostRequestBroker requests = new HostRequestBroker();
-    private final RadarAccess radarAccess = new RadarAccess(SystemClock::elapsedRealtime);
-    private final RadarProvider radar = new RadarProvider(requests, radarAccess, System::currentTimeMillis, SystemClock::elapsedRealtime);
+    private RadarAccess radarAccess;
+    private RadarProvider radar;
     private volatile IRemPluginHost host;
     private volatile long generation;
     private volatile JSONObject latestSnapshot;
@@ -42,6 +42,8 @@ public final class WatchStatusPluginService extends RemPluginService {
     @Override public void onCreate() {
         super.onCreate();
         settings = new WatchStatusSettings(this);
+        radarAccess = new RadarAccess(settings);
+        radar = new RadarProvider(requests, radarAccess, System::currentTimeMillis, SystemClock::elapsedRealtime);
     }
 
     @Override protected Set<String> allowedHostCertificateFingerprints() {
@@ -76,7 +78,7 @@ public final class WatchStatusPluginService extends RemPluginService {
     @Override protected synchronized void onPluginStop(String reason) {
         host = null;
         generation++;
-        radarAccess.revoke();
+        radarAccess.pause();
         requests.stop();
         latestSnapshot = null;
         latestSnapshotAtMs = 0;
@@ -113,10 +115,13 @@ public final class WatchStatusPluginService extends RemPluginService {
                     throw new IllegalStateException("Enable the server and radar access first");
                 }
                 radarAccess.renew();
+            } else if ("action".equals(request.optString("type")) && "radar.forget".equals(request.optString("action"))) {
+                settings.update(new JSONObject().put("radarEnabled", false));
+                applySettings();
             }
             final JSONObject state = settings.json(server.isRunning(), server.bindError(), snapshotAgeMs());
             final JSONObject session = radarAccess.configuration();
-            for (String key : new String[] { "radarToken", "radarSessionActive", "radarExpiresInMs" }) {
+            for (String key : new String[] { "radarToken", "radarSessionActive", "radarPairingPersistent" }) {
                 state.put(key, session.get(key));
             }
             callback.onResponse(state.toString());
@@ -130,8 +135,9 @@ public final class WatchStatusPluginService extends RemPluginService {
     }
 
     private void applySettings() {
-        radarAccess.revoke();
-        if (host != null && settings.enabled() && settings.radarEnabled()) radarAccess.renew();
+        if (!settings.radarEnabled()) radarAccess.revoke();
+        else if (host != null && settings.enabled()) radarAccess.resume();
+        else radarAccess.pause();
         server.apply(host != null && settings.enabled(), settings.port(), this::currentPayload, radar);
     }
 

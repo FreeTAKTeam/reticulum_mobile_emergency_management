@@ -25,12 +25,14 @@
         <label class="check"><input id="radarEnabled" type="checkbox" /> Allow radar access on this phone</label>
         <dl>
           <div><dt>Radar URL</dt><dd id="radarUrl">Unavailable</dd></div>
-          <div><dt>Read session</dt><dd id="radarSession">Off</dd></div>
+          <div><dt>Pairing</dt><dd id="radarSession">Off</dd></div>
         </dl>
         <label>Radar pairing code <input id="radarToken" type="password" readonly autocomplete="off" spellcheck="false" /></label>
         <label class="check"><input id="revealRadarToken" type="checkbox" /> Show pairing code</label>
-        <p>Copy the code into REM Sync's settings in Zepp. It stays on the phone and expires after eight hours. Saving settings, renewing, or restarting REM invalidates the previous code.</p>
-        <button id="renewRadar" type="button" disabled>Renew radar pairing code</button>
+        <p>Copy the code into REM Sync's settings in Zepp once. Pairing stays on this phone, does not expire and survives REM and phone restarts. Saving settings keeps the same code. Disabling radar access or forgetting pairing revokes it.</p>
+        <p>Replacing the code disconnects the previous pairing and requires copying the new code into Zepp.</p>
+        <button id="renewRadar" type="button" disabled>Replace pairing code</button>
+        <button id="forgetRadar" type="button" disabled>Forget pairing</button>
       </section>
       <button id="save" class="primary" type="button">Save configuration</button>
       <p id="status" role="status" aria-live="polite"></p>
