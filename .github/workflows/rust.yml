@@ -85,7 +85,7 @@ jobs:
 
   e2e:
     name: Playwright Matrix
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Check out mobile app
