@@ -30,6 +30,15 @@ async function checkLocation() {
         <input v-model.number="draft.accuracyThresholdMeters" type="number" min="0" placeholder="Unset" />
       </label>
     </div>
+    <label>
+      Share with saved LXMF contacts (Sideband standard)
+      <textarea v-model="draft.lxmfContacts" aria-label="Sideband telemetry contacts" placeholder="One LXMF destination hash per line" />
+    </label>
+    <label>
+      Share with saved Columba 2.2.6 contacts
+      <textarea v-model="draft.columbaContacts" aria-label="Columba telemetry contacts" placeholder="One LXMF destination hash per line" />
+    </label>
+    <p class="muted">These saved contacts receive exact positions while sharing is enabled. Remove a hash to revoke permission; unsaving a contact stops delivery. Columba 2.2.6 uses its own speed profile.</p>
     <fieldset class="settings-pair">
       <legend>Peer positions on the map</legend>
       <p>
@@ -47,12 +56,12 @@ async function checkLocation() {
           aria-label="Telemetry disappears after (minutes)"
           type="number"
           min="1"
-          :aria-invalid="Boolean(validationError)"
+          :aria-invalid="Boolean(validationError) && Number(draft.expireAfterMinutes) < Number(draft.staleAfterMinutes)"
         />
         minutes.
       </p>
-      <small v-if="validationError" class="field-error" role="alert">{{ validationError }}</small>
     </fieldset>
+    <small v-if="validationError" class="field-error" role="alert">{{ validationError }}</small>
   </section>
 
   <section class="panel settings-card">

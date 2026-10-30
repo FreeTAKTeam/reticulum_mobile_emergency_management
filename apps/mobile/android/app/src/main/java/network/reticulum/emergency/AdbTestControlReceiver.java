@@ -16,6 +16,15 @@ public final class AdbTestControlReceiver extends BroadcastReceiver {
     public static final String ACTION_CONNECT_PEER = "network.reticulum.emergency.action.ADB_CONNECT_PEER";
     public static final String ACTION_DISCONNECT_PEER = "network.reticulum.emergency.action.ADB_DISCONNECT_PEER";
     public static final String ACTION_APP_SETTINGS = "network.reticulum.emergency.action.ADB_APP_SETTINGS";
+    public static final String ACTION_SET_APP_SETTINGS = "network.reticulum.emergency.action.ADB_SET_APP_SETTINGS";
+    public static final String ACTION_SAVED_PEERS = "network.reticulum.emergency.action.ADB_SAVED_PEERS";
+    public static final String ACTION_SET_SAVED_PEERS = "network.reticulum.emergency.action.ADB_SET_SAVED_PEERS";
+    public static final String ACTION_TELEMETRY = "network.reticulum.emergency.action.ADB_TELEMETRY";
+    public static final String ACTION_DELETE_TELEMETRY = "network.reticulum.emergency.action.ADB_DELETE_TELEMETRY";
+    public static final String ACTION_RECORD_TELEMETRY = "network.reticulum.emergency.action.ADB_RECORD_TELEMETRY";
+    public static final String ACTION_TELEMETRY_TARGETS = "network.reticulum.emergency.action.ADB_TELEMETRY_TARGETS";
+    public static final String ACTION_SEND_BYTES = "network.reticulum.emergency.action.ADB_SEND_BYTES";
+    public static final String ACTION_RESTART = "network.reticulum.emergency.action.ADB_RESTART";
     public static final String ACTION_EAMS = "network.reticulum.emergency.action.ADB_EAMS";
     public static final String ACTION_EVENTS = "network.reticulum.emergency.action.ADB_EVENTS";
     public static final String ACTION_STATUS = "network.reticulum.emergency.action.ADB_STATUS";
@@ -65,6 +74,24 @@ public final class AdbTestControlReceiver extends BroadcastReceiver {
                 logResult("disconnect destination=" + destinationHex, ReticulumBridge.disconnectPeer(destinationHex));
             } else if (ACTION_APP_SETTINGS.equals(action)) {
                 Log.i(TAG, "appSettings " + ReticulumBridge.getAppSettingsJson());
+            } else if (ACTION_SET_APP_SETTINGS.equals(action)) {
+                logResult("setAppSettings", ReticulumBridge.setAppSettingsJson(requirePayload(intent)));
+            } else if (ACTION_SAVED_PEERS.equals(action)) {
+                Log.i(TAG, "savedPeers " + ReticulumBridge.getSavedPeersJson());
+            } else if (ACTION_SET_SAVED_PEERS.equals(action)) {
+                logResult("setSavedPeers", ReticulumBridge.setSavedPeersJson(requirePayload(intent)));
+            } else if (ACTION_TELEMETRY.equals(action)) {
+                logTelemetry(requirePayload(intent));
+            } else if (ACTION_DELETE_TELEMETRY.equals(action)) {
+                logResult("deleteTelemetry", ReticulumBridge.deleteLocalTelemetryJson(requirePayload(intent)));
+            } else if (ACTION_RECORD_TELEMETRY.equals(action)) {
+                logResult("recordTelemetry", ReticulumBridge.recordLocalTelemetryFixJson(requirePayload(intent)));
+            } else if (ACTION_TELEMETRY_TARGETS.equals(action)) {
+                Log.i(TAG, "telemetryTargets " + ReticulumBridge.listTelemetryDestinationsJson());
+            } else if (ACTION_SEND_BYTES.equals(action)) {
+                logResult("sendBytes", ReticulumBridge.sendJson(requirePayload(intent)));
+            } else if (ACTION_RESTART.equals(action)) {
+                logResult("restart", ReticulumBridge.restart(requirePayload(intent)));
             } else if (ACTION_EAMS.equals(action)) {
                 Log.i(TAG, "eams " + ReticulumBridge.getEamsJson());
             } else if (ACTION_EVENTS.equals(action)) {
@@ -116,6 +143,25 @@ public final class AdbTestControlReceiver extends BroadcastReceiver {
             throw new IllegalArgumentException("missing destinationHex");
         }
         return destinationHex.trim();
+    }
+
+    private static void logTelemetry(String payload) throws Exception {
+        final String callsign = new JSONObject(payload).getString("callsign");
+        final JSONObject snapshot = new JSONObject(ReticulumBridge.getTelemetryPositionsJson());
+        final JSONArray records = snapshot.getJSONArray("items");
+        final JSONArray matches = new JSONArray();
+        for (int index = 0; index < records.length(); index++) {
+            final JSONObject record = records.getJSONObject(index);
+            if (callsign.equals(record.optString("callsign"))) {
+                matches.put(record);
+            }
+        }
+        final JSONObject result = new JSONObject().put("items", matches);
+        final JSONObject publication = snapshot.optJSONObject("publication");
+        if (publication != null && callsign.equals(publication.optString("callsign"))) {
+            result.put("publication", publication);
+        }
+        Log.i(TAG, "telemetry " + result);
     }
 
     private static String requirePayload(Intent intent) {

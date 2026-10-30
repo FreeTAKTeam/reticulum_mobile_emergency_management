@@ -350,6 +350,7 @@ mod tests {
     include!("node/tests/checklist_runtime.rs");
     include!("node/tests/core.rs");
     include!("node/tests/telemetry_m2.rs");
+    include!("node/tests/telemeter_contacts.rs");
     include!("node/tests/telemetry_m2_receive.rs");
     include!("node/tests/telemetry_m2_coalescing.rs");
     include!("node/tests/telemetry_local_custody.rs");

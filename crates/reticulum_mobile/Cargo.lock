@@ -1086,7 +1086,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 [[package]]
 name = "r3akt-map-core"
 version = "0.1.0"
-source = "git+https://github.com/FreeTAKTeam/Reticulum-Community-Hub.git?rev=19de27f419373c543fe6154aab2a3c027938b65d#19de27f419373c543fe6154aab2a3c027938b65d"
+source = "git+https://github.com/FreeTAKTeam/Reticulum-Community-Hub.git?rev=979e8fbb313a4a280a16bcd6f42b309cd5478ed2#979e8fbb313a4a280a16bcd6f42b309cd5478ed2"
 dependencies = [
  "base64",
  "chrono",
@@ -1117,7 +1117,7 @@ dependencies = [
 [[package]]
 name = "r3akt-profile-rch"
 version = "0.1.0"
-source = "git+https://github.com/FreeTAKTeam/Reticulum-Community-Hub.git?rev=19de27f419373c543fe6154aab2a3c027938b65d#19de27f419373c543fe6154aab2a3c027938b65d"
+source = "git+https://github.com/FreeTAKTeam/Reticulum-Community-Hub.git?rev=979e8fbb313a4a280a16bcd6f42b309cd5478ed2#979e8fbb313a4a280a16bcd6f42b309cd5478ed2"
 dependencies = [
  "r3akt-protocol",
  "rmp-serde",
@@ -1131,7 +1131,7 @@ dependencies = [
 [[package]]
 name = "r3akt-protocol"
 version = "0.1.0"
-source = "git+https://github.com/FreeTAKTeam/Reticulum-Community-Hub.git?rev=19de27f419373c543fe6154aab2a3c027938b65d#19de27f419373c543fe6154aab2a3c027938b65d"
+source = "git+https://github.com/FreeTAKTeam/Reticulum-Community-Hub.git?rev=979e8fbb313a4a280a16bcd6f42b309cd5478ed2#979e8fbb313a4a280a16bcd6f42b309cd5478ed2"
 dependencies = [
  "chrono",
  "rmp-serde",

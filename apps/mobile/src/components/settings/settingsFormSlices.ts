@@ -150,6 +150,8 @@ export const routingSlice: NodeSettingsSlice<RoutingDraft> = {
 };
 
 export interface LocationDraft {
+  lxmfContacts: string;
+  columbaContacts: string;
   enabled: boolean;
   publishIntervalSeconds: number;
   accuracyThresholdMeters: number | undefined;
@@ -164,6 +166,8 @@ function positiveOrDefault(value: number | string | undefined | null, fallback: 
 
 export const locationSlice: NodeSettingsSlice<LocationDraft> = {
   read: (settings) => ({
+    lxmfContacts: (settings.telemetry.lxmfContacts ?? []).join("\n"),
+    columbaContacts: (settings.telemetry.columbaContacts ?? []).join("\n"),
     enabled: settings.telemetry.enabled,
     publishIntervalSeconds: settings.telemetry.publishIntervalSeconds,
     accuracyThresholdMeters: settings.telemetry.accuracyThresholdMeters,
@@ -174,6 +178,8 @@ export const locationSlice: NodeSettingsSlice<LocationDraft> = {
     const accuracy = draft.accuracyThresholdMeters;
     return {
       telemetry: {
+        lxmfContacts: draft.lxmfContacts.split(/\s+/).filter(Boolean).map((value) => value.toLowerCase()),
+        columbaContacts: draft.columbaContacts.split(/\s+/).filter(Boolean).map((value) => value.toLowerCase()),
         enabled: draft.enabled,
         publishIntervalSeconds: positiveOrDefault(draft.publishIntervalSeconds, 60),
         accuracyThresholdMeters: accuracy === undefined || accuracy === null || accuracy === 0
@@ -184,11 +190,15 @@ export const locationSlice: NodeSettingsSlice<LocationDraft> = {
       },
     };
   },
-  validate: (draft) => (
-    positiveOrDefault(draft.expireAfterMinutes, 180) < positiveOrDefault(draft.staleAfterMinutes, 30)
+  validate: (draft) => {
+    const contacts = `${draft.lxmfContacts} ${draft.columbaContacts}`.toLowerCase().split(/\s+/).filter(Boolean);
+    if (contacts.some((value) => !/^[0-9a-f]{32}$/.test(value)) || new Set(contacts).size !== contacts.length) {
+      return "Use unique 32-character LXMF destination hashes, with one profile per contact.";
+    }
+    return positiveOrDefault(draft.expireAfterMinutes, 180) < positiveOrDefault(draft.staleAfterMinutes, 30)
       ? "Hide time must be the same as or longer than the stale time."
-      : undefined
-  ),
+      : undefined;
+  },
 };
 
 export interface MapDraft {

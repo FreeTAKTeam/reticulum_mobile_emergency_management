@@ -8,6 +8,8 @@ fn to_app_settings_record(input: AppSettingsInput) -> Result<AppSettingsRecord, 
         transport_node_enabled: input.transport_node_enabled,
         announce_interval_seconds: input.announce_interval_seconds,
         telemetry: TelemetrySettingsRecord {
+            lxmf_contacts: input.telemetry.lxmf_contacts,
+            columba_contacts: input.telemetry.columba_contacts,
             enabled: input.telemetry.enabled,
             publish_interval_seconds: input.telemetry.publish_interval_seconds,
             accuracy_threshold_meters: input.telemetry.accuracy_threshold_meters,
@@ -76,6 +78,8 @@ fn hub_settings_json(settings: &HubSettingsRecord) -> serde_json::Value {
 
 fn telemetry_settings_json(settings: &TelemetrySettingsRecord) -> serde_json::Value {
     json!({
+        "lxmfContacts": settings.lxmf_contacts,
+        "columbaContacts": settings.columba_contacts,
         "enabled": settings.enabled,
         "publishIntervalSeconds": settings.publish_interval_seconds,
         "accuracyThresholdMeters": settings.accuracy_threshold_meters,

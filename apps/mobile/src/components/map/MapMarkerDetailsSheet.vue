@@ -7,6 +7,7 @@ import {
   categoryLabel,
   formatCoordinate,
   markerAgeLabel,
+  markerSymbolColor,
   markerOriginLabel,
 } from "../../utils/mapMarkerPresentation";
 
@@ -69,7 +70,7 @@ function submitRename(): void {
 <template>
   <section class="marker-sheet" role="dialog" aria-modal="false" :aria-label="`Marker ${marker.name}`">
     <div class="marker-detail-head">
-      <svg class="marker-detail-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <svg :style="{ color: markerSymbolColor(marker.symbol) }" class="marker-detail-icon" viewBox="0 0 24 24" aria-hidden="true">
         <path :d="mdiPathFor(symbol?.mdi)" fill="currentColor" />
       </svg>
       <div class="marker-detail-title">
@@ -140,7 +141,6 @@ function submitRename(): void {
 }
 
 .marker-detail-icon {
-  color: #64beff;
   flex: 0 0 auto;
   height: 2rem;
   margin-top: 0.15rem;

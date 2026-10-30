@@ -409,6 +409,10 @@ struct HubSettingsInput {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TelemetrySettingsInput {
+    #[serde(default)]
+    pub lxmf_contacts: Vec<String>,
+    #[serde(default)]
+    pub columba_contacts: Vec<String>,
     enabled: bool,
     publish_interval_seconds: u32,
     accuracy_threshold_meters: Option<f64>,

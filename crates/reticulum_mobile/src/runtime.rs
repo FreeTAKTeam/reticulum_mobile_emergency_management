@@ -3,6 +3,7 @@ include!("runtime/operational_ack.rs");
 include!("runtime/eam_parsing.rs");
 include!("runtime/eam_persistence.rs");
 include!("runtime/telemetry_receive.rs");
+include!("runtime/telemeter_receive.rs");
 include!("runtime/telemetry_admission.rs");
 include!("runtime/checklist_merge.rs");
 include!("runtime/checklist_wire.rs");

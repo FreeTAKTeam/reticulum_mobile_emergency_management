@@ -76,21 +76,12 @@ fn map_marker_replication_payload(
         "source": source,
         "args": change.args,
     });
-    let event = json!({
-        "event_type": change.event_type,
-        "payload": change.marker.api_value(),
-        "source": source,
-    });
-    let encode = |value: &JsonValue| {
-        rmpv::ext::to_value(value).map_err(|error| {
-            crate::error_context::contextual_node_error(NodeError::InternalError {}, error)
-        })
-    };
-    let fields = MsgPackValue::Map(vec![
-        (MsgPackValue::from(FIELD_COMMANDS), MsgPackValue::Array(vec![encode(&command)?])),
-        (MsgPackValue::from(crate::lxmf_fields::FIELD_EVENT), encode(&event)?),
-    ]);
-    let fields = rmp_serde::to_vec(&fields).map_err(|error| {
+    let fields = r3akt_map_core::marker_wire::encode_fields(
+        change.event_type,
+        &change.marker,
+        &status.identity_hex,
+        Some(&json!([command])),
+    ).map_err(|error| {
         crate::error_context::contextual_node_error(NodeError::InternalError {}, error)
     })?;
     let action = change.event_type.trim_start_matches("mission.marker.");

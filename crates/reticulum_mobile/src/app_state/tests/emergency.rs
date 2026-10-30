@@ -85,6 +85,8 @@ fn app_settings_with_due_step(default_task_due_step_minutes: u32) -> AppSettings
         transport_node_enabled: true,
         announce_interval_seconds: 1800,
         telemetry: TelemetrySettingsRecord {
+            lxmf_contacts: Vec::new(),
+            columba_contacts: Vec::new(),
             enabled: false,
             publish_interval_seconds: 60,
             accuracy_threshold_meters: None,
