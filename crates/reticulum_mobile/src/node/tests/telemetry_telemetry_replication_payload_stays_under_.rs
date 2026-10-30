@@ -128,6 +128,8 @@ fn sample_app_settings() -> AppSettingsRecord {
         transport_node_enabled: true,
         announce_interval_seconds: 30,
         telemetry: TelemetrySettingsRecord {
+            lxmf_contacts: Vec::new(),
+            columba_contacts: Vec::new(),
             enabled: true,
             publish_interval_seconds: 15,
             accuracy_threshold_meters: Some(8.5),
@@ -494,5 +496,5 @@ async fn record_local_telemetry_fix_replicates_to_native_peer_projection() {
     assert_eq!(received.callsign, position.callsign);
     assert_eq!(received.lat, position.lat);
     assert_eq!(received.lon, position.lon);
-    assert_eq!(received.updated_at_ms, position.updated_at_ms);
+    assert_eq!(received.updated_at_ms, position.updated_at_ms / 1000 * 1000);
 }

@@ -142,10 +142,6 @@
 
 .marker-crosshair-pin {
   align-items: center;
-  background: rgb(7 25 54 / 92%);
-  border: 2px solid #64beff;
-  border-radius: 50%;
-  color: #64beff;
   display: inline-flex;
   height: 2.6rem;
   justify-content: center;
@@ -153,12 +149,13 @@
 }
 
 .marker-crosshair-pin svg {
-  height: 1.5rem;
-  width: 1.5rem;
+  filter: drop-shadow(0 1px 2px #020710);
+  height: 2rem;
+  width: 2rem;
 }
 
 .marker-crosshair-stem {
-  background: #64beff;
+  background: currentColor;
   height: 0.75rem;
   width: 2px;
 }
@@ -173,25 +170,20 @@
 
 .map-marker-pin-icon {
   align-items: center;
-  background: rgb(7 25 54 / 92%);
-  border: 2px solid #64beff;
-  border-radius: 8px;
-  color: #64beff;
   display: inline-flex;
-  height: 2.2rem;
+  height: 2.75rem;
   justify-content: center;
-  width: 2.2rem;
+  width: 2.75rem;
 }
 
 .map-marker-pin-icon svg {
-  height: 1.35rem;
-  width: 1.35rem;
+  filter: drop-shadow(0 1px 2px #020710);
+  height: 2rem;
+  width: 2rem;
 }
 
 .map-marker-pin.is-selected .map-marker-pin-icon {
-  background: #64beff;
-  border-color: #def1ff;
-  color: #042541;
+  filter: drop-shadow(0 0 3px #def1ff);
 }
 
 .map-marker-pin-label {

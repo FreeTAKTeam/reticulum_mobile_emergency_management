@@ -287,6 +287,10 @@ pub struct HubSettingsRecord {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TelemetrySettingsRecord {
+    #[serde(default)]
+    pub lxmf_contacts: Vec<String>,
+    #[serde(default)]
+    pub columba_contacts: Vec<String>,
     pub enabled: bool,
     pub publish_interval_seconds: u32,
     pub accuracy_threshold_meters: Option<f64>,

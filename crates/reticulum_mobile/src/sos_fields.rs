@@ -3,14 +3,16 @@ use rmpv::Value as MsgPackValue;
 use crate::lxmf_fields::FIELD_COMMANDS;
 use crate::mission_commands::command_wire_value;
 use crate::msgpack_values::{
-    msgpack_bool, msgpack_f64, msgpack_get_indexed, msgpack_get_named, msgpack_map_entries,
-    msgpack_string,
+    msgpack_get_indexed, msgpack_get_named, msgpack_map_entries, msgpack_string,
 };
 use crate::types::{NodeError, SosDeviceTelemetryRecord, SosMessageKind, SosTriggerSource};
 
 pub(crate) const LXMF_FIELD_TELEMETRY: i64 = 0x02;
+#[cfg(test)]
 pub(crate) const SID_TIME: i64 = 0x01;
+#[cfg(test)]
 pub(crate) const SID_LOCATION: i64 = 0x02;
+#[cfg(test)]
 pub(crate) const SID_BATTERY: i64 = 0x04;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -158,51 +160,7 @@ fn command_to_msgpack(command: &SosCommand) -> MsgPackValue {
 }
 
 fn build_telemeter_payload(telemetry: &SosDeviceTelemetryRecord) -> Result<Vec<u8>, NodeError> {
-    let mut entries = vec![(
-        MsgPackValue::from(SID_TIME),
-        MsgPackValue::from(crate::numeric::u64_to_i64_saturating(
-            telemetry.updated_at_ms / 1000,
-        )),
-    )];
-
-    if let (Some(lat), Some(lon)) = (telemetry.lat, telemetry.lon) {
-        entries.push((
-            MsgPackValue::from(SID_LOCATION),
-            MsgPackValue::Array(vec![
-                MsgPackValue::from(crate::numeric::f64_to_i64_saturating(lat * 1_000_000.0)),
-                MsgPackValue::from(crate::numeric::f64_to_i64_saturating(lon * 1_000_000.0)),
-                MsgPackValue::from(crate::numeric::f64_to_u64_saturating(
-                    telemetry.alt.unwrap_or(0.0),
-                )),
-                MsgPackValue::from(crate::numeric::f64_to_u64_saturating(
-                    telemetry.speed.unwrap_or(0.0) * 100.0,
-                )),
-                MsgPackValue::from(crate::numeric::f64_to_u64_saturating(
-                    telemetry.course.unwrap_or(0.0) * 100.0,
-                )),
-                MsgPackValue::from(crate::numeric::f64_to_u64_saturating(
-                    telemetry.accuracy.unwrap_or(0.0) * 10.0,
-                )),
-                MsgPackValue::from(crate::numeric::u64_to_i64_saturating(
-                    telemetry.updated_at_ms / 1000,
-                )),
-            ]),
-        ));
-    }
-
-    if let Some(percent) = telemetry.battery_percent {
-        entries.push((
-            MsgPackValue::from(SID_BATTERY),
-            MsgPackValue::Array(vec![
-                MsgPackValue::from((percent / 100.0).clamp(0.0, 1.0)),
-                MsgPackValue::Boolean(telemetry.battery_charging.unwrap_or(false)),
-            ]),
-        ));
-    }
-
-    rmp_serde::to_vec(&MsgPackValue::Map(entries)).map_err(|error| {
-        crate::error_context::contextual_node_error(NodeError::InternalError {}, error)
-    })
+    crate::telemeter::encode_sos(telemetry)
 }
 
 fn parse_command_field(value: Option<&MsgPackValue>) -> Option<SosCommand> {
@@ -247,58 +205,10 @@ fn parse_command_map(value: &MsgPackValue) -> Option<SosCommand> {
 }
 
 fn parse_telemetry_field(value: Option<&MsgPackValue>) -> Option<SosDeviceTelemetryRecord> {
-    let value = value?;
-    let payload = match value {
-        MsgPackValue::Binary(bytes) => rmp_serde::from_slice::<MsgPackValue>(bytes).ok()?,
-        other => other.clone(),
+    let MsgPackValue::Binary(bytes) = value? else {
+        return None;
     };
-    let entries = msgpack_map_entries(&payload)?;
-    let mut telemetry = SosDeviceTelemetryRecord {
-        lat: None,
-        lon: None,
-        alt: None,
-        speed: None,
-        course: None,
-        accuracy: None,
-        battery_percent: None,
-        battery_charging: None,
-        updated_at_ms: 0,
-    };
-    if let Some(time) = msgpack_get_indexed(entries, SID_TIME).and_then(msgpack_u64) {
-        telemetry.updated_at_ms = time.saturating_mul(1000);
-    }
-    if let Some(MsgPackValue::Array(items)) = msgpack_get_indexed(entries, SID_LOCATION) {
-        telemetry.lat = items
-            .first()
-            .and_then(msgpack_f64)
-            .map(|value| value / 1_000_000.0);
-        telemetry.lon = items
-            .get(1)
-            .and_then(msgpack_f64)
-            .map(|value| value / 1_000_000.0);
-        telemetry.alt = items.get(2).and_then(msgpack_f64);
-        telemetry.speed = items
-            .get(3)
-            .and_then(msgpack_f64)
-            .map(|value| value / 100.0);
-        telemetry.course = items
-            .get(4)
-            .and_then(msgpack_f64)
-            .map(|value| value / 100.0);
-        telemetry.accuracy = items.get(5).and_then(msgpack_f64).map(|value| value / 10.0);
-        if let Some(time) = items.get(6).and_then(msgpack_u64) {
-            telemetry.updated_at_ms = time.saturating_mul(1000);
-        }
-    }
-    if let Some(MsgPackValue::Array(items)) = msgpack_get_indexed(entries, SID_BATTERY) {
-        telemetry.battery_percent = items
-            .first()
-            .and_then(msgpack_f64)
-            .map(|value| value * 100.0);
-        telemetry.battery_charging = items.get(1).and_then(msgpack_bool);
-    }
-    (telemetry.lat.is_some() || telemetry.lon.is_some() || telemetry.battery_percent.is_some())
-        .then_some(telemetry)
+    crate::telemeter::decode(bytes, false).ok()
 }
 
 fn msgpack_u64(value: &MsgPackValue) -> Option<u64> {

@@ -8,6 +8,26 @@ const BLANK_MAP_STYLE = {
   layers: [],
 };
 
+test("explicit LXMF position sharing profiles survive save and can be revoked", async ({ page }) => {
+  await seedAppStorage(page, { settings: defaultSettings });
+  await gotoApp(page, "/settings/location");
+  await expect(page.getByLabel("Sideband telemetry contacts")).toHaveValue("");
+  await expect(page.getByLabel("Columba telemetry contacts")).toHaveValue("");
+  await page.getByLabel("Sideband telemetry contacts").fill("invalid");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByRole("alert")).toHaveText("Use unique 32-character LXMF destination hashes, with one profile per contact.");
+  await page.getByLabel("Sideband telemetry contacts").fill("a".repeat(32));
+  await page.getByLabel("Columba telemetry contacts").fill("b".repeat(32));
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await page.reload();
+  await expect(page.getByLabel("Sideband telemetry contacts")).toHaveValue("a".repeat(32));
+  await expect(page.getByLabel("Columba telemetry contacts")).toHaveValue("b".repeat(32));
+  await page.getByLabel("Sideband telemetry contacts").fill("");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await page.reload();
+  await expect(page.getByLabel("Sideband telemetry contacts")).toHaveValue("");
+});
+
 test("telemetry map shows live and stale markers while filtering expired fixes", async ({ page }) => {
   const now = Date.now();
 

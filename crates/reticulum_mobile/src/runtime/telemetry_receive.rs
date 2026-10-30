@@ -13,6 +13,8 @@ enum TelemetryDecodeError {
     NonFiniteValue,
     InvalidCoordinates,
     PersistenceFailure,
+    InvalidTelemeter,
+    MissingSource,
 }
 
 impl TelemetryDecodeError {
@@ -153,7 +155,27 @@ async fn persist_received_telemetry_if_present(
         destination_hex,
         message_id_hex,
     } = context;
-    let decoded = decode_telemetry_position(fields_bytes, body == b"T", now_ms());
+    let decoded = state
+        .app_state
+        .get_app_settings()
+        .map_err(|_| TelemetryDecodeError::PersistenceFailure)
+        .and_then(|settings| {
+            decode_received_position(
+                fields_bytes,
+                body == b"T",
+                now_ms(),
+                source_hex,
+                settings.as_ref().is_some_and(|settings| {
+                    source_hex.is_some_and(|source| {
+                        settings
+                            .telemetry
+                            .columba_contacts
+                            .iter()
+                            .any(|contact| contact == source)
+                    })
+                }),
+            )
+        });
     let failure = match decoded {
         Ok(None) => return false,
         Ok(Some(record)) => match state.app_state.record_local_telemetry_fix(&record) {
@@ -312,21 +334,15 @@ mod telemetry_decode_tests {
             decode_telemetry_position(Some(&[0xc1]), true, 123).unwrap_err(),
             Error::CorruptMessagePack
         );
-        assert!(
-            decode_telemetry_position(Some(&[0xc1]), false, 123)
-                .unwrap()
-                .is_none()
-        );
-        assert!(
-            decode_telemetry_position(None, false, 123)
-                .unwrap()
-                .is_none()
-        );
-        assert!(
-            decode_telemetry_position(None, true, 123)
-                .unwrap()
-                .is_none()
-        );
+        assert!(decode_telemetry_position(Some(&[0xc1]), false, 123)
+            .unwrap()
+            .is_none());
+        assert!(decode_telemetry_position(None, false, 123)
+            .unwrap()
+            .is_none());
+        assert!(decode_telemetry_position(None, true, 123)
+            .unwrap()
+            .is_none());
         for callsign in [
             MsgPackValue::from(""),
             MsgPackValue::from("  "),
@@ -383,11 +399,9 @@ mod telemetry_decode_tests {
             decode_telemetry_position(Some(&non_map), true, 123).unwrap_err(),
             Error::UnsupportedEncoding
         );
-        assert!(
-            decode_telemetry_position(Some(&non_map), false, 123)
-                .unwrap()
-                .is_none()
-        );
+        assert!(decode_telemetry_position(Some(&non_map), false, 123)
+            .unwrap()
+            .is_none());
         for command_type in ["unknown.command", "mission.event.upsert"] {
             let unrelated = encode_commands(MsgPackValue::Array(vec![MsgPackValue::Map(vec![
                 (MsgPackValue::from("t"), MsgPackValue::from(command_type)),
@@ -415,11 +429,9 @@ mod telemetry_decode_tests {
             vec![(MsgPackValue::from("GROUP"), MsgPackValue::from("Alpha"))],
         ] {
             let no_commands = rmp_serde::to_vec(&MsgPackValue::Map(entries)).unwrap();
-            assert!(
-                decode_telemetry_position(Some(&no_commands), true, 123)
-                    .unwrap()
-                    .is_none()
-            );
+            assert!(decode_telemetry_position(Some(&no_commands), true, 123)
+                .unwrap()
+                .is_none());
         }
     }
 }

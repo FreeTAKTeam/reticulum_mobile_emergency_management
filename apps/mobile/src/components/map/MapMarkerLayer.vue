@@ -9,7 +9,7 @@ import { useMapMarkerPins } from "../../composables/useMapMarkerPins";
 import { useMapMarkersStore } from "../../stores/mapMarkersStore";
 import { usePluginMapSessionsStore } from "../../stores/pluginMapSessionsStore";
 import { mdiPathFor } from "../../utils/mapMarkerIcons";
-import { autoMarkerName, formatCoordinate } from "../../utils/mapMarkerPresentation";
+import { autoMarkerName, formatCoordinate, markerSymbolColor } from "../../utils/mapMarkerPresentation";
 import MapMarkerDetailsSheet from "./MapMarkerDetailsSheet.vue";
 import MapMarkerSymbolSheet from "./MapMarkerSymbolSheet.vue";
 import PluginMapSessionList from "./PluginMapSessionList.vue";
@@ -197,7 +197,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="map-marker-layer">
     <PluginMapSessionList compact class="plugin-map-sessions-overlay" />
-    <div v-if="aiming" class="marker-crosshair" aria-hidden="true">
+    <div v-if="aiming" class="marker-crosshair" :style="{ color: markerSymbolColor(aimingSymbol?.id) }" aria-hidden="true">
       <span class="marker-crosshair-pin">
         <svg viewBox="0 0 24 24"><path :d="mdiPathFor(aimingSymbol?.mdi)" fill="currentColor" /></svg>
       </span>

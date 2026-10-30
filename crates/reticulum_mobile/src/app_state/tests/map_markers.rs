@@ -244,3 +244,28 @@ fn map_marker_replicas_are_validated_like_local_input() {
     );
     assert!(store.list_map_markers().expect("list").is_empty());
 }
+
+#[test]
+fn marker_projection_waits_for_a_concurrent_database_writer() {
+    let storage_dir = test_storage_dir("map-marker-projection-contention");
+    let store = AppStateStore::new(storage_dir.to_str()).expect("store");
+    let mut connection = store.connect().expect("writer connection");
+    let transaction = connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .expect("hold writer lock");
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        started_tx.send(()).expect("signal start");
+        store.bump_projection_revision(
+            ProjectionScope::MapMarkers {},
+            Some("test-marker".to_string()),
+            Some("marker-created".to_string()),
+        )
+    });
+    started_rx.recv().expect("writer starts");
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    transaction.commit().expect("release writer lock");
+    let invalidation = worker.join().expect("worker").expect("wait for writer");
+    assert_eq!(invalidation.scope, ProjectionScope::MapMarkers {});
+    assert_eq!(invalidation.revision, 1);
+}

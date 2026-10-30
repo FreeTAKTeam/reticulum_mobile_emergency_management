@@ -154,3 +154,71 @@ fn create_map_marker_returns_without_waiting_for_replication_delivery() {
         "marker is stored before replication completes"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn markers_exchange_both_directions_and_accept_rch_shared_wire() {
+    let _guard = test_lock().lock().await;
+    let (relay, a, b) = start_node_pair("marker-wire-interop").await;
+    for (sender, receiver, source) in [(&a, &b, "REM"), (&b, &a, "REM"), (&a, &b, "RCH")] {
+        let mut marker = replicated_marker();
+        marker.updated_ts_ms = crate::numeric::u64_to_i64_saturating(now_ms());
+        let fields = if source == "REM" {
+            map_marker_replication_payload(&sender.get_status(), &MapMarkerChange::created(marker.clone())).unwrap().1
+        } else {
+            r3akt_map_core::marker_wire::encode_fields(
+                "mission.marker.updated", &marker, &sender.get_status().identity_hex, None,
+            ).unwrap()
+        };
+        sender.send_bytes(receiver.get_status().lxmf_destination_hex,
+            b"Synthetic marker interop".to_vec(), Some(fields), SendMode::Auto {}).unwrap();
+        let deadline = Instant::now() + TEST_TIMEOUT;
+        loop {
+            if let Some(received) = receiver.get_map_marker(marker.object_destination_hash.clone()).unwrap() {
+                assert_eq!(received.name, marker.name);
+                assert_eq!(received.lat, marker.lat);
+                assert_eq!(received.lon, marker.lon);
+                break;
+            }
+            assert!(Instant::now() < deadline, "{source} marker was not persisted");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(receiver.get_telemetry_positions().unwrap().is_empty(), "marker must not become sender GPS telemetry");
+    }
+    stop_node(a).await;
+    stop_node(b).await;
+    relay.shutdown().await;
+}
+
+#[test]
+fn markers_persist_without_tcp_or_enabled_telemetry() {
+    let storage_dir = prepare_storage_dir("map-markers-offline");
+    let node = Node::with_storage_dir(storage_dir.to_str()).expect("offline node");
+    let mut settings = sample_app_settings();
+    settings.tcp_clients.clear();
+    settings.telemetry.enabled = false;
+    node.set_app_settings(settings).expect("offline settings");
+    let created = node.create_map_marker(MapMarkerCreateRequest {
+        idempotency_key: None,
+        marker_type: "friendly".into(),
+        symbol: "friendly".into(),
+        name: Some("Offline marker".into()),
+        category: None,
+        lat: 44.5,
+        lon: -1.25,
+        notes: None,
+    }).expect("create offline");
+    let key = created.marker.object_destination_hash;
+    node.rename_map_marker(MapMarkerRenameRequest {
+        object_destination_hash: key.clone(), name: "Offline renamed".into(),
+    }).expect("rename offline");
+    node.move_map_marker(MapMarkerMoveRequest {
+        object_destination_hash: key.clone(), lat: 44.51, lon: -1.26,
+    }).expect("move offline");
+    drop(node);
+    let reopened = Node::with_storage_dir(storage_dir.to_str()).expect("reopen");
+    let marker = reopened.get_map_marker(key.clone()).expect("read").expect("persisted");
+    assert_eq!(marker.name, "Offline renamed");
+    assert_eq!((marker.lat, marker.lon), (44.51, -1.26));
+    assert!(reopened.delete_map_marker(key).expect("delete offline"));
+    assert!(reopened.list_map_markers().expect("list").is_empty());
+}

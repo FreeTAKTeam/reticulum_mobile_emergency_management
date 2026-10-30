@@ -8,6 +8,34 @@ export interface MapMarkerSymbolGroup {
 
 export const RECENT_SYMBOL_LIMIT = 4;
 
+// Display palette from RCH ui/src/utils/markers.ts; IDs come from the shared catalog.
+const SYMBOL_COLORS: Record<string, string> = {
+  marker: "#38BDF8",
+  friendly: "#6BCBEC",
+  hostile: "#DE6767",
+  neutral: "#9BBB59",
+  unknown: "#F1E097",
+  vehicle: "#A78BFA",
+  drone: "#F59E0B",
+  animal: "#F87171",
+  sensor: "#22D3EE",
+  radio: "#94A3B8",
+  antenna: "#38BDF8",
+  camera: "#A78BFA",
+  fire: "#F59E0B",
+  flood: "#F87171",
+  person: "#22D3EE",
+  group: "#94A3B8",
+  infrastructure: "#38BDF8",
+  medic: "#A78BFA",
+  alert: "#F59E0B",
+  task: "#F87171",
+};
+
+export function markerSymbolColor(id: string | undefined): string {
+  return (id && Object.hasOwn(SYMBOL_COLORS, id) && SYMBOL_COLORS[id]) || "#38BDF8";
+}
+
 export function categoryLabel(category: string): string {
   if (category.toLowerCase() === "nato") {
     return "NATO";

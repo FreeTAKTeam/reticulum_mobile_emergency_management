@@ -110,3 +110,42 @@ test("recent symbols, long-press placement and the visibility toggle", async ({ 
   await page.getByRole("button", { name: "Map menu" }).click();
   await expect(mapMenu).toHaveCount(0);
 });
+
+test("uses RCH colors through placement and selection without a frame", async ({ page }, testInfo) => {
+  await openMap(page);
+  const colors = [
+    ["friendly", "rgb(107, 203, 236)"],
+    ["hostile", "rgb(222, 103, 103)"],
+    ["neutral", "rgb(155, 187, 89)"],
+    ["unknown", "rgb(241, 224, 151)"],
+    ["fire", "rgb(245, 158, 11)"],
+  ];
+  for (const [symbol, color] of colors) {
+    await page.getByRole("button", { name: "Add marker" }).click();
+    const option = page.getByRole("dialog", { name: "Choose a marker symbol" })
+      .locator(`[data-symbol="${symbol}"]`).last();
+    await expect(option.locator("svg")).toHaveCSS("color", color);
+    await option.click();
+    await expect(page.locator(".marker-crosshair-pin svg")).toHaveCSS("color", color);
+    await page.getByLabel("Aim marker").getByRole("button", { name: `Place ${symbol}` }).click();
+    const pin = page.locator(`.map-marker-pin[data-symbol="${symbol}"]`);
+    const icon = pin.locator(".map-marker-pin-icon");
+    await expect(pin).toHaveClass(/is-selected/);
+    await expect(icon.locator("path")).toHaveCSS("fill", color);
+    await expect(icon).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+    await expect(icon).toHaveCSS("border-top-width", "0px");
+    await expect(page.locator(".marker-detail-icon")).toHaveCSS("color", color);
+    await page.getByRole("button", { name: "Close marker details" }).click();
+    await expect(pin).not.toHaveClass(/is-selected/);
+    await expect(icon.locator("path")).toHaveCSS("fill", color);
+    await expect(icon).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+    await expect(icon).toHaveCSS("border-top-width", "0px");
+    await page.screenshot({ path: testInfo.outputPath(`${symbol}.png`) });
+    await pin.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("button", { name: "Close marker details" })).toBeVisible();
+    const details = page.getByRole("dialog");
+    await details.getByRole("button", { name: "Delete", exact: true }).click();
+    await details.getByRole("button", { name: "Delete", exact: true }).click();
+  }
+});

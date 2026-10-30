@@ -89,6 +89,21 @@ impl AppStateStore {
         &self,
         settings: &AppSettingsRecord,
     ) -> Result<ProjectionInvalidation, NodeError> {
+        let mut seen = std::collections::HashSet::new();
+        for destination in settings
+            .telemetry
+            .lxmf_contacts
+            .iter()
+            .chain(&settings.telemetry.columba_contacts)
+        {
+            if destination.len() != 32
+                || !destination.bytes().all(|b| b.is_ascii_hexdigit())
+                || destination != &destination.to_ascii_lowercase()
+                || !seen.insert(destination)
+            {
+                return Err(crate::error_context::invalid_config("telemetry contacts must be unique lowercase 32-character LXMF destination hashes"));
+            }
+        }
         let mut connection = self.connect()?;
         let transaction = connection.transaction().map_err(|error| {
             crate::error_context::contextual_node_error(NodeError::IoError {}, error)

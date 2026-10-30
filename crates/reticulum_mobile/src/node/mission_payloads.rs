@@ -30,7 +30,9 @@ fn build_eam_replication_payload(
             ),
         ])]),
     )]);
-    let fields = rmp_serde::to_vec(&fields).map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
+    let fields = rmp_serde::to_vec(&fields).map_err(|error| {
+        crate::error_context::contextual_node_error(NodeError::InternalError {}, error)
+    })?;
 
     Ok((body, fields))
 }
@@ -69,7 +71,9 @@ fn build_eam_delete_replication_payload(
             ),
         ])]),
     )]);
-    let fields = rmp_serde::to_vec(&fields).map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
+    let fields = rmp_serde::to_vec(&fields).map_err(|error| {
+        crate::error_context::contextual_node_error(NodeError::InternalError {}, error)
+    })?;
 
     Ok((body, fields))
 }
@@ -120,7 +124,9 @@ fn build_event_replication_payload(
         MsgPackValue::from(FIELD_COMMANDS),
         MsgPackValue::Array(vec![MsgPackValue::Map(command_entries)]),
     )]);
-    let fields_bytes = rmp_serde::to_vec(&fields).map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
+    let fields_bytes = rmp_serde::to_vec(&fields).map_err(|error| {
+        crate::error_context::contextual_node_error(NodeError::InternalError {}, error)
+    })?;
 
     Ok((body, fields_bytes))
 }
@@ -150,20 +156,37 @@ fn build_event_delete_replication_payload(
     build_event_replication_payload(status, &tombstone, target)
 }
 
+#[cfg(test)]
 fn build_telemetry_replication_payload(
     position: &TelemetryPositionRecord,
     target: &MissionReplicationTarget,
+) -> Result<(Vec<u8>, Vec<u8>), NodeError> {
+    build_profiled_telemetry_payload(position, target, false)
+}
+
+fn build_profiled_telemetry_payload(
+    position: &TelemetryPositionRecord,
+    target: &MissionReplicationTarget,
+    columba_mps: bool,
 ) -> Result<(Vec<u8>, Vec<u8>), NodeError> {
     let callsign = position.callsign.trim();
     if callsign.is_empty() || !position.lat.is_finite() || !position.lon.is_finite() {
         return Err(NodeError::InvalidConfig {});
     }
 
-    let digest = hex::encode(Sha256::digest(format!("{}:{}", target.app_destination_hex, serde_json::to_string(position).map_err(|_| NodeError::InvalidConfig {})?).as_bytes()));
+    let digest = hex::encode(Sha256::digest(
+        format!(
+            "{}:{}:{}",
+            target.app_destination_hex,
+            columba_mps,
+            serde_json::to_string(position).map_err(|_| NodeError::InvalidConfig {})?
+        )
+        .as_bytes(),
+    ));
     let command_id = format!("t:{}", &digest[..16]);
     let correlation_id = command_id.clone();
     let body = b"T".to_vec();
-    let fields = MsgPackValue::Map(vec![(
+    let mut fields = MsgPackValue::Map(vec![(
         MsgPackValue::from(FIELD_COMMANDS),
         MsgPackValue::Array(vec![MsgPackValue::Map(vec![
             (
@@ -209,7 +232,15 @@ fn build_telemetry_replication_payload(
             ),
         ])]),
     )]);
-    let fields = rmp_serde::to_vec(&fields).map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
+    if let MsgPackValue::Map(entries) = &mut fields {
+        entries.push((
+            MsgPackValue::from(0x02),
+            MsgPackValue::Binary(crate::telemeter::encode_position(position, columba_mps)?),
+        ));
+    }
+    let fields = rmp_serde::to_vec(&fields).map_err(|error| {
+        crate::error_context::contextual_node_error(NodeError::InternalError {}, error)
+    })?;
 
     Ok((body, fields))
 }

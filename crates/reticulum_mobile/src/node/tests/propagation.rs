@@ -104,6 +104,8 @@ fn build_app_settings() -> AppSettingsRecord {
         transport_node_enabled: true,
         announce_interval_seconds: 1800,
         telemetry: TelemetrySettingsRecord {
+            lxmf_contacts: Vec::new(),
+            columba_contacts: Vec::new(),
             enabled: true,
             publish_interval_seconds: 15,
             accuracy_threshold_meters: Some(10.0),

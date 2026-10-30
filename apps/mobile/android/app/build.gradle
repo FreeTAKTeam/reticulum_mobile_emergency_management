@@ -16,6 +16,10 @@ def overrideVersionName = project.findProperty("appVersionName")?.toString()?.tr
 def computedVersionName = overrideVersionName ? overrideVersionName : "1.0.${versionNameStamp}"
 def enableWebViewDebugging = project.findProperty("enableWebViewDebugging")?.toString()?.toBoolean() ?: false
 def enableAdbTestControl = project.findProperty("enableAdbTestControl")?.toString()?.toBoolean() ?: false
+def testApplicationIdSuffix = project.findProperty("testApplicationIdSuffix")?.toString()?.trim()
+if (testApplicationIdSuffix && !enableAdbTestControl) {
+    throw new GradleException("testApplicationIdSuffix requires enableAdbTestControl")
+}
 def abiFiltersProperty = project.findProperty("abiFilters")?.toString()?.trim()
 def abiFiltersList = abiFiltersProperty
     ? abiFiltersProperty.split(",").collect { it.trim() }.findAll { !it.isEmpty() }
@@ -46,6 +50,9 @@ android {
     }
     defaultConfig {
         applicationId "network.reticulum.emergency"
+        if (testApplicationIdSuffix) {
+            applicationIdSuffix testApplicationIdSuffix
+        }
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode computedVersionCode

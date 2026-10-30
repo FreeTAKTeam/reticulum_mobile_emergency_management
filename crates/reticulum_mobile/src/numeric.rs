@@ -50,14 +50,6 @@ pub(crate) fn f64_to_u8_saturating(value: f64) -> u8 {
     finite_or_zero(value).round().clamp(0.0, f64::from(u8::MAX)) as u8
 }
 
-#[allow(clippy::cast_possible_truncation)]
-#[must_use]
-pub(crate) fn f64_to_i64_saturating(value: f64) -> i64 {
-    finite_or_zero(value)
-        .round()
-        .clamp(i64::MIN as f64, i64::MAX as f64) as i64
-}
-
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 #[must_use]
 pub(crate) fn f64_to_u64_saturating(value: f64) -> u64 {
@@ -99,7 +91,6 @@ mod tests {
     fn float_boundaries_are_finite_and_clamped() {
         assert_eq!(f64_to_u32_saturating(f64::NAN), 0);
         assert_eq!(f64_to_u8_saturating(300.0), u8::MAX);
-        assert_eq!(f64_to_i64_saturating(f64::INFINITY), 0);
         assert_eq!(f64_to_u64_saturating(-1.0), 0);
         assert_eq!(
             i64_to_f64_exact(9_007_199_254_740_992),

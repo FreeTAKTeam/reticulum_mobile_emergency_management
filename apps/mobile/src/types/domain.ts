@@ -353,6 +353,8 @@ export interface NodeUiSettings {
     accuracyThresholdMeters?: number;
     staleAfterMinutes: number;
     expireAfterMinutes: number;
+  lxmfContacts?: string[];
+  columbaContacts?: string[];
   };
   hub: HubSettings;
   teams: {

@@ -13,7 +13,7 @@
         let telemetry = SosDeviceTelemetryRecord {
             lat: Some(45.5),
             lon: Some(-63.25),
-            alt: Some(20.0),
+            alt: Some(-20.0),
             speed: Some(1.5),
             course: Some(180.0),
             accuracy: Some(4.0),
@@ -56,6 +56,11 @@
         let parsed_telemetry = parsed.telemetry.expect("telemetry");
         assert_eq!(parsed_telemetry.lat.expect("lat").round(), 46.0);
         assert_eq!(parsed_telemetry.battery_charging, Some(true));
+        assert_eq!(parsed_telemetry.battery_percent, Some(88.0));
+        assert_eq!(parsed_telemetry.alt, Some(-20.0));
+        assert_eq!(parsed_telemetry.speed, Some(1.5));
+        assert_eq!(parsed_telemetry.accuracy, Some(4.0));
+        assert_eq!(parsed_telemetry.updated_at_ms, telemetry.updated_at_ms);
     }
 
     #[test]

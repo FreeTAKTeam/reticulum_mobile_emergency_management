@@ -197,14 +197,17 @@ impl Node {
         let targets = if disabled_or_expired {
             Vec::new()
         } else {
-            build_runtime_telemetry_destinations(
-                &status,
-                &peers,
-                &saved,
-                sync.active_propagation_node_hex.as_deref(),
-                config.as_ref(),
-                snapshot.as_ref(),
-            )?
+            merge_replication_target_sets(
+                build_runtime_telemetry_destinations(
+                    &status,
+                    &peers,
+                    &saved,
+                    sync.active_propagation_node_hex.as_deref(),
+                    config.as_ref(),
+                    snapshot.as_ref(),
+                )?,
+                explicit_telemetry_targets(&app_state, &status, &saved)?,
+            )
         };
         let mut current_fix = true;
         emit_telemetry_projection(&app_state, &bus, |publication| {
@@ -315,7 +318,13 @@ impl Node {
             if row.attempt_route.as_deref() == Some(&route) {
                 continue;
             }
-            let (body, fields) = build_telemetry_replication_payload(&position, target)?;
+            let columba_mps = settings.as_ref().is_some_and(|settings| {
+                settings
+                    .telemetry
+                    .columba_contacts
+                    .contains(&target.app_destination_hex)
+            });
+            let (body, fields) = build_profiled_telemetry_payload(&position, target, columba_mps)?;
             let metadata =
                 parse_mission_sync_metadata(&fields).ok_or(NodeError::InvalidConfig {})?;
             let command_id = metadata.command_id.ok_or(NodeError::InvalidConfig {})?;

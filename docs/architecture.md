@@ -613,84 +613,32 @@ This is a parser-boundary clarification, not a wire-format migration:
 
 ### Telemetry
 
-Telemetry has two active wire formats in the app today.
+The authoritative codec is RCH's shared `r3akt-map-core`, with Sideband as
+reference. See [Telemeter interoperability](telemetry-interoperability.md) for
+source pins, permissions, synthetic evidence and migration limits.
 
-Primary live upsert payload:
-- Local `TelemetryPosition` is encoded into a compact MsgPack telemetry payload and placed into LXMF fields.
-
-Logical telemetry position:
-
-```json
-{
-  "callsign": "<sender lxmf hash or local callsign>",
-  "lat": 44.6488,
-  "lon": -63.5752,
-  "alt": 12.3,
-  "course": 180.0,
-  "speed": 0.5,
-  "accuracy": 4.2,
-  "updatedAt": 1741891234567
-}
-```
-
-Compact telemetry payload content:
-- MsgPack map with:
-  - `0x01` (`SID_TIME`) -> Unix timestamp seconds
-  - `0x02` (`SID_LOCATION`) -> array:
-    1. latitude as signed int32 microdegrees
-    2. longitude as signed int32 microdegrees
-    3. altitude as uint32 centimeters
-    4. speed as uint32 centi-units
-    5. course as uint32 centi-degrees
-    6. accuracy as uint16 centimeters
-    7. timestamp seconds
-
-Snapshot response payload:
-- LXMF telemetry stream field containing entries of:
-  - `[peerHashBytes, timestampSeconds, telemetryPayloadBytes]`
-
-Legacy delete / compatibility payload:
-
-```json
-{
-  "kind": "telemetry_delete",
-  "callsign": "<callsign>",
-  "deletedAt": 1741891234567
-}
-```
-
-Transport:
-- Live upsert:
-  - sent with `nodeStore.sendBytes(destination, EMPTY_BYTES, { fieldsBase64 })`
-  - this **is LXMF**
-  - routed to the peer's canonical **`lxmf.delivery` destination** selected from `telemetryDestinations`
-- Snapshot request and snapshot response:
-  - sent with `sendBytes(..., { fieldsBase64 })`
-  - this **is LXMF**
-  - also routed to the peer's canonical **`lxmf.delivery` destination**
-- Delete compatibility path:
-  - sent with `nodeStore.sendJson(destination, message, dedicatedFields)`
-  - this is **raw RNS direct**, not LXMF
-
-LXMF fields used:
-- `0x02` (`LXMF_FIELD_TELEMETRY`): single telemetry upsert payload
-- `0x03` (`LXMF_FIELD_TELEMETRY_STREAM`): snapshot response stream entries
-- `0x09` (`LXMF_FIELD_COMMANDS`): snapshot request command list with command id `1`
-
-Dedicated raw-field keys used for compatibility delete/upsert parsing:
-- `telemetry.kind`
-- `telemetry.callsign`
-- `telemetry.lat`
-- `telemetry.lon`
-- `telemetry.alt`
-- `telemetry.course`
-- `telemetry.speed`
-- `telemetry.accuracy`
-- `telemetry.updatedAt`
-- `telemetry.deletedAt`
-
-Routing:
-- Telemetry uses the peer's canonical **`lxmf.delivery` destination** when that peer advertises the `Telemetry` capability in REM announce app data.
+- Native ordinary position publication emits binary `FIELD_TELEMETRY` (`0x02`)
+  and retains REM's compact `T1` command in field `0x09` during migration.
+- Native receipt decodes field 2 through the shared checked codec. T1-only
+  messages remain supported. When both exist, field 2 owns the readings and
+  T1 supplies the REM callsign; otherwise the full source LXMF destination
+  identifies the position. Receiving a sample never resets its source age.
+- SOS uses the same standard encoder and decoder. Location readings are
+  big-endian binary values: signed latitude/longitude in microdegrees, signed
+  altitude in centimetres, unsigned speed in hundredths of km/h, signed bearing
+  in hundredths of degrees, unsigned accuracy in centimetres, then fix time in
+  epoch seconds. Sensor time and fix time are distinct. Battery is percent.
+- REM stores GPS speed in m/s and converts at its native adapter. Explicit
+  Columba 2.2.6 contact profiles accommodate that client's m/s wire exception.
+- Active-team recipients retain existing native authorization. Additional
+  LXMF contacts require explicit settings grants, enabled sharing, a current
+  fix and a saved delivery identity. Enqueue and retry admission recheck these
+  permissions; discovery and a known route do not grant location access.
+- RCH collector queries use numeric command `1`, never `T1`. Responses carry a
+  plain field `0x03` list of `[sourceBytes, seconds, packedTelemeter, appearance]`.
+  REM's ordinary receive path does not ingest collector stream history.
+- Stores/UI project native delivery outcomes; protocol encoding, persistence,
+  route authorization and unit translation remain native responsibilities.
 
 ### LXMF SDK Bridge
 
@@ -850,9 +798,9 @@ transfer failure. Delivery outcome handling remains in the compiled LXMF
 runtime. This release includes selected Reticulum 1.5.5 changes and does not
 claim full 1.5.5 parity.
 
-Map objects (point markers, the symbol catalog and the Telemeter receive
+Map objects (point markers, the symbol catalog and the Telemeter send/receive
 contract) come from the shared RCH crate `r3akt-map-core`, pinned to RCH
-`19de27f419373c543fe6154aab2a3c027938b65d` with its `sqlite` feature
+`979e8fbb313a4a280a16bcd6f42b309cd5478ed2` with its `sqlite` feature
 ([REM #280](https://github.com/FreeTAKTeam/reticulum_mobile_emergency_management/issues/280),
 [RCH #259](https://github.com/FreeTAKTeam/Reticulum-Community-Hub/issues/259)).
 REM must not re-implement marker validation, symbols, idempotency or marker
@@ -888,11 +836,14 @@ Every local create, rename, move or delete (`node/map_marker_replication.rs`)
 sends one LXMF message to the same targets as mission events: the hub in
 Connected mode (with the active TEAM in `FIELD_GROUP`, so RCH relays to the
 TEAM), and saved and TEAM peers in Autonomous and Semi-autonomous modes. The
-message carries two views of the change:
+message uses the shared `r3akt_map_core::marker_wire` encoder and carries:
 
 - `FIELD_COMMANDS`: the RCH mission command (`mission.marker.create` with
   REM's `object_destination_hash`, `mission.marker.patch`,
   `mission.marker.position.patch`, `mission.marker.delete`);
+- `FIELD_TELEMETRY_STREAM` (`0x03`), for upserts: the independent object hash,
+  source time, packed Sideband Telemeter and icon appearance. The sender GPS
+  field (`0x02`) is absent. Standard streams have no delete operation;
 - `FIELD_EVENT`: the replica event (`mission.marker.created`, `updated`,
   `position.updated`, `deleted`) whose payload is the shared marker API
   representation.

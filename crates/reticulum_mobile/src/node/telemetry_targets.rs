@@ -1,4 +1,33 @@
 // Persisted contacts are authoritative; a removed contact cannot survive in a live snapshot.
+fn explicit_telemetry_targets(
+    app_state: &AppStateStore,
+    status: &NodeStatus,
+    saved: &[SavedPeerRecord],
+) -> Result<Vec<MissionReplicationTarget>, NodeError> {
+    let Some(settings) = app_state.get_app_settings()? else {
+        return Ok(Vec::new());
+    };
+    if !settings.telemetry.enabled {
+        return Ok(Vec::new());
+    }
+    let targets = settings
+        .telemetry
+        .lxmf_contacts
+        .iter()
+        .chain(&settings.telemetry.columba_contacts)
+        .filter(|destination| {
+            saved
+                .iter()
+                .any(|peer| peer.lxmf_destination_hex.as_ref() == Some(destination))
+        })
+        .map(|destination| MissionReplicationTarget {
+            app_destination_hex: destination.clone(),
+            send_mode: SendMode::Auto {},
+        })
+        .collect();
+    Ok(canonicalize_telemetry_targets(status, targets, &[], saved))
+}
+
 fn telemetry_peers_with_saved(
     peers: &[PeerRecord],
     saved_peers: &[SavedPeerRecord],
@@ -177,7 +206,7 @@ fn ensure_telemetry_destination_authorized(
         .lock()
         .map_err(|_| NodeError::InternalError {})?
         .clone();
-    let targets = build_runtime_telemetry_destinations(
+    let mut targets = build_runtime_telemetry_destinations(
         &status,
         peers,
         saved,
@@ -185,6 +214,10 @@ fn ensure_telemetry_destination_authorized(
         inner.active_config.as_ref(),
         snapshot,
     )?;
+    targets = merge_replication_target_sets(
+        targets,
+        explicit_telemetry_targets(&inner.app_state, &status, saved)?,
+    );
     if targets.iter().any(|target| {
         destination_matches_peer_set(
             destination,
@@ -236,7 +269,16 @@ pub(crate) fn telemetry_delivery_is_current(
         app_destination_hex: row.destination_hex.clone(),
         send_mode: SendMode::Auto {},
     };
-    let (_, fields) = build_telemetry_replication_payload(fix, &expected_target)?;
+    let columba_mps = app_state
+        .get_app_settings()?
+        .as_ref()
+        .is_some_and(|settings| {
+            settings
+                .telemetry
+                .columba_contacts
+                .contains(&row.destination_hex)
+        });
+    let (_, fields) = build_profiled_telemetry_payload(fix, &expected_target, columba_mps)?;
     if parse_mission_sync_metadata(&fields)
         .and_then(|metadata| metadata.command_id)
         .as_deref()
@@ -246,16 +288,17 @@ pub(crate) fn telemetry_delivery_is_current(
     }
     let saved = app_state.get_saved_peers()?;
     let config = NodeConfigFingerprint::from_config(config)?;
-    Ok(
-        build_runtime_telemetry_destinations(status, peers, &saved, None, Some(&config), snapshot)?
-            .iter()
-            .any(|target| {
-                destination_matches_peer_set(
-                    request.0,
-                    std::slice::from_ref(&target.app_destination_hex),
-                    &saved,
-                    peers,
-                )
-            }),
+    Ok(merge_replication_target_sets(
+        build_runtime_telemetry_destinations(status, peers, &saved, None, Some(&config), snapshot)?,
+        explicit_telemetry_targets(app_state, status, &saved)?,
     )
+    .iter()
+    .any(|target| {
+        destination_matches_peer_set(
+            request.0,
+            std::slice::from_ref(&target.app_destination_hex),
+            &saved,
+            peers,
+        )
+    }))
 }

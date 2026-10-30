@@ -5,14 +5,14 @@ impl Node {
         let peers = inner.peers_snapshot.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?.clone();
         let hub_directory_snapshot = inner.hub_directory_snapshot.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?.clone();
         let sync_status = inner.sync_status_snapshot.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?.clone();
-        Ok(build_runtime_telemetry_destinations(
+        Ok(merge_replication_target_sets(build_runtime_telemetry_destinations(
             &status,
             peers.as_slice(),
                     &inner.app_state.get_saved_peers()?,
             sync_status.active_propagation_node_hex.as_deref(),
             inner.active_config.as_ref(),
             hub_directory_snapshot.as_ref(),
-        )?
+        )?, explicit_telemetry_targets(&inner.app_state, &status, &inner.app_state.get_saved_peers()?)?)
         .into_iter()
         .map(|target| target.app_destination_hex)
         .collect())

@@ -484,6 +484,8 @@ dictionary HubSettingsRecord {
 };
 
 dictionary TelemetrySettingsRecord {
+  sequence<string> lxmf_contacts;
+  sequence<string> columba_contacts;
   boolean enabled;
   u32 publish_interval_seconds;
   f64? accuracy_threshold_meters;

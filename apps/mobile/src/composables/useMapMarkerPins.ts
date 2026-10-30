@@ -5,6 +5,8 @@ import { onBeforeUnmount, watch, type Ref } from "vue";
 
 import { mdiSvgMarkup } from "../utils/mapMarkerIcons";
 
+import { markerSymbolColor } from "../utils/mapMarkerPresentation";
+
 const LONG_PRESS_MS = 550;
 const LONG_PRESS_TOLERANCE_PX = 10;
 
@@ -91,6 +93,7 @@ export function useMapMarkerPins(options: MapMarkerPinOptions): void {
       if (label) {
         label.textContent = marker.name;
       }
+      pin.element.style.color = markerSymbolColor(marker.symbol);
       pin.element.dataset.symbol = marker.symbol;
       pin.element.setAttribute("aria-label", `${symbol?.description ?? marker.symbol} marker: ${marker.name}`);
       pin.element.classList.toggle("is-selected", key === options.selectedKey.value);

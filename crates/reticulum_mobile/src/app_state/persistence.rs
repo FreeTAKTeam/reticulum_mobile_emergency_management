@@ -6,8 +6,9 @@ impl AppStateStore {
         reason: Option<String>,
     ) -> Result<ProjectionInvalidation, NodeError> {
         let mut connection = self.connect()?;
+        // Acquire the writer lock before reading the revision; deferred upgrades can fail immediately.
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         let invalidation = self.bump_projection_revision_tx(&transaction, scope, key, reason)?;
         transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;

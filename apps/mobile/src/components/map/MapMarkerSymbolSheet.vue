@@ -3,7 +3,7 @@ import type { MapMarkerSymbolRecord } from "@reticulum/node-client";
 import { computed, ref } from "vue";
 
 import { mdiPathFor } from "../../utils/mapMarkerIcons";
-import { groupSymbols, searchSymbols } from "../../utils/mapMarkerPresentation";
+import { groupSymbols, markerSymbolColor, searchSymbols } from "../../utils/mapMarkerPresentation";
 
 const props = defineProps<{
   symbols: MapMarkerSymbolRecord[];
@@ -54,7 +54,7 @@ const searching = computed(() => query.value.trim().length > 0);
             :data-symbol="symbol.id"
             @click="emit('pick', symbol)"
           >
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path :d="mdiPathFor(symbol.mdi)" fill="currentColor" /></svg>
+            <svg :style="{ color: markerSymbolColor(symbol.id) }" viewBox="0 0 24 24" aria-hidden="true"><path :d="mdiPathFor(symbol.mdi)" fill="currentColor" /></svg>
             <span>{{ symbol.description }}</span>
           </button>
         </div>
@@ -71,7 +71,7 @@ const searching = computed(() => query.value.trim().length > 0);
             :data-symbol="symbol.id"
             @click="emit('pick', symbol)"
           >
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path :d="mdiPathFor(symbol.mdi)" fill="currentColor" /></svg>
+            <svg :style="{ color: markerSymbolColor(symbol.id) }" viewBox="0 0 24 24" aria-hidden="true"><path :d="mdiPathFor(symbol.mdi)" fill="currentColor" /></svg>
             <span>{{ symbol.description }}</span>
           </button>
         </div>

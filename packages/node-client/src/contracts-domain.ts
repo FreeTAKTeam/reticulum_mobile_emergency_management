@@ -188,6 +188,8 @@ export interface TelemetrySettingsRecord {
   accuracyThresholdMeters?: number;
   staleAfterMinutes: number;
   expireAfterMinutes: number;
+  lxmfContacts?: string[];
+  columbaContacts?: string[];
 }
 
 export interface ChecklistSettingsRecord {

@@ -19,8 +19,9 @@ public class MainActivity extends BridgeActivity {
         // Register custom plugin before bridge startup.
         registerPlugin(ReticulumNodePlugin.class);
         registerPlugin(TelemetryLocationPlugin.class);
-        configureWebViewDebugging();
         super.onCreate(savedInstanceState);
+        // Capacitor applies its own default while creating the bridge.
+        configureWebViewDebugging();
         BundledPluginExporter.start(this);
         installCapacitorTriggerEventShim();
         Log.i(TAG, "MainActivity initialized and ReticulumNode plugin registered.");

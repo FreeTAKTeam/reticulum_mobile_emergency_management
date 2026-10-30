@@ -208,6 +208,8 @@ export function toAppSettingsRecord(settings: NodeUiSettings): AppSettingsRecord
       accuracyThresholdMeters: settings.telemetry.accuracyThresholdMeters,
       staleAfterMinutes: settings.telemetry.staleAfterMinutes,
       expireAfterMinutes: settings.telemetry.expireAfterMinutes,
+      lxmfContacts: settings.telemetry.lxmfContacts ?? [],
+      columbaContacts: settings.telemetry.columbaContacts ?? [],
     },
     checklists: {
       defaultTaskDueStepMinutes: settings.checklists.defaultTaskDueStepMinutes,

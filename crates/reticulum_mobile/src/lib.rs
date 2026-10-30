@@ -62,6 +62,8 @@ mod sos_fields;
 #[deny(unsafe_code)]
 mod team_membership;
 #[deny(unsafe_code)]
+mod telemeter;
+#[deny(unsafe_code)]
 mod types;
 
 pub use node::{EventSubscription, Node};

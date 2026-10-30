@@ -264,7 +264,7 @@ async fn telemetry_m2_cold_start_first_workflow_persists_and_application_acks() 
         .into_iter()
         .find(|fix| fix.callsign == position.callsign)
         .unwrap();
-    assert_eq!(received.updated_at_ms, position.updated_at_ms);
+    assert_eq!(received.updated_at_ms, position.updated_at_ms / 1000 * 1000);
     assert_eq!(received.lat, position.lat);
     assert_eq!(
         node_a
@@ -458,7 +458,7 @@ async fn telemetry_m2_pending_fix_survives_node_restart_without_warmup() {
     }
     assert!(node_b.get_telemetry_positions().unwrap().iter().any(|fix| {
         fix.callsign == position.callsign && fix.lat == position.lat
-            && fix.updated_at_ms == position.updated_at_ms
+            && fix.updated_at_ms == position.updated_at_ms / 1000 * 1000
     }));
     assert_eq!(
         node_b

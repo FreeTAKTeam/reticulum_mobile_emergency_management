@@ -351,6 +351,8 @@ export function toAppSettingsRecord(raw: Record<string, unknown>): AppSettingsRe
         : Math.max(0, accuracyThresholdMeters),
       staleAfterMinutes,
       expireAfterMinutes,
+      lxmfContacts: unknownArray(telemetry.lxmfContacts).map((entry) => stringValue(entry)),
+      columbaContacts: unknownArray(telemetry.columbaContacts).map((entry) => stringValue(entry)),
     },
     hub: {
       mode: normalizeHubMode(hub.mode),
