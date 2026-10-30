@@ -25,6 +25,7 @@ rounded:
 REM uses a tactical, high-contrast dark interface for emergency coordination on mobile and web.
 The visual language should feel field-ready rather than consumer-social: dense enough for operational context, but still fast to scan under stress.
 Cold blue highlights, strong borders, and instrument-style cards communicate status without relying on decorative effects.
+This dark theme is the default. A high-visibility Outdoor Light theme for direct sunlight is defined in `design-light.md`.
 
 ## Product Character
 - REM is a Reticulum-based emergency operations client for messages, events, telemetry, peer discovery, and node control.
@@ -62,7 +63,7 @@ Cold blue highlights, strong borders, and instrument-style cards communicate sta
 - Mobile layouts should collapse cleanly without hiding critical node, telemetry, or messaging controls.
 
 ## Do's and Don'ts
-- Do keep the tactical blue palette consistent across views.
+- Do keep the tactical blue palette consistent across views in the dark theme.
 - Do use borders and contrast to define hierarchy before adding more effects.
 - Do keep operational summaries short, legible, and near the controls they describe.
 - Do preserve the existing global press-feedback system instead of adding one-off button behaviors.
