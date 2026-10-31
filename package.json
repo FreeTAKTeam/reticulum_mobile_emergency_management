@@ -16,13 +16,20 @@
     "test:source-size": "node --test tools/source-size-classes.test.mjs",
     "test:app-unit": "node --test apps/mobile/src/utils/*.test.mjs",
     "test:node-client": "npm --workspace packages/node-client run test",
-    "test:unit": "npm run test:source-size && npm run test:app-unit && npm run test:node-client",
+    "test:unit": "npm run test:source-size && npm run test:app-unit && npm run test:node-client && npm run test:dependency-compatibility",
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",
-    "test:e2e:debug": "playwright test --debug"
+    "test:e2e:debug": "playwright test --debug",
+    "test:dependency-compatibility": "node --test tools/dependency-compatibility.test.mjs"
   },
   "devDependencies": {
+    "@capacitor/cli": "^7.0.0",
     "@playwright/test": "^1.58.2",
     "vitest": "^4.1.12"
+  },
+  "overrides": {
+    "rimraf": {
+      "glob": "14.0.3"
+    }
   }
 }

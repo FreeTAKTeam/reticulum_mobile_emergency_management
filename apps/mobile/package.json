@@ -36,7 +36,6 @@
     "vue-router": "^4.5.1"
   },
   "devDependencies": {
-    "@capacitor/cli": "^7.0.0",
     "@types/qrcode": "^1.5.6",
     "@vitejs/plugin-vue": "^5.0.0",
     "typescript": "^5.6.0",
