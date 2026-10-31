@@ -79,6 +79,9 @@ jobs:
       - name: Install locked dependencies
         working-directory: rem
         run: npm ci
+      - name: Check dependency compatibility
+        working-directory: rem
+        run: npm run test:dependency-compatibility
       - name: Audit npm dependencies
         working-directory: rem
         run: npm audit --audit-level=moderate
