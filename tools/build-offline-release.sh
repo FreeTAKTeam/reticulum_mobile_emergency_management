@@ -20,9 +20,10 @@ android="$root/apps/mobile/android"
 lxmf="$root/../LXMF-rs"
 lxmf_pin="$(awk '/^  LXMF_RS_REF:/ {print $2; exit}' "$root/.github/workflows/plugins.yml")"
 [[ "$lxmf_pin" =~ ^[a-f0-9]{40}$ && "$(git -C "$lxmf" rev-parse HEAD)" == "$lxmf_pin" && -z "$(git -C "$lxmf" status --porcelain)" ]] || { echo 'LXMF-rs must be clean and match the plugin workflow pin' >&2; exit 1; }
-for file in keystore.properties ble-heart-rate-keystore.properties watch-status-keystore.properties; do
+for file in keystore.properties ble-heart-rate-keystore.properties watch-status-keystore.properties gotenna-keystore.properties; do
     [[ -f "$android/$file" ]] || { echo "Missing Android signing configuration: $file" >&2; exit 1; }
 done
+command -v uniffi-bindgen >/dev/null || { echo 'uniffi-bindgen is required for release Kotlin generation' >&2; exit 1; }
 apksigner="$ANDROID_HOME/build-tools/35.0.0/apksigner"
 aapt="$ANDROID_HOME/build-tools/35.0.0/aapt"
 [[ -x "$apksigner" && -x "$aapt" ]] || { echo 'Android build tools 35.0.0 are required' >&2; exit 1; }
@@ -40,17 +41,23 @@ VITE_APP_VERSION="$REM_VERSION" npm run mobile:build
 (cd apps/mobile && npx cap sync android)
 bash tools/codegen/generate-uniffi-bindings.sh kotlin
 common=("-PappVersionName=$REM_VERSION" "-PappVersionCode=$REM_VERSION_CODE" '-PabiFilters=arm64-v8a,armeabi-v7a,x86_64')
-(cd "$android" && bash ./gradlew "${common[@]}" -PapkClassifierSuffix=light :app:assembleRelease :rem-plugin-sdk:assembleRelease)
+(cd "$android" && bash ./gradlew "${common[@]}" -PapkClassifierSuffix=light :app:testReleaseUnitTest :app:assembleRelease :app:bundleRelease :rem-plugin-sdk:assembleRelease)
 light="$(find "$android/app/build/outputs/apk/release" -maxdepth 1 -name "*-v${REM_VERSION}-light-release.apk" -print -quit)"
 [[ -f "$light" ]] || { echo 'Light APK missing' >&2; exit 1; }
 "$apksigner" verify "$light"
+"$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -P 16 4 "$light"
+bundle="$android/app/build/outputs/bundle/release/app-release.aab"
+[[ -f "$bundle" ]] || { echo 'Light AAB missing' >&2; exit 1; }
+jarsigner -verify "$bundle"
+cp "$bundle" "$work/release/rem-light.aab"
 badging="$("$aapt" dump badging "$light")"
 [[ "$badging" == *"package: name='network.reticulum.emergency' versionCode='$REM_VERSION_CODE' versionName='$REM_VERSION'"* ]] || { echo 'Incorrect light APK identity or version' >&2; exit 1; }
 host_fingerprint="$("$apksigner" verify --print-certs "$light" | awk '/Signer #1 certificate SHA-256 digest:/{print tolower($NF)}')"
 [[ "$host_fingerprint" =~ ^[0-9a-f]{64}$ ]] || { echo 'Cannot determine REM signing certificate' >&2; exit 1; }
-(cd "$android" && bash ./gradlew "-PremHostFingerprints=$host_fingerprint" :ble-heart-rate-plugin:assembleRelease :watch-status-plugin:assembleRelease)
+(cd "$android" && bash ./gradlew "-PremHostFingerprints=$host_fingerprint" :ble-heart-rate-plugin:assembleRelease :watch-status-plugin:assembleRelease :gotenna-plugin:testReleaseUnitTest :gotenna-plugin:lintRelease :gotenna-plugin:assembleRelease)
 cp "$root/plugins/ble-heart-rate/android/build/outputs/apk/release/ble-heart-rate-plugin-release.apk" "$work/release/ble-heart-rate.apk"
 cp "$root/plugins/watch-status/android/build/outputs/apk/release/watch-status-plugin-release.apk" "$work/release/watch-status.apk"
+cp "$root/plugins/gotenna/android/build/outputs/apk/release/gotenna-plugin-release.apk" "$work/release/gotenna-mesh-beta.apk"
 sdk="$root/packages/android-plugin-sdk/build/outputs/aar/rem-plugin-sdk-release.aar"
 export REM_SDK_AAR="$sdk" REM_SDK_SHA256="$(sha256sum "$sdk" | cut -d ' ' -f 1)"
 export REM_SDK_COMMIT="$(git rev-parse HEAD)" REM_HOST_PACKAGE=network.reticulum.emergency REM_HOST_FINGERPRINTS="$host_fingerprint"
@@ -58,13 +65,15 @@ export ATN_ANDROID_ABIS=arm64-v8a,armeabi-v7a,x86_64
 bash "$work/atn/scripts/build-android.sh" --release
 "$ANDROID_HOME/build-tools/35.0.0/zipalign" -P 16 -f 4 "$work/atn/android/app/build/outputs/apk/release/app-release-unsigned.apk" "$work/atn-aligned.apk"
 "$apksigner" sign --ks "$ATN_KEYSTORE" --ks-key-alias "$ATN_KEY_ALIAS" --ks-pass env:ATN_STORE_PASSWORD --key-pass env:ATN_KEY_PASSWORD --out "$work/release/atn-rangefinder.apk" "$work/atn-aligned.apk"
-for plugin in ble-heart-rate watch-status atn-rangefinder; do
+for plugin in ble-heart-rate watch-status atn-rangefinder gotenna-mesh-beta; do
     apk="$work/release/$plugin.apk"
     "$apksigner" verify "$apk"
+    "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -P 16 4 "$apk"
     case "$plugin" in
         ble-heart-rate) package=org.freetakteam.rem.plugin.bleheartrate ;;
         watch-status) package=org.freetakteam.rem.plugin.watchstatus ;;
         atn-rangefinder) package=org.freetak.atn ;;
+        gotenna-mesh-beta) package=org.freetakteam.rem.plugin.gotenna ;;
     esac
     badging="$("$aapt" dump badging "$apk")"
     [[ "$badging" == *"package: name='$package'"* ]] || { echo "Incorrect package: $plugin" >&2; exit 1; }
@@ -76,6 +85,7 @@ cp "$light" "$work/release/rem-light.apk"
 complete="$(find "$android/app/build/outputs/apk/release" -maxdepth 1 -name "*-v${REM_VERSION}-complete-release.apk" -print -quit)"
 [[ -f "$complete" ]] || { echo 'Complete APK missing' >&2; exit 1; }
 "$apksigner" verify "$complete"
+"$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -P 16 4 "$complete"
 badging="$("$aapt" dump badging "$complete")"
 [[ "$badging" == *"package: name='network.reticulum.emergency' versionCode='$REM_VERSION_CODE' versionName='$REM_VERSION'"* ]] || { echo 'Incorrect complete APK identity or version' >&2; exit 1; }
 complete_fingerprint="$("$apksigner" verify --print-certs "$complete" | awk '/Signer #1 certificate SHA-256 digest:/{print tolower($NF)}')"
@@ -85,8 +95,8 @@ python3 - "$work/release/rem-complete.apk" "$work/release/rem-light.apk" "$work/
 import pathlib, sys, zipfile
 complete, light, assets = sys.argv[1:]
 expected = {"assets/rem-plugins/" + p.name: p.read_bytes() for p in pathlib.Path(assets).glob("*.apk")}
-if len(expected) != 3:
-    raise SystemExit("Expected exactly three plugin APKs")
+if len(expected) != 4:
+    raise SystemExit("Expected exactly four plugin APKs")
 for path, bundled in ((complete, True), (light, False)):
     with zipfile.ZipFile(path) as apk:
         names = {name for name in apk.namelist() if name.startswith("assets/rem-plugins/")}
@@ -95,7 +105,7 @@ for path, bundled in ((complete, True), (light, False)):
         if bundled and any(apk.read(name) != data for name, data in expected.items()):
             raise SystemExit("Bundled plugin bytes differ from standalone APKs")
 PY
-(cd "$work/release" && sha256sum *.apk > SHA256SUMS)
+(cd "$work/release" && sha256sum *.apk *.aab > SHA256SUMS)
 printf 'REM commit: %s\nLXMF commit: %s\nATN commit: %s\nREM signer SHA-256: %s\n' "$(git rev-parse HEAD)" "$lxmf_pin" "$ATN_COMMIT" "$host_fingerprint" > "$work/release/BUILD-INFO.txt"
 mv "$work/release" "$release"
 printf 'Offline release ready at %s\n' "$release"

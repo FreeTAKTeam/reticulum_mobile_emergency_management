@@ -17,11 +17,15 @@ public class BundledPluginExporterTest {
     public void requiresExactlyOneOfEachPlugin() throws Exception {
         BundledPluginExporter.validateAssets(new String[] {
             "ble-heart-rate-" + EMPTY_SHA + ".apk", "watch-status-" + EMPTY_SHA + ".apk",
-            "atn-rangefinder-" + EMPTY_SHA + ".apk"
+            "atn-rangefinder-" + EMPTY_SHA + ".apk", "gotenna-mesh-beta-" + EMPTY_SHA + ".apk"
         });
         assertThrows(IOException.class, () -> BundledPluginExporter.validateAssets(new String[] {
             "ble-heart-rate-" + EMPTY_SHA + ".apk", "watch-status-" + EMPTY_SHA + ".apk",
-            "watch-status-" + EMPTY_SHA + ".apk"
+            "watch-status-" + EMPTY_SHA + ".apk", "gotenna-mesh-beta-" + EMPTY_SHA + ".apk"
+        }));
+        assertThrows(IOException.class, () -> BundledPluginExporter.validateAssets(new String[] {
+            "ble-heart-rate-" + EMPTY_SHA + ".apk", "watch-status-" + EMPTY_SHA + ".apk",
+            "atn-rangefinder-" + EMPTY_SHA + ".apk"
         }));
     }
 

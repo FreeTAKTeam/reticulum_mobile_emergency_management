@@ -195,6 +195,15 @@ restore ignores the boot-count match that same-boot sticky restarts still
 require. Location access remains while-in-use, so a boot-restored node gets
 location only after the UI is opened.
 
+`More` → `Quit` confirms the operator's intent, then awaits the existing
+native stop operation before closing the Android activity. Stop disables plugins,
+stops the runtime, clears the desired-running flag used by boot/sticky restore,
+and removes the foreground notification. Closing the activity releases the UI's
+service binding so Android can destroy the stopped service and its resources.
+Stop failures leave the app open with a retryable error. Settings and history
+remain intact; reopening REM uses normal startup. In a browser, shutdown stops
+the runtime and leaves the tab open.
+
 ### Battery saver
 
 The Android foreground service observes battery percentage and charging state
