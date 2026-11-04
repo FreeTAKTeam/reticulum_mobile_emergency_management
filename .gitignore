@@ -25,6 +25,7 @@ apps/mobile/android/uniffi/
 apps/mobile/ios/uniffi/
 apps/mobile/android/ble-heart-rate-keystore.properties
 apps/mobile/android/watch-status-keystore.properties
+apps/mobile/android/gotenna-keystore.properties
 
 # Local REM infographic artifacts
 docs/rem-capability-infographic.pdf

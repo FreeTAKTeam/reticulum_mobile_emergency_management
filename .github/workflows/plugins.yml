@@ -8,6 +8,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  GOTENNA_RELAY_FIXTURE: ${{ github.workspace }}/rem/output/gotenna-relay.json
   # Generic custody storage; R3AKT classification is pinned by Cargo.toml.
   LXMF_RS_REF: ea30c23da03bc12ddd2b08aa9ac0a0763536f6f9
 
@@ -102,6 +103,8 @@ jobs:
             :plugin-test-fixture:assembleDebug \
             :ble-heart-rate-plugin:testDebugUnitTest \
             :ble-heart-rate-plugin:assembleDebug \
+            :gotenna-plugin:testDebugUnitTest \
+            :gotenna-plugin:assembleDebug \
             :watch-status-plugin:testDebugUnitTest \
             :watch-status-plugin:assembleDebug \
             :map-fixture-plugin:testDebugUnitTest \
@@ -139,3 +142,8 @@ jobs:
         with:
           name: rem-watch-status-plugin
           path: rem/plugins/watch-status/android/build/outputs/apk/debug/watch-status-plugin-debug.apk
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rem-gotenna-plugin
+          path: rem/plugins/gotenna/android/build/outputs/apk/debug/gotenna-plugin-debug.apk

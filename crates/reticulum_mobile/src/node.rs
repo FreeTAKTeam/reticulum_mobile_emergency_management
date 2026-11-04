@@ -330,6 +330,7 @@ include!("node/events_api.rs");
 include!("node/map_markers.rs");
 include!("node/map_marker_replication.rs");
 include!("node/plugin_map.rs");
+include!("node/plugin_relay.rs");
 include!("node/events_plugins_telemetry.rs");
 include!("node/telemetry_publication.rs");
 include!("node/event_replication.rs");
@@ -342,6 +343,7 @@ include!("node/event_subscription.rs");
 #[cfg(test)]
 mod tests {
     include!("node/tests/support.rs");
+    include!("node/tests/plugin_relay.rs");
     include!("node/tests/local_propagation.rs");
     include!("node/tests/checklist_contracts_checklist_create_online_args_match_support.rs");
     include!("node/tests/checklist_contracts_checklist_upload_snapshot_uses_compressed_.rs");

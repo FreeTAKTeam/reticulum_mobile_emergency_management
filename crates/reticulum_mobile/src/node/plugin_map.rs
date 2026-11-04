@@ -1,4 +1,13 @@
 impl Node {
+    pub(crate) fn poll_plugin_relay(
+        &self,
+        plugin_id: &str,
+        cursor: Option<u64>,
+        limit: usize,
+    ) -> Result<serde_json::Value, NodeError> {
+        self.with_app_state(|app_state, _| app_state.poll_plugin_relay(plugin_id, cursor, limit))
+    }
+
     pub(crate) fn record_plugin_map_marker(
         &self,
         plugin_id: &str,

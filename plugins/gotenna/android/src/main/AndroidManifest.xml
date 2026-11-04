@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <queries><package android:name="${remHostPackage}" /></queries>
+    <application android:label="REM goTenna Mesh" android:allowBackup="false" android:dataExtractionRules="@xml/data_extraction_rules" android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        <service android:name=".GoTennaPluginService" android:exported="true" android:foregroundServiceType="connectedDevice">
+            <intent-filter><action android:name="network.reticulum.emergency.PLUGIN_V1" /></intent-filter>
+            <meta-data android:name="rem.plugin.id" android:value="org.freetakteam.rem.plugin.gotenna" />
+            <meta-data android:name="rem.plugin.displayName" android:value="goTenna Mesh" />
+            <meta-data android:name="rem.plugin.version" android:value="0.2.0" />
+            <meta-data android:name="rem.plugin.apiMajor" android:value="1" />
+            <meta-data android:name="rem.plugin.apiMinor" android:value="5" />
+            <meta-data android:name="rem.plugin.capabilities" android:value="{&quot;communicationsRelay&quot;:true,&quot;eventsPublish&quot;:true,&quot;mapMarkersWrite&quot;:true,&quot;mapObserverRead&quot;:true,&quot;lxmfSend&quot;:true}" />
+            <meta-data android:name="rem.plugin.messages" android:value="[]" />
+            <meta-data android:name="rem.plugin.configurationEntrypoint" android:value="rem-plugin-config/index.html" />
+        </service>
+        <activity android:name=".PairingActivity" android:exported="true" />
+    </application>
+</manifest>

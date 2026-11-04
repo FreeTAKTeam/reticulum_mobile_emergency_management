@@ -6,7 +6,7 @@ import org.json.JSONObject;
 public final class PluginProtocol {
     public static final int API_MAJOR = 1;
     /** Newest API minor this SDK and the REM host understand. */
-    public static final int API_MINOR = 3;
+    public static final int API_MINOR = 5;
     /** First API minor with the map marker, symbol and observer operations. */
     public static final int MAP_API_MINOR = 2;
     /** First API minor with operator-selected map sessions and their events. */

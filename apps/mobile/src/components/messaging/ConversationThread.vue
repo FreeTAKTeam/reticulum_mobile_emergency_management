@@ -132,7 +132,13 @@ function custodyFor(message: MessageRecord): LocalPropagationRecord | undefined 
     ?? props.localPropagation?.[message.messageIdHex];
 }
 
-function messageStateLabel(state: string): string {
+function messageStateLabel(state: string, message: MessageRecord): string {
+  if (message.detail?.startsWith("external-relay:gotenna:") && message.detail.endsWith(":radio-accepted-unconfirmed")) {
+    return "Radio accepted · delivery unconfirmed";
+  }
+  if (message.detail?.startsWith("external-relay:gotenna:") && message.detail.endsWith(":radio-attempt-unconfirmed")) {
+    return "Radio attempt · outcome unconfirmed";
+  }
   const custodyLabels: Record<string, string> = {
     StoredLocally: "Stored locally", Uploading: "Uploading",
     UploadedUnverified: "Uploaded (unverified)", RelayHolds: "Relay holds message",
@@ -339,6 +345,7 @@ watch(
             targeted: message.messageIdHex === targetMessageId,
           }"
         >
+          <span v-if="message.direction === 'Inbound' && message.detail?.startsWith('external-relay:gotenna:')" class="relay-badge">goTenna · unverified sender</span>
           <span v-if="isSosMessage(message)" class="sos-badge">SOS EMERGENCY</span>
           <p v-if="message.title" class="bubble-title">{{ message.title }}</p>
           <p class="bubble-content">
@@ -367,7 +374,7 @@ watch(
             Open position on telemetry map
           </a>
           <div class="bubble-meta">
-            <span>{{ messageStateLabel(custodyFor(message)?.state ?? message.state) }}</span>
+            <span>{{ messageStateLabel(custodyFor(message)?.state ?? message.state, message) }}</span>
             <span>{{ new Date(message.receivedAtMs ?? message.sentAtMs ?? message.updatedAtMs).toLocaleTimeString() }}</span>
           </div>
           <p v-if="custodyFor(message)?.mayExistOnRelay" class="bubble-error" role="status">

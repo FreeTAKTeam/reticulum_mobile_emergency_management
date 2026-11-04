@@ -69,6 +69,7 @@ fn normalize_discovered_plugin(plugin: &mut DiscoveredPluginRecord) -> Result<()
 }
 
 fn intersect_capabilities(granted: &mut PluginCapabilityRecord, declared: &PluginCapabilityRecord) {
+    granted.communications_relay &= declared.communications_relay;
     granted.events_publish &= declared.events_publish;
     granted.sensors_publish &= declared.sensors_publish;
     granted.lxmf_send &= declared.lxmf_send;

@@ -920,3 +920,32 @@ delivery. Older native bridges without the snapshot explicitly report unavailabl
 status. UniFFI and LXMF wire contracts are unchanged. Host tests prove the direct
 application flow and state transitions; physical RNode/LoRa qualification uses the
 exact signed candidate and remains a separate release gate.
+
+## goTenna Mesh plugin bridge
+
+`plugins/gotenna` is a separate Mesh BLE application bridge. API 1.5's explicit
+`communicationsRelay` grant covers addressed chat and a bounded ingress feed;
+`eventsPublish` additionally gates native event import, and `lxmfSend` gates
+forwarding chat to a nonlocal carried recipient. Existing plugin-addressed
+`lxmfReceive` semantics remain unchanged.
+
+Every REM1 chat fragment contains its destination hash, reported source and
+stable ID. Local admission goes through the internal runtime import command and
+existing message/cache/projection path into normal REM conversations. The native
+host forces unverified Mesh provenance; the UI shows it. Nonlocal admission uses
+the compiled LXMF send path under the gateway identity, preserving the carried
+recipient and labeling the report. There is no plugin inbox or fixed recipient.
+Radio acceptance is recorded as delivery unconfirmed.
+
+The feed uses actual LXMF wire recipient hashes, not the inbound record's
+correspondent field. Event persistence journals canonical MECP codes for local
+and received events. Mesh event admission uses gateway attribution and stable
+source-scoped `gotenna-` UIDs, retained across native replication and excluded
+from re-export. Forwarded chat retains a goTenna origin marker, excluded from
+ordinary inbound text relay. Namespace IDs cannot overwrite native messages.
+
+The plugin persists bounded partial assemblies before radio acknowledgement and
+keeps a completed native admission in durable pending custody. These are internal
+transport records, not another chat store. Position import continues through the
+shared native map service. No UniFFI schema/bindings or LXMF protocol are recreated.
+See [the plugin contract and limits](../plugins/gotenna/README.md).

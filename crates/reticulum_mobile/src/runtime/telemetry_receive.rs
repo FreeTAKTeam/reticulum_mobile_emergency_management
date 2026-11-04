@@ -180,6 +180,13 @@ async fn persist_received_telemetry_if_present(
         Ok(None) => return false,
         Ok(Some(record)) => match state.app_state.record_local_telemetry_fix(&record) {
             Ok(invalidation) => {
+                if let Some(source) = source_hex {
+                    let key = format!("{}:{}", record.callsign, record.updated_at_ms);
+                    if let Err(error) = state.app_state.record_relay_ingress("position", source, &key,
+                        &serde_json::json!({"callsign":record.callsign,"lat":record.lat,"lon":record.lon,"updatedAtMs":record.updated_at_ms})) {
+                        warn!("[plugin-relay] position not queued: {error}");
+                    }
+                }
                 bus.emit(NodeEvent::ProjectionInvalidated { invalidation });
                 if let Ok(invalidation) = state.app_state.bump_projection_revision(
                     ProjectionScope::OperationalSummary {},

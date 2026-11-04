@@ -14,6 +14,7 @@ export function pluginRecord(value: unknown): Record<string, unknown> {
 export function toPluginCapabilities(value: unknown): PluginCapabilityRecord {
   const raw = pluginRecord(value);
   return {
+    communicationsRelay: Boolean(raw.communicationsRelay ?? raw.communications_relay),
     eventsPublish: Boolean(raw.eventsPublish ?? raw.events_publish),
     sensorsPublish: Boolean(raw.sensorsPublish ?? raw.sensors_publish),
     lxmfSend: Boolean(raw.lxmfSend ?? raw.lxmf_send),

@@ -469,3 +469,9 @@
     width: 2.15rem;
   }
 }
+
+.relay-badge {
+  color: var(--color-warning, #e8bd77);
+  font-size: 0.75rem;
+  font-weight: 600;
+}

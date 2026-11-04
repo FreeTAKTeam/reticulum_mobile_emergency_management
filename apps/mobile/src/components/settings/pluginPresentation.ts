@@ -5,6 +5,7 @@ export const PLUGIN_CAPABILITY_DEFINITIONS: Array<{
   key: keyof PluginCapabilityRecord;
   label: string;
 }> = [
+  { key: "communicationsRelay", label: "Bridge addressed chat, event codes and positions" },
   { key: "eventsPublish", label: "Publish events" },
   { key: "sensorsPublish", label: "Publish sensors" },
   { key: "lxmfSend", label: "Send LXMF" },

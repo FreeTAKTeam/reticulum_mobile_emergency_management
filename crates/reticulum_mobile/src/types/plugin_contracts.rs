@@ -13,6 +13,9 @@ pub struct TelemetryPositionRecord {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginCapabilityRecord {
+    /// API 1.5: explicitly allow public bridging of incoming text and positions.
+    #[serde(default)]
+    pub communications_relay: bool,
     #[serde(default)]
     pub events_publish: bool,
     #[serde(default)]
@@ -46,7 +49,8 @@ pub struct PluginCapabilityRecord {
 
 impl PluginCapabilityRecord {
     pub fn is_subset_of(&self, declared: &Self) -> bool {
-        (!self.events_publish || declared.events_publish)
+        (!self.communications_relay || declared.communications_relay)
+            && (!self.events_publish || declared.events_publish)
             && (!self.sensors_publish || declared.sensors_publish)
             && (!self.lxmf_send || declared.lxmf_send)
             && (!self.lxmf_receive || declared.lxmf_receive)

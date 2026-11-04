@@ -1,0 +1,29 @@
+:root { color-scheme: dark; font-family: system-ui, sans-serif; background: #111c1b; color: #ecf2e6; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+main { max-width: 44rem; margin: auto; padding: 1.5rem 1.15rem 3rem; }
+header { border-left: 3px solid #d5e56c; padding-left: 1rem; margin: 1rem 0 2rem; }
+.eyebrow, h2 { font: 600 .75rem ui-monospace, monospace; letter-spacing: .12em; color: #d5e56c; }
+h1 { font-size: clamp(2rem, 8vw, 3rem); letter-spacing: -.05em; margin: .5rem 0; }
+.intro { color: #c0cbbb; }
+section { padding: 1.3rem 0; border-top: 1px solid #3b4b43; }
+h2 { margin: 0 0 1.25rem; }
+h2 span { color: #ecf2e6; font: 650 1.1rem system-ui, sans-serif; letter-spacing: -.02em; margin-left: .75rem; }
+label { display: block; font-weight: 650; margin: 1rem 0 .45rem; }
+small { display: block; font-weight: 400; color: #bdcabb; margin-top: .2rem; }
+input, textarea { width: 100%; border: 1px solid #607263; border-radius: .35rem; background: #192722; color: inherit; padding: .8rem; font: inherit; min-height: 2.75rem; }
+textarea { resize: vertical; }
+.check { display: flex; gap: .75rem; align-items: center; }
+.check input { width: 1.25rem; min-height: 1.25rem; accent-color: #d5e56c; }
+.actions { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: 1rem; }
+button { min-height: 2.75rem; border: 1px solid #71816e; border-radius: .35rem; background: #25392e; color: inherit; padding: .7rem .95rem; font: 650 .9rem system-ui, sans-serif; cursor: pointer; }
+button.primary { width: 100%; background: #d5e56c; color: #172217; border-color: #d5e56c; }
+button:disabled { opacity: .5; cursor: wait; }
+button:active { transform: translateY(1px); }
+:focus-visible { outline: 3px solid #d5e56c; outline-offset: 3px; }
+.hint, .disclosure { font-size: .85rem; line-height: 1.6; color: #bdcabb; }
+.disclosure { padding: .9rem; border-left: 2px solid #d9b574; background: #282b1d; color: #ebd6b3; }
+#connection { font-family: ui-monospace, monospace; font-size: .9rem; color: #d5e56c; overflow-wrap: anywhere; }
+#status { position: sticky; bottom: 0; background: #111c1b; border-top: 1px solid #607263; padding: .9rem 0; font-size: .9rem; overflow-wrap: anywhere; }
+ol { padding: 0; list-style: none; }
+li { padding: .8rem 0; border-top: 1px solid #304137; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .9rem; line-height: 1.5; }
