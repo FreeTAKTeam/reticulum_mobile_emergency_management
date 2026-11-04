@@ -249,6 +249,8 @@ pub struct StoredOutboundMessage {
 #[derive(Debug, Clone)]
 pub struct MessagingStore {
     announce_records: HashMap<String, AnnounceRecord>,
+    announced_destination_by_identity: HashMap<(String, String), String>,
+    mission_announce_destinations: HashSet<String>,
     resolved_app_destination_by_identity: HashMap<String, String>,
     resolved_app_identity_by_destination: HashMap<String, String>,
     resolved_lxmf_by_identity: HashMap<String, String>,
@@ -300,6 +302,7 @@ mod tests {
     include!("messaging_compat/tests/messages.rs");
     include!("messaging_compat/tests/capabilities.rs");
     include!("messaging_compat/tests/announces.rs");
+    include!("messaging_compat/tests/announce_index.rs");
     include!("messaging_compat/tests/saved_peers.rs");
     include!("messaging_compat/tests/peers.rs");
 }

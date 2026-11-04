@@ -2,6 +2,8 @@ impl MessagingStore {
     pub fn new(stale_after_minutes: u32) -> Self {
         Self {
             announce_records: HashMap::new(),
+            announced_destination_by_identity: HashMap::new(),
+            mission_announce_destinations: HashSet::new(),
             resolved_app_destination_by_identity: HashMap::new(),
             resolved_app_identity_by_destination: HashMap::new(),
             resolved_lxmf_by_identity: HashMap::new(),
@@ -38,27 +40,27 @@ impl MessagingStore {
         identity_hex: &str,
         destination_hex: &str,
     ) {
-        let identity_hex = normalize_hex(identity_hex);
-        if identity_hex.is_empty() {
-            return;
+        // Resolution mappings can change before an announce; index received records separately.
+        if let Some(previous) = self.announced_destination_by_identity.insert(
+            (destination_kind.to_owned(), identity_hex.to_owned()),
+            destination_hex.to_owned(),
+        ) {
+            if previous != destination_hex {
+                self.announce_records.remove(&previous);
+                self.mission_announce_destinations.remove(&previous);
+            }
         }
+    }
 
-        let destination_hex = normalize_hex(destination_hex);
-        let replaced_destinations = self
-            .announce_records
-            .iter()
-            .filter(|(candidate_destination_hex, record)| {
-                record.destination_kind == destination_kind
-                    && normalize_hex(record.identity_hex.as_str()) == identity_hex
-                    && *candidate_destination_hex != &destination_hex
+    fn announced_or_resolved_destination(&self, kind: &str, identity: &str) -> Option<&String> {
+        let identity = normalize_hex(identity);
+        self.announced_destination_by_identity
+            .get(&(kind.to_owned(), identity.clone()))
+            .or_else(|| match kind {
+                "app" => self.resolved_app_destination_by_identity.get(&identity),
+                "lxmf_delivery" => self.resolved_lxmf_by_identity.get(&identity),
+                _ => None,
             })
-            .map(|(candidate_destination_hex, _)| candidate_destination_hex.clone())
-            .collect::<Vec<_>>();
-
-        for replaced_destination_hex in replaced_destinations {
-            self.announce_records
-                .remove(replaced_destination_hex.as_str());
-        }
     }
 
     pub fn conversation_id_for(destination_hex: &str) -> String {
@@ -68,8 +70,6 @@ impl MessagingStore {
     pub fn record_announce(&mut self, mut record: AnnounceRecord) {
         let destination_hex = normalize_hex(record.destination_hex.as_str());
         let identity_hex = normalize_hex(record.identity_hex.as_str());
-        let destination_kind = record.destination_kind.clone();
-        let received_at_ms = record.received_at_ms;
         if let Some(existing) = self.announce_records.get(destination_hex.as_str()) {
             if existing.received_at_ms > record.received_at_ms {
                 return;
@@ -83,6 +83,11 @@ impl MessagingStore {
                 if record.display_name.is_none() {
                     record.display_name = existing.display_name.clone();
                 }
+            } else {
+                self.announced_destination_by_identity.remove(&(
+                    existing.destination_kind.clone(),
+                    normalize_hex(existing.identity_hex.as_str()),
+                ));
             }
         }
         if !destination_hex.is_empty() && !identity_hex.is_empty() {
@@ -94,15 +99,8 @@ impl MessagingStore {
                     destination_hex.as_str(),
                 );
             } else if record.destination_kind == "lxmf_delivery" {
-                if let Some(previous_destination_hex) = self
-                    .resolved_lxmf_by_identity
-                    .insert(identity_hex.clone(), destination_hex.clone())
-                {
-                    if previous_destination_hex != destination_hex {
-                        self.announce_records
-                            .remove(previous_destination_hex.as_str());
-                    }
-                }
+                self.resolved_lxmf_by_identity
+                    .insert(identity_hex.clone(), destination_hex.clone());
                 self.replace_announce_for_identity(
                     "lxmf_delivery",
                     identity_hex.as_str(),
@@ -110,16 +108,24 @@ impl MessagingStore {
                 );
             }
         }
+        if record.destination_kind == "lxmf_delivery"
+            && supports_mission_traffic(Some(record.app_data.as_str()))
+        {
+            self.mission_announce_destinations
+                .insert(destination_hex.clone());
+        } else {
+            self.mission_announce_destinations.remove(&destination_hex);
+        }
         self.announce_records.insert(destination_hex, record);
-
-        let _ = destination_kind;
-        let _ = received_at_ms;
     }
 
     pub fn list_announces(&self) -> Vec<AnnounceRecord> {
-        let mut records = self.announce_records.values().cloned().collect::<Vec<_>>();
+        let mut records = self.iter_announces().cloned().collect::<Vec<_>>();
         records.sort_by_key(|record| std::cmp::Reverse(record.received_at_ms));
         records
     }
 
+    pub fn iter_announces(&self) -> impl Iterator<Item = &AnnounceRecord> {
+        self.announce_records.values()
+    }
 }

@@ -198,25 +198,24 @@ async fn run_propagation_sync_job(
 }
 
 async fn sync_auto_propagation_node(state: &NodeRuntimeState, bus: &EventBus) {
-    let announces = {
-        let messaging = state.messaging.lock().await;
-        messaging.list_announces()
-    };
     let current_destination = state.active_propagation_node_hex.lock().await.clone();
     // This helper only selects the relay. Automatic polling remains gated in
     // `spawn_propagation_maintenance_task`; explicit sync must still select a
     // relay when an RNode is the only active transport.
-    let desired_destination = announces
-        .iter()
-        .filter(|record| record.destination_kind == "lxmf_propagation")
-        .min_by_key(|record| {
-            propagation_candidate_sort_key(
-                record,
-                state.preferred_propagation_node_hex.as_deref(),
-                current_destination.as_deref(),
-            )
-        })
-        .map(|record| record.destination_hex.clone());
+    let desired_destination = {
+        let messaging = state.messaging.lock().await;
+        messaging
+            .iter_announces()
+            .filter(|record| record.destination_kind == "lxmf_propagation")
+            .min_by_key(|record| {
+                propagation_candidate_sort_key(
+                    record,
+                    state.preferred_propagation_node_hex.as_deref(),
+                    current_destination.as_deref(),
+                )
+            })
+            .map(|record| record.destination_hex.clone())
+    };
 
     let mut active_guard = state.active_propagation_node_hex.lock().await;
     if *active_guard == desired_destination {

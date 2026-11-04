@@ -1,59 +1,25 @@
 impl MessagingStore {
     pub fn list_peers(&self) -> Vec<PeerRecord> {
         let now_ms = current_time_ms();
-        let mut app_dest_by_identity = HashMap::<String, String>::new();
-        let mut lxmf_dest_by_identity = HashMap::<String, String>::new();
-        let mut app_records = HashMap::<String, AnnounceRecord>::new();
-        let mut lxmf_records = HashMap::<String, AnnounceRecord>::new();
-
-        for record in self.announce_records.values() {
-            if record.destination_kind == "app" {
-                app_dest_by_identity
-                    .insert(record.identity_hex.clone(), record.destination_hex.clone());
-                app_records.insert(record.destination_hex.clone(), record.clone());
-            } else if record.destination_kind == "lxmf_delivery" {
-                lxmf_dest_by_identity
-                    .insert(record.identity_hex.clone(), record.destination_hex.clone());
-                lxmf_records.insert(record.destination_hex.clone(), record.clone());
-            }
-        }
-
-        for (identity_hex, destination_hex) in &self.resolved_app_destination_by_identity {
-            app_dest_by_identity
-                .entry(identity_hex.clone())
-                .or_insert_with(|| destination_hex.clone());
-        }
-
-        for (identity_hex, lxmf_destination_hex) in &self.resolved_lxmf_by_identity {
-            lxmf_dest_by_identity
-                .entry(identity_hex.clone())
-                .or_insert_with(|| lxmf_destination_hex.clone());
-        }
-
-        let mut candidate_destinations = HashSet::<String>::new();
-        candidate_destinations.extend(
-            lxmf_records
-                .iter()
-                .filter(|(_, record)| supports_mission_traffic(Some(record.app_data.as_str())))
-                .map(|(destination_hex, _)| destination_hex.clone()),
-        );
+        let mut candidate_destinations = self.mission_announce_destinations.clone();
         for saved_destination in &self.saved_destinations {
             let saved_profile = self.saved_profile_for_destination(saved_destination);
-            let canonical_destination = app_records
+            let canonical_destination = self
+                .announce_records
                 .get(saved_destination)
+                .filter(|record| record.destination_kind == "app")
                 .map(|record| record.identity_hex.as_str())
                 .or_else(|| {
                     self.resolved_app_identity_by_destination
                         .get(saved_destination)
                         .map(String::as_str)
                 })
-                .and_then(|identity| lxmf_dest_by_identity.get(identity))
-                .filter(|lxmf_destination| {
-                    lxmf_records
-                        .get(lxmf_destination.as_str())
-                        .is_some_and(|record| {
-                            supports_mission_traffic(Some(record.app_data.as_str()))
-                        })
+                .and_then(|identity| {
+                    self.announced_or_resolved_destination("lxmf_delivery", identity)
+                })
+                .filter(|destination| {
+                    self.mission_announce_destinations
+                        .contains(destination.as_str())
                 })
                 .cloned()
                 .or_else(|| {
@@ -71,16 +37,18 @@ impl MessagingStore {
             if !projected_destinations.insert(destination_hex.clone()) {
                 continue;
             }
-            let lxmf_record = lxmf_records
-                .get(&destination_hex)
-                .filter(|record| supports_mission_traffic(Some(record.app_data.as_str())));
+            let lxmf_record = self.announce_records.get(&destination_hex).filter(|_| {
+                self.mission_announce_destinations
+                    .contains(&destination_hex)
+            });
             let saved_profile = self.saved_profile_for_destination(destination_hex.as_str());
             let identity_hex = lxmf_record
                 .map(|record| record.identity_hex.clone())
                 .or_else(|| saved_profile.and_then(|profile| profile.identity_hex.clone()))
                 .or_else(|| {
-                    app_records
+                    self.announce_records
                         .get(&destination_hex)
+                        .filter(|record| record.destination_kind == "app")
                         .map(|record| record.identity_hex.clone())
                 })
                 .or_else(|| {
@@ -90,19 +58,21 @@ impl MessagingStore {
                 });
             let app_record = identity_hex
                 .as_ref()
-                .and_then(|identity| app_dest_by_identity.get(identity))
-                .and_then(|value| app_records.get(value));
+                .and_then(|identity| self.announced_or_resolved_destination("app", identity))
+                .and_then(|value| self.announce_records.get(value))
+                .filter(|record| record.destination_kind == "app");
             let lxmf_destination_hex = lxmf_record
                 .map(|record| record.destination_hex.clone())
                 .or_else(|| {
-                    identity_hex
-                        .as_ref()
-                        .and_then(|identity| lxmf_dest_by_identity.get(identity).cloned())
+                    identity_hex.as_ref().and_then(|identity| {
+                        self.announced_or_resolved_destination("lxmf_delivery", identity)
+                            .cloned()
+                    })
                 })
                 .or_else(|| saved_profile.and_then(|profile| profile.lxmf_destination_hex.clone()));
             let app_alias_destination = identity_hex
                 .as_ref()
-                .and_then(|identity| app_dest_by_identity.get(identity))
+                .and_then(|identity| self.announced_or_resolved_destination("app", identity))
                 .or_else(|| saved_profile.map(|profile| &profile.destination_hex));
             let saved_alias = app_alias_destination.is_some_and(|app_destination| {
                 self.saved_destinations.contains(app_destination.as_str())
@@ -115,7 +85,9 @@ impl MessagingStore {
                 .or_else(|| {
                     identity_hex
                         .as_ref()
-                        .and_then(|identity| app_dest_by_identity.get(identity))
+                        .and_then(|identity| {
+                            self.announced_or_resolved_destination("app", identity)
+                        })
                         .and_then(|app_destination| {
                             self.last_resolution_errors.get(app_destination).cloned()
                         })
@@ -233,5 +205,4 @@ impl MessagingStore {
         self.peer_by_destination(destination_hex)
             .map(peer_change_from_record)
     }
-
 }
