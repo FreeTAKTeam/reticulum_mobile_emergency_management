@@ -95,7 +95,7 @@ async fn conversation_records_snapshot(state: &NodeRuntimeState) -> Vec<Conversa
 }
 
 pub enum Command {
-    ImportRelayChat { plugin_id: String, record: MessageRecord, resp: cb::Sender<Result<(), NodeError>> },
+    ImportRelayChat { plugin_id: String, record: Box<MessageRecord>, resp: cb::Sender<Result<(), NodeError>> },
     ListLocalPropagation {resp: cb::Sender<Result<Vec<crate::types::LocalPropagationRecord>,NodeError>>},
     Stop {
         resp: cb::Sender<Result<(), NodeError>>,

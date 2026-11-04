@@ -7,7 +7,7 @@
         };
         match cmd {
             Command::ImportRelayChat { plugin_id, record, resp } => {
-                let result = import_relay_chat(&state, &bus, &plugin_id, record).await;
+                let result = import_relay_chat(&state, &bus, &plugin_id, *record).await;
                 let _ = resp.send(result);
             }
 

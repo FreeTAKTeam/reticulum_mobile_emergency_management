@@ -199,7 +199,7 @@ impl Node {
             &tx,
             Command::ImportRelayChat {
                 plugin_id: plugin_id.to_string(),
-                record,
+                record: Box::new(record),
                 resp,
             },
         )?;
