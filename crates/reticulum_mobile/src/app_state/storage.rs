@@ -160,6 +160,19 @@ impl AppStateStore {
                     revision INTEGER NOT NULL,
                     updated_at_ms INTEGER NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS plugin_relay_deliveries (
+                    plugin_id TEXT NOT NULL,
+                    delivery_id TEXT NOT NULL,
+                    PRIMARY KEY(plugin_id, delivery_id)
+                );
+                CREATE TABLE IF NOT EXISTS plugin_relay_ingress (
+                    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                    id TEXT NOT NULL UNIQUE,
+                    kind TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    received_at_ms INTEGER NOT NULL,
+                    payload TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS plugin_map_markers (
                     plugin_id TEXT NOT NULL,
                     object_destination_hash TEXT NOT NULL,

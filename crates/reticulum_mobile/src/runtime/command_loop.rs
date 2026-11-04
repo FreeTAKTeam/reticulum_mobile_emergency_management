@@ -6,6 +6,11 @@
             else => break,
         };
         match cmd {
+            Command::ImportRelayChat { plugin_id, record, resp } => {
+                let result = import_relay_chat(&state, &bus, &plugin_id, record).await;
+                let _ = resp.send(result);
+            }
+
             Command::ListLocalPropagation {resp} => {
                 let result = if state.sdk.local_propagation_init_failed { Err(NodeError::IoError {}) }
                     else { publish_local_custody(&state,&bus).await.and_then(|()|state.projection_journal.local_propagation()) };

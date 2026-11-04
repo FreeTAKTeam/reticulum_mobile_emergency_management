@@ -92,6 +92,7 @@ export type PluginState =
   | "Missing";
 
 export interface PluginCapabilityRecord {
+  communicationsRelay?: boolean;
   eventsPublish: boolean;
   sensorsPublish: boolean;
   lxmfSend: boolean;

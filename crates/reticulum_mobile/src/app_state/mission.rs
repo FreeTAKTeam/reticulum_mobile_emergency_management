@@ -160,6 +160,9 @@ impl AppStateStore {
             Some("event-upserted".to_string()),
         )?;
         transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
+        if let Err(error) = self.record_relay_event(&normalized) {
+            log::warn!("[plugin-relay] event code not queued: {error}");
+        }
         Ok(invalidation)
     }
 

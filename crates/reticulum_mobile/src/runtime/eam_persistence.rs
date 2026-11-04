@@ -124,7 +124,7 @@ async fn persist_received_eam_if_present(
     }
 }
 
-fn expand_event_wire_content(content: &str) -> String {
+pub(crate) fn expand_event_wire_content(content: &str) -> String {
     let trimmed = content.trim();
     if trimmed.is_empty() || trimmed.starts_with("MECP/") {
         return trimmed.to_string();

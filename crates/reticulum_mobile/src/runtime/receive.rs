@@ -94,6 +94,7 @@ async fn emit_received_payload(
                 let persisted_marker = persist_received_map_marker_if_present(
                     &state.app_state,
                     bus,
+                    source_hex.as_deref(),
                     Some(metadata),
                     fields_bytes.as_deref(),
                 );
@@ -235,7 +236,17 @@ async fn emit_received_payload(
                         received_at_ms: Some(now_ms()),
                         updated_at_ms: now_ms(),
                     };
-                    upsert_message_record(state, bus, record, true).await;
+                    if upsert_message_record(state, bus, record, true).await
+                        && !body_utf8.starts_with("[REM:") && !body_utf8.starts_with("[goTenna:")
+                        && fields_bytes.as_deref().is_none_or(|fields| matches!(crate::plugin_runtime::plugin_id_from_fields(fields), Ok(None)))
+                    {
+                        if let Some(source) = source_hex.as_deref() {
+                            if let Err(error) = state.app_state.record_relay_ingress("text", source, &message_id_hex,
+                                &serde_json::json!({"messageId":message_id_hex,"text":body_utf8,"destinationHex":message.destination_hash.map(hex::encode)})) {
+                                warn!("[plugin-relay] text not queued: {error}");
+                            }
+                        }
+                    }
                     send_chat_delivery_ack_if_needed(
                         state,
                         bus,

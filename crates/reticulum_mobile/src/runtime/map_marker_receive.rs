@@ -44,6 +44,7 @@ fn apply_map_marker_event(
 fn persist_received_map_marker_if_present(
     app_state: &AppStateStore,
     bus: &EventBus,
+    source: Option<&str>,
     metadata: Option<&MissionSyncMetadata>,
     fields_bytes: Option<&[u8]>,
 ) -> bool {
@@ -55,6 +56,16 @@ fn persist_received_map_marker_if_present(
         match apply_map_marker_event(app_state, &event_type, &payload) {
             Ok(Some(invalidation)) => {
                 crate::node::emit_map_marker_invalidation(app_state, bus, invalidation);
+                if let (Some(source), Some(marker)) = (source, r3akt_map_core::replica::replica_id(&payload).ok().and_then(|id| app_state.get_map_marker(&id).ok().flatten())) {
+                    let imported = marker.notes.as_deref().is_some_and(|notes| notes.starts_with("[goTenna:") || notes.starts_with("[REM:"));
+                    if !imported && event_type != r3akt_map_core::replica::DELETE_EVENT {
+                        let key = format!("marker:{}:{}", marker.object_destination_hash, marker.updated_at_ms);
+                        if let Err(error) = app_state.record_relay_ingress("position", source, &key,
+                            &serde_json::json!({"callsign":marker.name,"lat":marker.lat,"lon":marker.lon,"updatedAtMs":marker.updated_at_ms})) {
+                            warn!("[plugin-relay] marker not queued: {error}");
+                        }
+                    }
+                }
                 applied = true;
             }
             Ok(None) => applied = true,

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>goTenna Mesh · REM</title>
+  <link rel="stylesheet" href="config.css">
+  <script src="config.js" defer></script>
+</head>
+<body><main>
+  <header><p class="eyebrow">REM / FIELD BRIDGE</p><h1>goTenna Mesh</h1><p class="intro">Text and positions across your networks.</p></header>
+  <section aria-labelledby="radio-heading">
+    <h2 id="radio-heading">01 <span>Your radio</span></h2>
+    <p id="device">Not paired</p><p id="connection">Waiting for REM…</p>
+    <div class="actions"><button id="pair" type="button">Pair radio</button><button id="connect" type="button">Connect</button><button id="disconnect" type="button">Disconnect</button></div>
+    <p class="hint">Mesh over Bluetooth. Close other goTenna apps before connecting. Incoming messages are saved before the radio queue advances.</p>
+  </section>
+  <form id="settings">
+    <section aria-labelledby="identity-heading">
+      <h2 id="identity-heading">02 <span>Gateway identity</span></h2>
+      <label for="gid">Your goTenna GID <small>12 hexadecimal digits</small></label><input id="gid" name="gid" maxlength="12" pattern="[0-9a-fA-F]{12}" autocomplete="off" placeholder="c0de12345678">
+      <label for="nickname">Radio nickname</label><input id="nickname" name="nickname" value="REM" maxlength="32" autocomplete="off">
+      <p class="hint">Use an identity you control. This plugin does not provision or reset the radio’s identity.</p>
+    </section>
+    <section aria-labelledby="relay-heading">
+      <h2 id="relay-heading">03 <span>Bridge direction</span></h2>
+      <label class="check"><input id="relay" type="checkbox"><span>REM → public goTenna</span></label>
+      <p class="disclosure">REM chat, event codes and positions will be sent as <strong>public, unencrypted Shouts</strong>, including text received privately through other REM interfaces. Requires REM’s relay grant. Each chat carries its recipient hash. Addressing does not encrypt the radio traffic. Only new traffic is forwarded after connection or enabling.</p>
+      <p class="hint">Addressed chat appears in REM’s normal conversations. Events enter REM’s event timeline using their MECP code. Mesh sender claims are marked unverified.</p>
+      <button class="primary" type="submit">Save bridge settings</button>
+    </section>
+  </form>
+  <section aria-labelledby="send-heading">
+    <h2 id="send-heading">04 <span>Send addressed chat</span></h2>
+    <label for="destination">Recipient LXMF destination <small>Required for each chat · 32 hexadecimal digits</small></label><input id="destination" maxlength="32" pattern="[0-9a-fA-F]{32}" autocomplete="off" placeholder="Recipient’s REM destination hash">
+    <label for="text">Message <small>Up to 180 UTF-8 bytes</small></label><textarea id="text" rows="3" placeholder="Message to this person"></textarea>
+    <div class="actions"><button id="sendText" type="button">Send chat</button><button id="sendPosition" type="button">Send my position</button></div>
+    <p class="hint">Position uses REM’s current local fix. Radio acceptance does not confirm recipient delivery.</p>
+  </section>
+
+  <p id="status" role="status" aria-live="polite">Waiting for the secure REM configuration connection.</p>
+</main></body>
+</html>

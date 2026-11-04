@@ -44,7 +44,7 @@ fn node(name: &str) -> Node {
         (RANGEFINDER, 3),
         (OTHER, 3),
         (LEGACY, 2),
-        ("org.example.future", 4),
+        ("org.example.future", 6),
     ];
     node.sync_discovered_plugins(
         plugins
@@ -306,7 +306,7 @@ fn session_operations_negotiate_api_1_3_and_capability() {
         .expect("future plugin");
     assert_eq!(
         future.state, "Incompatible",
-        "API 1.4 is newer than this host"
+        "API 1.6 is newer than this host"
     );
     assert!(node
         .start_plugin_map_session("org.example.future", &[marker])

@@ -271,3 +271,53 @@ and equality of bundled and standalone APK bytes before writing `output/offline-
 It does not publish, install, or verify real hardware. Android version codes must increase for
 updates, and all plugin signing keys must remain consistent across releases. REM host fingerprints
 are derived from the actual signed light APK and applied to all plugin builds.
+
+## Communication relay (1.5)
+
+The experimental [goTenna Mesh plugin](../../plugins/gotenna/README.md) uses the
+explicit `communicationsRelay` grant. It bridges addressed chat and exposes new
+received REM text, canonical MECP event codes and remote telemetry/map positions.
+The operator separately enables default-off public radio forwarding. Recipient
+hashes provide application addressing; radio Shouts remain unencrypted.
+
+`relay.poll {cursor?,limit?}` (limit 1–16) returns `{items,cursor,gap}`. Omitted
+cursor establishes the current head without history. Items are
+`{sequence,id,kind,source,receivedAtMs,payload}` with monotonic local sequence,
+stable ID, native source and local receive time. Payloads are:
+
+- `text`: `{messageId,destinationHex,text}`; recipient comes from LXMF wire, not the conversation correspondent.
+- `event`: `{uid,code}`; canonical full MECP code, such as `MECP/2/P01`.
+- `position`: `{callsign,lat,lon,updatedAtMs}`.
+
+The feed retains at most 2,048 entries, reports cursor gaps and bounds responses
+below 64 KiB. Every request rechecks current trust, installation/compatibility,
+enablement and declared/granted capability.
+
+`relay.identity {}` returns `{destinationHex}` for the running native node.
+`relay.chat.accept`, `relay.chat.pending` and `relay.chat.sent` take
+`{id,sourceHex,destinationHex,text,radioGid}`. IDs/hashes contain 32 lowercase hex
+digits and GIDs 12; text is bounded to 4,096 UTF-8 bytes. Both chat operations
+require the communication-relay grant. The native host forces the local source
+for outgoing admission, records an unconfirmed attempt before radio submission, and advances it to radio-accepted/unconfirmed via `sent`. It uses an
+internal runtime command so normal chat caches/projections remain consistent.
+
+`accept` routes only a matching local destination into normal conversations,
+with native-forced unverified goTenna provenance. A nonlocal recipient also
+requires declared/granted `lxmfSend` (otherwise `RecipientNotLocal` means ignore
+this reception, not display it locally) and uses compiled LXMF under gateway
+identity. Accepted result is `{accepted,messageId?,local?,duplicate?,forwardedMessageId?}`.
+A prior unresolved forwarding claim returns `SubmissionUnconfirmed`; it is never
+silently retried or reported as an accepted duplicate. Stable native namespaces
+and durable forwarding outcomes own deduplication, not caller-selected native IDs.
+
+`relay.event.accept` takes the same fields with `destinationHex:"-"` and `text`
+containing the MECP code. It additionally requires `eventsPublish`. The native
+runtime forces gateway identity/unverified display attribution, scopes imported
+UIDs to plugin/reported-source/event-ID and uses normal event persistence and
+replication. Responses use the existing typed error envelope. These operations
+add no public UniFFI or generated-binding contract.
+
+Received raw bytes, bounded fragment snapshots and pending admissions are only
+internal custody. A separate pending-sent receipt survives native recording failures without retransmitting the radio message. Terminal `InvalidRequest` is rejected visibly and does not block later receptions. The operator reads chat in normal REM conversations and events
+in the native event timeline. The APK is independently built and is not yet in
+the existing offline release bundle.

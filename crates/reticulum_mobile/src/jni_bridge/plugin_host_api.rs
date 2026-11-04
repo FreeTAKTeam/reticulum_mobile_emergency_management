@@ -57,12 +57,17 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_handlePl
         }
     };
     let node = ensure_node_or_return!(&mut guard);
-    let map_result = handle_plugin_map_operation(
+    let map_result = handle_plugin_relay_operation(
         &node,
         input.plugin_id.as_str(),
         input.operation.as_str(),
         &input.payload,
-    );
+    ).or_else(|| handle_plugin_map_operation(
+        &node,
+        input.plugin_id.as_str(),
+        input.operation.as_str(),
+        &input.payload,
+    ));
     let response = if let Some(map_result) = map_result {
         plugin_map_response_json(input.request_id.as_str(), map_result)
     } else {

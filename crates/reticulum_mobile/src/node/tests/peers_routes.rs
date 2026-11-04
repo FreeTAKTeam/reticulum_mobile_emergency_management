@@ -256,6 +256,7 @@ async fn send_chat_message_is_received_by_peer() {
             circle_tier: CircleTier::Inner {},
         }])
         .expect("save Inner Circle chat peer");
+    let (relay_plugin, relay_cursor) = enable_test_communications_relay(&node_b);
     let body = "chat: hello from node a";
     let subscription = node_b.subscribe_events();
     let sender_subscription = node_a.subscribe_events();
@@ -299,6 +300,11 @@ async fn send_chat_message_is_received_by_peer() {
         "received LXMF chat should be persisted in the canonical peer thread"
     );
 
+    let forwarded = node_b.poll_plugin_relay(&relay_plugin, Some(relay_cursor), 16).unwrap();
+    assert!(forwarded["items"].as_array().unwrap().iter().any(|item|
+        item["kind"] == "text" && item["payload"]["text"] == body
+            && item["source"] == node_a_status.lxmf_destination_hex
+            && item["payload"]["destinationHex"] == node_b_status.lxmf_destination_hex));
     stop_node(node_a).await;
     stop_node(node_b).await;
     relay.shutdown().await;
