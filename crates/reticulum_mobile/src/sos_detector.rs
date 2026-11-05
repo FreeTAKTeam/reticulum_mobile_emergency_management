@@ -88,7 +88,8 @@ impl SosTriggerDetector {
             &mut self.power_events,
             at_ms.saturating_sub(POWER_WINDOW_MS),
         );
-        if self.power_events.len() >= 3 {
+        // Android broadcasts screen transitions, not physical button presses.
+        if self.power_events.len() >= 6 {
             return self.mark_trigger(SosTriggerSource::PowerButton {}, at_ms);
         }
         None
@@ -136,17 +137,21 @@ mod tests {
     }
 
     #[test]
-    fn power_button_triggers_on_three_events() {
+    fn screen_proxy_requires_six_transitions() {
         let mut settings = default_sos_settings();
         settings.enabled = true;
         settings.trigger_power_button = true;
         let mut detector = SosTriggerDetector::new();
         assert_eq!(detector.screen_event(&settings, 0), None);
         assert_eq!(detector.screen_event(&settings, 500), None);
+        assert_eq!(detector.screen_event(&settings, 900), None);
+        assert_eq!(detector.screen_event(&settings, 1_100), None);
+        assert_eq!(detector.screen_event(&settings, 1_300), None);
         assert_eq!(
-            detector.screen_event(&settings, 900),
+            detector.screen_event(&settings, 1_500),
             Some(SosTriggerSource::PowerButton {})
         );
+        assert_eq!(detector.screen_event(&settings, 1_600), None);
     }
 
     #[test]

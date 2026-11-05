@@ -49,8 +49,9 @@ async function checkNotifications() {
     </label>
     <label class="checkbox">
       <input v-model="draft.triggerPowerButton" type="checkbox" />
-      Power button trigger
+      Screen cycle trigger
     </label>
+    <p class="muted">Android: cycle the screen off and on three times within 2 seconds. Screen events can also come from automatic wake or lock; physical button presses cannot be distinguished.</p>
     <label class="checkbox">
       <input v-model="draft.floatingButton" type="checkbox" />
       Floating SOS button
