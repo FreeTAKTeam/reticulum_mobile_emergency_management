@@ -324,3 +324,12 @@ Received raw bytes, bounded fragment snapshots and pending admissions are only
 internal custody. A separate pending-sent receipt survives native recording failures without retransmitting the radio message. Terminal `InvalidRequest` is rejected visibly and does not block later receptions. The operator reads chat in normal REM conversations and events
 in the native event timeline. The APK is independently built and is not yet in
 the existing offline release bundle.
+
+### Plugin lifecycle threading
+
+The host exchanges Binder descriptors, starts plugins, and sends stop callbacks on its
+plugin executor. Main-handler completion checks reject stale starts after disable,
+disconnect, or node shutdown. A blocked remote lifecycle call does not block Android's
+main thread; it can still delay other work on the serialized plugin executor until the
+remote call returns or its process dies. Binder transactions have no cancellable host
+thread timeout in this implementation.
