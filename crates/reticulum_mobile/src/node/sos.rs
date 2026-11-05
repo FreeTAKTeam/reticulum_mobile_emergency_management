@@ -283,6 +283,12 @@ impl Node {
             if !verify_pin(&settings, pin.as_deref()) {
                 return Err(NodeError::InvalidConfig {});
             }
+            if settings.deactivation_pin_hash.as_deref().is_some_and(|hash| !hash.starts_with('$')) {
+                let mut upgraded = settings.clone();
+                set_pin(&mut upgraded, pin.as_deref().unwrap_or_default())?;
+                let invalidation = inner.app_state.set_sos_settings(&upgraded)?;
+                emit_projection_invalidation(&inner.bus, invalidation);
+            }
             let status = inner
                 .status
                 .lock()
