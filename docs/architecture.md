@@ -958,3 +958,9 @@ keeps a completed native admission in durable pending custody. These are interna
 transport records, not another chat store. Position import continues through the
 shared native map service. No UniFFI schema/bindings or LXMF protocol are recreated.
 See [the plugin contract and limits](../plugins/gotenna/README.md).
+
+SOS cancellation PINs use Argon2id v19 (19 MiB, two iterations, one lane)
+with a fresh 16-byte OS-random salt. The stored hash is a versioned PHC string.
+Legacy SHA-256 PIN records are verified with constant-time equality and upgraded
+only after successful cancellation PIN verification; invalid PINs leave settings
+unchanged. Existing records remain usable without resetting the PIN.
