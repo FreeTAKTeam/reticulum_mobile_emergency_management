@@ -6,6 +6,7 @@ include!("runtime/telemetry_receive.rs");
 include!("runtime/telemeter_receive.rs");
 include!("runtime/telemetry_admission.rs");
 include!("runtime/checklist_merge.rs");
+include!("runtime/checklist_clock.rs");
 include!("runtime/checklist_wire.rs");
 include!("runtime/checklist_dispatch.rs");
 include!("runtime/mission_wire.rs");
@@ -363,6 +364,7 @@ include!("runtime/identity.rs");
 #[cfg(test)]
 mod tests {
     include!("runtime/tests/support.rs");
+    include!("runtime/tests/checklist_clock.rs");
     include!("runtime/tests/checklists_inbound_delete_marks_existing_checklist_de.rs");
     include!("runtime/tests/checklists_upload_snapshot_hydrates_hidden_placeholde.rs");
     include!("runtime/tests/command_tasks.rs");

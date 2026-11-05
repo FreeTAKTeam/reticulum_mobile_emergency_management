@@ -958,3 +958,12 @@ keeps a completed native admission in durable pending custody. These are interna
 transport records, not another chat store. Position import continues through the
 shared native map service. No UniFFI schema/bindings or LXMF protocol are recreated.
 See [the plugin contract and limits](../plugins/gotenna/README.md).
+
+Inbound checklist commands and merged snapshots reject invalid version timestamps
+or version timestamps more than 15 minutes ahead of the receiver's wall clock.
+The bound covers checklist creation/update/upload/deletion, task update/deletion/
+completion, cell updates, and feed publication timestamps. Scheduled start/due
+times remain unrestricted. Rejection emits an InvalidConfig runtime event and
+leaves stored checklist state unchanged; the sender must correct its clock and
+retry. This protects new inbound state; previously stored poisoned records are
+not migrated by this change.

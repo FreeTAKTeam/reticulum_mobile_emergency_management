@@ -25,6 +25,7 @@ crate-type = ["cdylib", "rlib"]
 reticulum-mobile-jni-boundary = { path = "jni-boundary-macro" }
 reticulum = { package = "reticulum-rs", path = "../../../LXMF-rs/crates/libs/reticulum-rs" }
 base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
 crossbeam-channel = "0.5"
 csv = "1.3"
 fs-err = "2.11.0"

@@ -25,6 +25,9 @@ fn handle_inbound_checklist_upload(ctx: &InboundChecklistCommand<'_>) -> bool {
     else {
         return false;
     };
+    if !validate_inbound_checklist_clock(&checklist, bus) {
+        return false;
+    }
     checklist.uid = checklist_uid.clone();
     let existing = app_state
         .get_checklist_any(checklist_uid.as_str())
