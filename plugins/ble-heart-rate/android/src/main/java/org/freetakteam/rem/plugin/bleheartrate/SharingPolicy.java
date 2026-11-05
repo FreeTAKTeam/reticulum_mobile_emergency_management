@@ -5,11 +5,11 @@ final class SharingPolicy {
 
     static boolean shouldSend(String destination, long lastSentAtMs, long nowMs, long intervalMs) {
         return intervalMs > 0L
-            && lastSentAtMs >= 0L
+            && lastSentAtMs >= -1L
             && nowMs >= 0L
             && nowMs >= lastSentAtMs
             && destination != null
             && destination.matches("[0-9a-f]{32}")
-            && (lastSentAtMs == 0L || nowMs - lastSentAtMs >= intervalMs);
+            && (lastSentAtMs == -1L || nowMs - lastSentAtMs >= intervalMs);
     }
 }

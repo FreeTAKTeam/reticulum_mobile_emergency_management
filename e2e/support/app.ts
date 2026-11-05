@@ -173,6 +173,19 @@ export const defaultSettings: SettingsSeed = {
 };
 
 export async function seedAppStorage(page: Page, seed: StorageSeed = {}): Promise<void> {
+  const operationalSeed = [
+    [STORAGE_KEYS.messages, seed.messages], [STORAGE_KEYS.events, seed.events],
+    [STORAGE_KEYS.telemetry, seed.telemetry], [STORAGE_KEYS.inbox, seed.inboxMessages],
+    [STORAGE_KEYS.notificationActivity, seed.notificationActivities], [STORAGE_KEYS.savedPeers, seed.savedPeers],
+  ].filter(([, value]) => value !== undefined).map(([key, value]) => [key, JSON.stringify(value)]);
+  let seededOperationalState = false;
+  await page.route("**/src/services/operationalStorage.ts", async (route) => {
+    const response = await route.fetch();
+    const initialization = seededOperationalState ? "" :
+      `\nfor (const [key, value] of ${JSON.stringify(operationalSeed)}) operationalStorage.setItem(key, value);`;
+    seededOperationalState = true;
+    await route.fulfill({ response, body: await response.text() + initialization });
+  });
   await page.addInitScript(
     ({ keys, payload }) => {
       const seedMarker = "reticulum.mobile.e2e.seeded";
@@ -182,35 +195,8 @@ export async function seedAppStorage(page: Page, seed: StorageSeed = {}): Promis
       window.localStorage.clear();
       window.localStorage.setItem(seedMarker, "1");
 
-      if (payload.messages) {
-        window.localStorage.setItem(keys.messages, JSON.stringify(payload.messages));
-      }
-
-      if (payload.events) {
-        window.localStorage.setItem(keys.events, JSON.stringify(payload.events));
-      }
-
-      if (payload.telemetry) {
-        window.localStorage.setItem(keys.telemetry, JSON.stringify(payload.telemetry));
-      }
-
-      if (payload.inboxMessages) {
-        window.localStorage.setItem(keys.inbox, JSON.stringify(payload.inboxMessages));
-      }
-
-      if (payload.notificationActivities) {
-        window.localStorage.setItem(
-          keys.notificationActivity,
-          JSON.stringify(payload.notificationActivities),
-        );
-      }
-
       if (payload.settings) {
         window.localStorage.setItem(keys.settings, JSON.stringify(payload.settings));
-      }
-
-      if (payload.savedPeers) {
-        window.localStorage.setItem(keys.savedPeers, JSON.stringify(payload.savedPeers));
       }
 
       window.localStorage.setItem(

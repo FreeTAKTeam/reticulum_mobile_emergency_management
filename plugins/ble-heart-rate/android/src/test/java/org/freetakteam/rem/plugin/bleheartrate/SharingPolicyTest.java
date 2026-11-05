@@ -7,6 +7,13 @@ public final class SharingPolicyTest {
     private static final String DESTINATION = "0123456789abcdef0123456789abcdef";
 
     @Test
+    public void monotonicZeroIsARealSendTimeNotTheNeverSentSentinel() {
+        assertTrue(SharingPolicy.shouldSend(DESTINATION, -1L, 0L, 30_000L));
+        assertFalse(SharingPolicy.shouldSend(DESTINATION, 0L, 1_000L, 30_000L));
+        assertTrue(SharingPolicy.shouldSend(DESTINATION, 0L, 30_000L, 30_000L));
+    }
+
+    @Test
     public void rejectsUnconfiguredSharingAndRateLimitsConfiguredSharing() {
         assertFalse(SharingPolicy.shouldSend("", 0L, 30_000L, 30_000L));
         assertFalse(SharingPolicy.shouldSend("not-a-destination", 0L, 30_000L, 30_000L));

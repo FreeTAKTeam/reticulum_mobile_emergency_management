@@ -1,3 +1,4 @@
+import { operationalStorage } from "../services/operationalStorage";
 import type { DiscoveredPeer } from "../types/domain";
 import {
   type ConversationRecord,
@@ -40,7 +41,7 @@ export function chatNotificationKey(message: MessageRecord): string {
 
 export function loadWebMessages(): StoredMessages {
   try {
-    const raw = localStorage.getItem(MESSAGE_STORAGE_KEY);
+    const raw = operationalStorage.getItem(MESSAGE_STORAGE_KEY);
     if (!raw) {
       return {};
     }
@@ -59,7 +60,7 @@ export function loadWebMessages(): StoredMessages {
 }
 
 export function saveWebMessages(messages: StoredMessages): void {
-  localStorage.setItem(MESSAGE_STORAGE_KEY, JSON.stringify(Object.values(messages)));
+  operationalStorage.setItem(MESSAGE_STORAGE_KEY, JSON.stringify(Object.values(messages)));
 }
 
 export function normalizeDestinationHex(value: string): string {

@@ -62,6 +62,8 @@ export {
   LEGACY_SETTINGS_STORAGE_KEY,
   LEGACY_TELEMETRY_STORAGE_KEY,
   UI_SETTINGS_STORAGE_KEY,
+  persistWebLegacySavedPeers,
+  persistWebLegacySettings,
 } from "./legacyStorage";
 export interface NodeUiPreferences {
   clientMode: NodeUiSettings["clientMode"];
@@ -156,7 +158,7 @@ function normalizeRuntimeSettings(
       mode: HUB_MODES.has(hubMode as HubMode) ? (hubMode as HubMode) : defaults.hub.mode,
       identityHash: asTrimmedString(value.hub?.identityHash),
       apiBaseUrl: asTrimmedString(value.hub?.apiBaseUrl),
-      apiKey: asTrimmedString(value.hub?.apiKey),
+      apiKey: Capacitor.getPlatform() === "web" ? "" : asTrimmedString(value.hub?.apiKey),
       refreshIntervalSeconds: Math.max(
         60,
         Number(value.hub?.refreshIntervalSeconds ?? defaults.hub.refreshIntervalSeconds),
@@ -489,12 +491,4 @@ export function clearLegacyProjectionStorage(): void {
   localStorage.removeItem(LEGACY_EVENT_STORAGE_KEY);
   localStorage.removeItem(LEGACY_INBOX_STORAGE_KEY);
   localStorage.removeItem(LEGACY_TELEMETRY_STORAGE_KEY);
-}
-
-export function persistWebLegacySettings(settings: NodeUiSettings): void {
-  localStorage.setItem(LEGACY_SETTINGS_STORAGE_KEY, JSON.stringify(settings));
-}
-
-export function persistWebLegacySavedPeers(records: SavedPeerRecord[]): void {
-  localStorage.setItem(LEGACY_SAVED_STORAGE_KEY, JSON.stringify(records));
 }
