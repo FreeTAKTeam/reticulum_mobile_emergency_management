@@ -80,6 +80,8 @@ test("operators complete first-run setup and persist core choices", async ({ pag
 
   await expect(page.getByRole("heading", { name: "SOS" })).toBeVisible();
   await page.getByLabel("Enable SOS").check();
+  await expect(page.getByLabel("Screen cycle trigger")).toBeVisible();
+  await expect(page.getByText("Android: cycle the screen off and on", { exact: false })).toBeVisible();
   await expect(page.getByLabel("Floating SOS button")).toBeChecked();
   await page.getByRole("button", { name: "Next" }).click();
 

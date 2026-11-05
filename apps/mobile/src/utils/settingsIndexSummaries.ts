@@ -67,7 +67,7 @@ export function sosSummary(
   if (!enabled) return "Off";
   const names = [
     triggers.shake ? "Shake" : "",
-    triggers.powerButton ? "power button" : "",
+    triggers.powerButton ? "screen cycles" : "",
     triggers.floatingButton ? "floating button" : "",
   ].filter(Boolean);
   if (names.length === 0) return "On · manual only";
