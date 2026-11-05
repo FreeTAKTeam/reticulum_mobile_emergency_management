@@ -17,6 +17,14 @@ fn checklist_clock_skew_bounds_and_nested_versions() {
         "9223372036854775807-01-01T00:00:00Z",
         now
     ));
+    assert!(checklist_timestamp_is_acceptable(
+        "2026-11-05T08:15:00-04:00",
+        now
+    ));
+    assert!(!checklist_timestamp_is_acceptable(
+        "2026-02-31T12:00:00Z",
+        now
+    ));
     let mut record = checklist_test_record(
         "2026-11-05T12:00:00Z",
         checklist_test_task("task-1", 1, "Task", "2026-11-05T12:00:00Z"),
