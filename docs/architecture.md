@@ -110,6 +110,12 @@ Flow of one `set_situation` call:
    `skipped_household_off`, `skipped_another_phone_reports`, `failed` or
    `waiting_for_sos_countdown`.
 
+SOS cancellation PINs use Argon2id v19 (19 MiB, two iterations, one lane)
+with a fresh 16-byte OS-random salt. The stored hash is a versioned PHC string.
+Legacy SHA-256 PIN records are verified with constant-time equality and upgraded
+only after successful cancellation PIN verification; invalid PINs leave settings
+unchanged. Existing records remain usable without resetting the PIN.
+
 Choosing the current situation again sends nothing, except `sos`. A different
 `detail` (another supply kind, medical code or destination) counts as a change.
 Situations without a follow-up ignore `detail`; an unknown supply kind or
@@ -958,9 +964,3 @@ keeps a completed native admission in durable pending custody. These are interna
 transport records, not another chat store. Position import continues through the
 shared native map service. No UniFFI schema/bindings or LXMF protocol are recreated.
 See [the plugin contract and limits](../plugins/gotenna/README.md).
-
-SOS cancellation PINs use Argon2id v19 (19 MiB, two iterations, one lane)
-with a fresh 16-byte OS-random salt. The stored hash is a versioned PHC string.
-Legacy SHA-256 PIN records are verified with constant-time equality and upgraded
-only after successful cancellation PIN verification; invalid PINs leave settings
-unchanged. Existing records remain usable without resetting the PIN.
