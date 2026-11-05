@@ -19,8 +19,8 @@ android {
         applicationId 'org.freetakteam.rem.plugin.gotenna'
         minSdk rootProject.ext.minSdkVersion
         targetSdk rootProject.ext.targetSdkVersion
-        versionCode 3
-        versionName '0.2.0-beta.1'
+        versionCode 4
+        versionName '0.2.0-beta.2'
         manifestPlaceholders = [remHostPackage: hostPackage, remPluginVersion: versionName]
         buildConfigField 'String', 'REM_HOST_PACKAGE', '"' + hostPackage + '"'
         buildConfigField 'String', 'REM_HOST_FINGERPRINTS', '"' + hostFingerprints + '"'

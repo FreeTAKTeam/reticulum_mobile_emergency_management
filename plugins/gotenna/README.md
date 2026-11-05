@@ -1,6 +1,6 @@
 # REM goTenna Mesh plugin
 
-Beta Android plugin **0.2.0-beta.1** for goTenna Mesh over Bluetooth LE. Included with REM **1.6.0**, using native plugin API **1.5**.
+Beta Android plugin **0.2.0-beta.2** for goTenna Mesh over Bluetooth LE. Included with REM **1.6.1**, using native plugin API **1.5**.
 
 Chat is always addressed to a person. Each Mesh chat frame carries the sender's reported REM hash, the intended recipient's 32-digit LXMF destination hash, and a stable message ID. Received chat for this REM destination enters **REM's ordinary conversation history**. A chat for another destination can be forwarded through compiled LXMF to that carried recipient, under the gateway's own identity and with original-source attribution. There is no plugin chat inbox and no global forwarding recipient.
 
