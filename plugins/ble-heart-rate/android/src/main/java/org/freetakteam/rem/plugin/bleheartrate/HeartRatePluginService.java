@@ -94,12 +94,16 @@ public final class HeartRatePluginService extends RemPluginService {
 
     @Override
     protected void onPluginStop(String reason) {
+        releaseMonitoring();
+        stopSelf();
+    }
+
+    private void releaseMonitoring() {
         host = null;
         cancelPendingReconnect();
         handler.removeCallbacksAndMessages(null);
         disconnectGatt();
         stopMonitoringForeground();
-        stopSelf();
     }
 
     @Override
@@ -447,6 +451,7 @@ public final class HeartRatePluginService extends RemPluginService {
     @Override
     public void onDestroy() {
         if (instance == this) instance = null;
+        releaseMonitoring();
         super.onDestroy();
     }
 }

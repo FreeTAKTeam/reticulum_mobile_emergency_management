@@ -18,6 +18,8 @@ The implementation adapts the standard Heart Rate Service work by Giu Platania f
 - Normalized `heart_rate_bpm` values are published to REM no more than once per second.
 - The configuration UI is loaded dynamically from this APK by REM's isolated offline WebView.
 
+- Host stop and Android service destruction both cancel pending work and release GATT/foreground monitoring.
+
 ## Build and signing
 
 From `apps/mobile/android`:
