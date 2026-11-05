@@ -423,6 +423,15 @@ sequenceDiagram
 
 Checklist state is Rust-authoritative. The Vue screens call the node-client checklist API, the Android bridge forwards those calls to the native service, and `crates/reticulum_mobile` persists checklist records before emitting projection invalidations. The UI refreshes `Checklists` and keyed `ChecklistDetail` projections instead of caching checklist state in the browser layer.
 
+Inbound checklist commands and merged snapshots reject invalid version timestamps
+or version timestamps more than 15 minutes ahead of the receiver's wall clock.
+The bound covers checklist creation/update/upload/deletion, task update/deletion/
+completion, cell updates, and feed publication timestamps. Scheduled start/due
+times remain unrestricted. Rejection emits an InvalidConfig runtime event and
+leaves stored checklist state unchanged; the sender must correct its clock and
+retry. This protects new inbound state; previously stored poisoned records are
+not migrated by this change.
+
 Checklist templates can be built in or imported from CSV. CSV import is handled in Rust. The importer accepts arbitrary normal columns and treats `CompletedDTG`, `Completed DTG`, `Due`, `DueRelativeDTG`, `Due Relative DTG`, `Due Relative Minutes`, or `Due Minutes` as the deadline column. REM stores that column as the pinned system column `DUE_RELATIVE_DTG` with relative task deadlines in `due_relative_minutes`. If the CSV does not include a deadline column, Rust creates one and applies the configured default deadline step, currently 30 minutes per row.
 
 Bundled templates are seeded through the same Rust store and include the same pinned deadline column. Template seeding is an upsert so existing installs can receive updated built-in template definitions without deleting user-imported templates.

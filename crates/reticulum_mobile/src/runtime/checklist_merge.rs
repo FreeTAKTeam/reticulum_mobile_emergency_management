@@ -1,51 +1,6 @@
 fn parse_rfc3339_sort_key(timestamp: &str) -> Option<(i64, u32)> {
-    let trimmed = timestamp.trim();
-    let suffix = trimmed.strip_suffix('Z')?;
-    let (date, time) = suffix.split_once('T')?;
-    let mut date_parts = date.split('-');
-    let year = date_parts.next()?.parse::<i64>().ok()?;
-    let month = date_parts.next()?.parse::<i64>().ok()?;
-    let day = date_parts.next()?.parse::<i64>().ok()?;
-    if date_parts.next().is_some() {
-        return None;
-    }
-
-    let (time_main, fraction) = match time.split_once('.') {
-        Some((main, fraction)) => (main, Some(fraction)),
-        None => (time, None),
-    };
-    let mut time_parts = time_main.split(':');
-    let hour = time_parts.next()?.parse::<i64>().ok()?;
-    let minute = time_parts.next()?.parse::<i64>().ok()?;
-    let second = time_parts.next()?.parse::<i64>().ok()?;
-    if time_parts.next().is_some() {
-        return None;
-    }
-
-    let nanos = match fraction {
-        Some(value) => {
-            if value.is_empty() || !value.chars().all(|ch| ch.is_ascii_digit()) {
-                return None;
-            }
-            let truncated = &value[..value.len().min(9)];
-            let mut padded = truncated.to_string();
-            while padded.len() < 9 {
-                padded.push('0');
-            }
-            padded.parse::<u32>().ok()?
-        }
-        None => 0,
-    };
-
-    let y = year - i64::from(month <= 2);
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = y - era * 400;
-    let mp = month + if month > 2 { -3 } else { 9 };
-    let doy = (153 * mp + 2) / 5 + day - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days_since_epoch = era * 146_097 + doe - 719_468;
-    let seconds_since_epoch = days_since_epoch * 86_400 + hour * 3_600 + minute * 60 + second;
-    Some((seconds_since_epoch, nanos))
+    let parsed = chrono::DateTime::parse_from_rfc3339(timestamp.trim()).ok()?;
+    Some((parsed.timestamp(), parsed.timestamp_subsec_nanos()))
 }
 
 fn incoming_timestamp_is_newer(local_timestamp: Option<&str>, incoming_timestamp: &str) -> bool {
@@ -117,6 +72,9 @@ fn upsert_inbound_checklist(
     checklist: &ChecklistRecord,
     reason: &str,
 ) -> bool {
+    if !validate_inbound_checklist_clock(checklist, bus) {
+        return false;
+    }
     match app_state.upsert_checklist(checklist, reason) {
         Ok(invalidations) => {
             emit_checklist_invalidations(bus, invalidations);

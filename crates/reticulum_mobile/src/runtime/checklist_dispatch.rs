@@ -57,6 +57,13 @@ fn persist_received_checklist_if_present(
         let timestamp = msgpack_get_named(command_map, &["timestamp", "ts"])
             .and_then(msgpack_timestamp)
             .unwrap_or_else(current_timestamp_rfc3339);
+        if !checklist_timestamp_is_acceptable(&timestamp, crate::numeric::u64_to_i64_saturating(now_ms() / 1_000)) {
+            bus.emit(NodeEvent::Error {
+                code: "InvalidConfig".to_string(),
+                message: "rejected inbound checklist command: invalid timestamp or clock more than 15 minutes ahead".to_string(),
+            });
+            continue;
+        }
         let source_identity = checklist_command_source_identity(command_map);
         let map_args = msgpack_get_named(command_map, &["args", "a"])
             .and_then(msgpack_map_entries)
