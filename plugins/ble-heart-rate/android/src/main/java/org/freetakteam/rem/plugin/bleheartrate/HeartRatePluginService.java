@@ -190,6 +190,11 @@ public final class HeartRatePluginService extends RemPluginService {
                 callback,
                 BluetoothDeviceCompat.transportLe()
             );
+            if (gatt == null) {
+                connectionState = "Connection failed";
+                stopMonitoringForeground();
+                scheduleReconnect();
+            }
         } catch (IllegalArgumentException error) {
             connectionState = "Invalid device";
             stopMonitoringForeground();

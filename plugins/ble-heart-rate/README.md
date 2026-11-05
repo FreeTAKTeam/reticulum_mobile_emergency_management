@@ -18,6 +18,8 @@ The implementation adapts the standard Heart Rate Service work by Giu Platania f
 - Normalized `heart_rate_bpm` values are published to REM no more than once per second.
 - The configuration UI is loaded dynamically from this APK by REM's isolated offline WebView.
 
+- A failed GATT connection creation reports `Connection failed` and uses the bounded reconnect policy.
+
 ## Build and signing
 
 From `apps/mobile/android`:
