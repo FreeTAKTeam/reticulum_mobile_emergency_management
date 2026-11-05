@@ -22,7 +22,7 @@ import {
   persistWebLegacySettings,
   type NodeUiPreferences,
 } from "../utils/legacyState";
-import { withNativeHouseholdDefaults } from "../utils/householdDefaults";
+import { withNativeSettingsDefaults } from "../utils/nativeSettingsDefaults";
 import { projectionRefreshCoordinator } from "../utils/projectionRefreshCoordinator";
 import { normalizeDestinationHex } from "../utils/peers";
 import { normalizeRnodeSettings } from "../utils/rnodeProfiles";
@@ -336,7 +336,7 @@ export function createNodeProjectionController(context: NodeProjectionContext) {
       true,
     );
     const normalizedPersistedRecord = toAppSettingsRecord(persistedSettings);
-    const expectedRecord = withNativeHouseholdDefaults(requestedRecord, normalizedPersistedRecord);
+    const expectedRecord = withNativeSettingsDefaults(requestedRecord, normalizedPersistedRecord);
     if (!settingsRecordsEqual(expectedRecord, normalizedPersistedRecord)) {
       throw new Error("Native app settings save verification failed.");
     }

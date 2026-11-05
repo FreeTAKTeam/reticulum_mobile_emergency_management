@@ -33,3 +33,7 @@
 ## PRE review resolution
 
 Read-only PRE review: aligned, no blocker or major finding. Require a versionCode greater than1.5.7 and identical across host packages; exactly three intended ABIs and packaged-library hashes/build IDs matching fresh outputs; mandatory Kotlin regeneration from clean UDL; signed LightAAB in provenance and download verification; both ELF LOAD and APK ZIP16KiB alignment. Build/tag must retain the same frozen source SHA; packaging may run while its hosted CI is pending, but publication waits for successful CI and PR integration.
+
+## Final emulator finding and revised freeze
+
+The first1.5.7 setup save durably persisted settings but rejected native empty-team initialization during frontend verification. Reopening1.6.0 loaded canonical defaults and completed setup, confirming the mismatch rather than lost data. Treat the first-cold-save case as a release blocker: extend only the existing comparison-default helper to accept initialized native team values for an empty/uninitialized request; keep configured teams, active team, aliases and unrelated fields strict. Native domain authority is unchanged. Add regression cases and the native empty-peer case, obtain follow-up source CI, rebuild packages from the new frozen SHA and repeat cold setup/Quit/export verification. Prior4d83f720 packages remain unpublished candidate evidence.
