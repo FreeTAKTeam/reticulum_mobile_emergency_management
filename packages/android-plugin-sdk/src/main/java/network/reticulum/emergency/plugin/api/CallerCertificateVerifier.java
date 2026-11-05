@@ -54,11 +54,7 @@ public final class CallerCertificateVerifier {
     }
 
     public static Set<String> packageFingerprints(Context context, String packageName) {
-        final Set<String> fingerprints = new HashSet<>(
-            currentPackageFingerprints(context, packageName)
-        );
-        fingerprints.addAll(packageCertificateHistory(context, packageName));
-        return fingerprints;
+        return currentPackageFingerprints(context, packageName);
     }
 
     public static Set<String> currentPackageFingerprints(Context context, String packageName) {

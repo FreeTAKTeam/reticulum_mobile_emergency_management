@@ -36,7 +36,12 @@ from `PackageManager`, not from the plugin descriptor.
 
 REM shows the plugin signing-certificate SHA-256 fingerprint before binding. Approving a publisher
 does not enable the plugin or grant capabilities. Certificate changes revoke the active session
-unless Android proves that the new signer belongs to the trusted signing lineage.
+and clears capability grants even when Android proves a signing lineage. The operator must
+explicitly approve the current certificate, grant capabilities, and enable the plugin again.
+Signing history is metadata, never authorization. Plugin SDK host allowlists likewise accept
+only current APK signers; update those allowlists when rotating REM keys and remove retired
+fingerprints. Revoke a compromised publisher in Settings before approving its replacement;
+revocation removes trust for the known lineage.
 
 Plugins must also validate the REM caller on every Binder call. Override
 `allowedHostPackageNames()` and `allowedHostCertificateFingerprints()` in `RemPluginService`

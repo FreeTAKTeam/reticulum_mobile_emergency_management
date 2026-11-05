@@ -72,18 +72,11 @@ impl AppStateStore {
             if !seen.insert(item.plugin_id.clone()) {
                 return Err(NodeError::InvalidConfig {});
             }
-            let signer_set = std::iter::once(item.publisher_fingerprint.clone())
-                .chain(item.publisher_history.iter().cloned())
-                .map(|value| normalize_fingerprint(value.as_str()))
-                .collect::<std::collections::HashSet<_>>();
-            let trusted = signer_set
-                .iter()
-                .any(|fingerprint| trusted_fingerprints.contains(fingerprint));
+            let trusted = trusted_fingerprints.contains(&item.publisher_fingerprint);
             let previous = existing.get(item.plugin_id.as_str());
             let same_signer = previous.is_some_and(|plugin| {
-                signer_set.contains(&normalize_fingerprint(
-                    plugin.discovered.publisher_fingerprint.as_str(),
-                ))
+                normalize_fingerprint(plugin.discovered.publisher_fingerprint.as_str())
+                    == item.publisher_fingerprint
             });
             let mut granted = if same_signer {
                 previous
@@ -193,12 +186,7 @@ impl AppStateStore {
         for mut signed_plugin in self.list_plugins()? {
             let signed_by_publisher =
                 normalize_fingerprint(signed_plugin.discovered.publisher_fingerprint.as_str())
-                    == fingerprint
-                    || signed_plugin
-                        .discovered
-                        .publisher_history
-                        .iter()
-                        .any(|value| normalize_fingerprint(value.as_str()) == fingerprint);
+                    == fingerprint;
             if !signed_by_publisher {
                 continue;
             }
