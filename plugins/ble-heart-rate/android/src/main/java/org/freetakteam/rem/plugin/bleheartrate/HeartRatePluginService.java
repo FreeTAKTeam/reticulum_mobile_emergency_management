@@ -16,6 +16,7 @@ import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.util.Log;
 import androidx.core.app.NotificationCompat;
 import androidx.core.content.ContextCompat;
@@ -45,7 +46,7 @@ public final class HeartRatePluginService extends RemPluginService {
     private volatile BluetoothGatt gatt;
     private volatile Runnable pendingReconnect;
     private String connectionState = "Disconnected";
-    private long lastSharedAtMs;
+    private long lastSharedElapsedMs = -1L;
     private boolean foreground;
     private static volatile HeartRatePluginService instance;
 
@@ -116,17 +117,18 @@ public final class HeartRatePluginService extends RemPluginService {
             final JSONObject sample = envelope.getJSONObject("payload");
             final int bpm = sample.optInt("bpm", -1);
             if (bpm < 1 || bpm > 240) return;
+            final long now = System.currentTimeMillis();
             publishSensor(
                 "remote:" + sample.optString("deviceId", "unknown"),
                 sample.optString("alias", "Remote heart rate"),
                 sample.optString("operatorRnsIdentity", ""),
                 bpm,
-                sample.optLong("measuredAtMs", System.currentTimeMillis()),
+                RemoteSampleTime.clamp(sample.optLong("measuredAtMs", now), now),
                 "REMOTE",
                 "remote"
             );
         } catch (Exception error) {
-            Log.w(TAG, "Unable to start the heart-rate foreground service", error);
+            Log.w(TAG, "Unable to parse an incoming heart-rate event", error);
         }
     }
 
@@ -287,7 +289,8 @@ public final class HeartRatePluginService extends RemPluginService {
     private void handleMeasurement(byte[] bytes) {
         final HeartRateMeasurement measurement = HeartRateMeasurement.parse(bytes);
         final long now = System.currentTimeMillis();
-        if (measurement == null || !limiter.accept(now)) return;
+        final long elapsed = SystemClock.elapsedRealtime();
+        if (measurement == null || !limiter.accept(elapsed)) return;
         publishSensor(
             preferences.address(),
             preferences.alias(),
@@ -300,11 +303,11 @@ public final class HeartRatePluginService extends RemPluginService {
         if (preferences.sharingEnabled()
             && SharingPolicy.shouldSend(
                 preferences.destination(),
-                lastSharedAtMs,
-                now,
+                lastSharedElapsedMs,
+                elapsed,
                 preferences.sendIntervalMs()
             )) {
-            lastSharedAtMs = now;
+            lastSharedElapsedMs = elapsed;
             sendLxmf(measurement.bpm(), now);
         }
     }

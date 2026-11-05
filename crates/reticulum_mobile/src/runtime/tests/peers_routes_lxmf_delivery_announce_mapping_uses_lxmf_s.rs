@@ -201,6 +201,32 @@ async fn mission_destination_locks_serialize_same_destination() {
 }
 
 #[tokio::test]
+async fn mission_destination_locks_evict_idle_entries_without_evicting_owners() {
+    let locks = MissionDestinationLocks::new();
+    let held_destination = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let held = locks.acquire(held_destination).await.expect("held lock");
+    for index in 0..128_u64 {
+        let transient = locks
+            .acquire(&format!("{index:032x}"))
+            .await
+            .expect("lock");
+        assert_eq!(locks.locks.lock().await.len(), 2);
+        drop(transient);
+    }
+    let blocked = tokio::time::timeout(
+        Duration::from_millis(50),
+        locks.acquire(held_destination),
+    ).await;
+    assert!(blocked.is_err());
+    drop(held);
+    let _next = locks
+        .acquire("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+        .await
+        .expect("lock");
+    assert_eq!(locks.locks.lock().await.len(), 1);
+}
+
+#[tokio::test]
 async fn mission_destination_locks_allow_different_destinations() {
     let locks = MissionDestinationLocks::new();
     let _first = locks

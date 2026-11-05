@@ -69,6 +69,7 @@
 
         <receiver
             android:name=".AdbTestControlReceiver"
+            android:permission="android.permission.DUMP"
             android:enabled="${enableAdbTestControl}"
             android:exported="true" />
     </application>

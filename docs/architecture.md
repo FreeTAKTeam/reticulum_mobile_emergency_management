@@ -973,3 +973,6 @@ keeps a completed native admission in durable pending custody. These are interna
 transport records, not another chat store. Position import continues through the
 shared native map service. No UniFFI schema/bindings or LXMF protocol are recreated.
 See [the plugin contract and limits](../plugins/gotenna/README.md).
+
+Browser operational projection cache policy and plugin hardening are documented in
+[Local cache and plugin hardening](security-hardening.md).

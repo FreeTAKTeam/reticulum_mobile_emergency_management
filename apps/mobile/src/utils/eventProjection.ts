@@ -1,3 +1,4 @@
+import { operationalStorage } from "../services/operationalStorage";
 import type { EventProjectionRecord } from "@reticulum/node-client";
 
 import {
@@ -251,7 +252,7 @@ export function normalizeEvent(
 
 export function loadWebEvents(): Record<string, EventProjectionRecord> {
   try {
-    const raw = localStorage.getItem(EVENT_STORAGE_KEY);
+    const raw = operationalStorage.getItem(EVENT_STORAGE_KEY);
     if (!raw) return {};
     const parsed = JSON.parse(raw) as Array<Partial<EventProjectionRecord> & Record<string, unknown>>;
     return Object.fromEntries(parsed.map((entry) => {
@@ -264,5 +265,5 @@ export function loadWebEvents(): Record<string, EventProjectionRecord> {
 }
 
 export function saveWebEvents(records: Record<string, EventProjectionRecord>): void {
-  localStorage.setItem(EVENT_STORAGE_KEY, JSON.stringify(Object.values(records)));
+  operationalStorage.setItem(EVENT_STORAGE_KEY, JSON.stringify(Object.values(records)));
 }

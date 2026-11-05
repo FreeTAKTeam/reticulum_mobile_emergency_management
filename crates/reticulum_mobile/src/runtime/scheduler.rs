@@ -484,6 +484,8 @@ impl MissionDestinationLocks {
         }
         let lock = {
             let mut guard = self.locks.lock().await;
+            // Owners and queued waiters keep an Arc; only idle entries can be evicted.
+            guard.retain(|_, lock| Arc::strong_count(lock) > 1);
             guard
                 .entry(key)
                 .or_insert_with(|| Arc::new(TokioMutex::new(())))

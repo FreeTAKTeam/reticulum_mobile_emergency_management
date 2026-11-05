@@ -6,8 +6,7 @@ const GRAVITY: f64 = 9.81;
 const SHAKE_WINDOW_MS: u64 = 1_000;
 const SHAKE_SUSTAIN_MS: u64 = 500;
 const TAP_WINDOW_MS: u64 = 1_200;
-const TAP_DEBOUNCE_MS: u64 = 150;
-const WALKING_STEP_REJECT_MS: u64 = 100;
+const TAP_DEBOUNCE_MS: u64 = 260;
 const POWER_WINDOW_MS: u64 = 2_000;
 const COOLDOWN_MS: u64 = 5_000;
 
@@ -61,7 +60,7 @@ impl SosTriggerDetector {
         if settings.trigger_tap_pattern && magnitude > 2.2 * GRAVITY {
             if let Some(last) = self.last_tap_at_ms {
                 let delta = at_ms.saturating_sub(last);
-                if delta < TAP_DEBOUNCE_MS || delta > WALKING_STEP_REJECT_MS && delta < 260 {
+                if delta < TAP_DEBOUNCE_MS {
                     return None;
                 }
             }
@@ -152,6 +151,23 @@ mod tests {
             Some(SosTriggerSource::PowerButton {})
         );
         assert_eq!(detector.screen_event(&settings, 1_600), None);
+    }
+
+    #[test]
+    fn tap_debounce_rejects_spikes_before_the_minimum_interval() {
+        let mut settings = default_sos_settings();
+        settings.trigger_tap_pattern = true;
+        let mut detector = SosTriggerDetector::new();
+        for at_ms in [0, 149, 150, 259, 260, 519] {
+            assert_eq!(
+                detector.accelerometer_sample(&settings, 23.0, 0.0, 0.0, at_ms),
+                None
+            );
+        }
+        assert_eq!(
+            detector.accelerometer_sample(&settings, 23.0, 0.0, 0.0, 520),
+            Some(SosTriggerSource::TapPattern {})
+        );
     }
 
     #[test]

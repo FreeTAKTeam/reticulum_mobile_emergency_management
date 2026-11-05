@@ -69,12 +69,8 @@ export function browserRuntimeReadiness(running: boolean): RuntimeReadinessSnaps
 }
 
 export function randomHex32(): string {
-  const chars = "0123456789abcdef";
-  let out = "";
-  for (let i = 0; i < 32; i += 1) {
-    out += chars[Math.floor(Math.random() * chars.length)];
-  }
-  return out;
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
 }
 
 export function countConnectedSavedPeers(

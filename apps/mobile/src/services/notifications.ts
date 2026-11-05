@@ -1,3 +1,4 @@
+import { operationalStorage } from "./operationalStorage";
 import { Capacitor } from "@capacitor/core";
 import { LocalNotifications, type ActionPerformed } from "@capacitor/local-notifications";
 
@@ -68,7 +69,7 @@ function normalizeActivityRecord(value: unknown): NotificationActivityRecord | n
 
 export function listNotificationActivity(): NotificationActivityRecord[] {
   try {
-    const raw = localStorage.getItem(NOTIFICATION_ACTIVITY_STORAGE_KEY);
+    const raw = operationalStorage.getItem(NOTIFICATION_ACTIVITY_STORAGE_KEY);
     if (!raw) {
       return [];
     }
@@ -89,7 +90,7 @@ export function listNotificationActivity(): NotificationActivityRecord[] {
 
 function saveNotificationActivity(records: NotificationActivityRecord[]): void {
   try {
-    localStorage.setItem(
+    operationalStorage.setItem(
       NOTIFICATION_ACTIVITY_STORAGE_KEY,
       JSON.stringify(records.slice(0, MAX_NOTIFICATION_ACTIVITY_RECORDS)),
     );

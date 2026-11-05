@@ -4,7 +4,8 @@ import { test } from "node:test";
 import ts from "typescript";
 
 async function transpiledUrl(relativeUrl, replacements = new Map()) {
-  const source = await readFile(new URL(relativeUrl, import.meta.url), "utf8");
+  const source = (await readFile(new URL(relativeUrl, import.meta.url), "utf8"))
+    .replace(/import \{ operationalStorage \} from [^;]+;/, "const operationalStorage = {};");
   let output = ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 },
   }).outputText;

@@ -3,7 +3,8 @@ import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import ts from "typescript";
 
-const source = await readFile(new URL("../stores/messagingModel.ts", import.meta.url), "utf8");
+const source = (await readFile(new URL("../stores/messagingModel.ts", import.meta.url), "utf8"))
+  .replace(/import \{ operationalStorage \} from [^;]+;/, "const operationalStorage = {};");
 const transpiled = ts.transpileModule(source, {
   compilerOptions: {
     module: ts.ModuleKind.ES2022,

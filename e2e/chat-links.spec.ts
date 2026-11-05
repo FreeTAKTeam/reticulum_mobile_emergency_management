@@ -80,7 +80,8 @@ test("chat peer status and coordinates link to EAM details and telemetry map", a
   await expect(page).toHaveURL(/\/messages\?callsign=ALPHA-1$/);
   await expect(page.locator(".item.selected:visible", { hasText: "ALPHA-1" })).toBeVisible();
 
-  await gotoApp(page, "/inbox?mockChat=1");
+  await page.goBack();
+  await expect(page).toHaveURL(/\/inbox\?mockChat=1$/);
   await openAlphaConversationIfNeeded(page);
   const coordinateLink = page.getByRole("link", { name: /Open 44\.65.+63\.58.+on telemetry map/ });
   await expect(coordinateLink).toHaveClass(/sos-map-link/);
