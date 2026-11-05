@@ -25,7 +25,7 @@
             </intent-filter>
             <meta-data android:name="rem.plugin.id" android:value="org.freetakteam.rem.plugin.ble_heart_rate" />
             <meta-data android:name="rem.plugin.displayName" android:value="BLE Heart Rate" />
-            <meta-data android:name="rem.plugin.version" android:value="1.0.0" />
+            <meta-data android:name="rem.plugin.version" android:value="1.0.1" />
             <meta-data android:name="rem.plugin.apiMajor" android:value="1" />
             <meta-data android:name="rem.plugin.apiMinor" android:value="0" />
             <meta-data android:name="rem.plugin.capabilities" android:value="{&quot;sensorsPublish&quot;:true,&quot;lxmfSend&quot;:true,&quot;lxmfReceive&quot;:true,&quot;notificationsRaise&quot;:true}" />
