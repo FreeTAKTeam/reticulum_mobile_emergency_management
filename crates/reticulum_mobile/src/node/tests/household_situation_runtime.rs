@@ -221,8 +221,9 @@ fn sos_situation_starts_sos_and_all_ok_needs_the_cancel_pin() {
     settings.enabled = true;
     settings.countdown_seconds = 0;
     settings.include_location = false;
-    node.set_sos_settings(settings).expect("sos settings");
-    node.set_sos_pin(Some("1234".to_string())).expect("pin");
+    settings.deactivation_pin_salt = Some("legacy-salt".to_string());
+    settings.deactivation_pin_hash = Some(crate::sos::hash_pin("1234", "legacy-salt"));
+    node.set_sos_settings(settings.clone()).expect("sos settings");
     // The SOS runtime needs a command queue; no peers are known, so nothing is sent on it.
     let (tx, _rx) = mpsc::channel(COMMAND_QUEUE_CAPACITY);
     node.inner.lock().expect("inner").cmd_tx = Some(tx);
@@ -242,11 +243,15 @@ fn sos_situation_starts_sos_and_all_ok_needs_the_cancel_pin() {
     assert!(node.set_situation(HouseholdSituation::AllOk {}, Some("0000".to_string())).is_err());
     let unchanged = node.get_household_situation().expect("situation");
     assert_eq!(unchanged.situation, Some(HouseholdSituation::Sos {}), "a wrong PIN changes nothing");
+    assert_eq!(node.get_sos_settings().expect("settings").deactivation_pin_hash, settings.deactivation_pin_hash);
 
     let all_ok = node.set_situation(HouseholdSituation::AllOk {}, Some("1234".to_string())).expect("all ok");
     assert_eq!(all_ok.detail, None, "the PIN is not stored");
     assert!(all_ok.messages.iter().any(|message| message.kind == SituationMessageKind::Sos {} && message.reference.as_deref() == Some("B03")));
     assert!(!sos_is_engaged(&node.get_sos_status().expect("sos status")));
+    let upgraded = node.get_sos_settings().expect("upgraded settings");
+    assert!(upgraded.deactivation_pin_hash.as_ref().unwrap().starts_with("$argon2id$"));
+    assert!(crate::sos::verify_pin(&upgraded, Some("1234")));
     let eam = situation_own_eam(&node);
     assert_eq!((eam.medical_status.as_str(), eam.security_status.as_str()), ("Unknown", "Unknown"));
 }

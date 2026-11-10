@@ -1,6 +1,6 @@
 # REM goTenna Mesh plugin
 
-Experimental Android plugin **0.2.0** for goTenna Mesh over Bluetooth LE. Requires the updated REM native host with plugin API **1.5** from this work.
+Beta Android plugin **0.2.0-beta.2** for goTenna Mesh over Bluetooth LE. Included with REM **1.6.1**, using native plugin API **1.5**.
 
 Chat is always addressed to a person. Each Mesh chat frame carries the sender's reported REM hash, the intended recipient's 32-digit LXMF destination hash, and a stable message ID. Received chat for this REM destination enters **REM's ordinary conversation history**. A chat for another destination can be forwarded through compiled LXMF to that carried recipient, under the gateway's own identity and with original-source attribution. There is no plugin chat inbox and no global forwarding recipient.
 
@@ -54,6 +54,6 @@ GOTENNA_RELAY_FIXTURE="$PWD/output/gotenna-relay.json" \
   :gotenna-plugin:testDebugUnitTest :gotenna-plugin:lintDebug :gotenna-plugin:assembleDebug
 ```
 
-APK: `android/build/outputs/apk/debug/gotenna-plugin-debug.apk`. Release builds require ignored `apps/mobile/android/gotenna-keystore.properties` using the existing plugin signing format. This plugin is not bundled in the current three-plugin offline release package.
+APK: `android/build/outputs/apk/debug/gotenna-plugin-debug.apk`. Release builds require ignored `apps/mobile/android/gotenna-keystore.properties` using the existing plugin signing format. REM 1.6.0 Complete includes this beta as the optional fourth installer; Light users can install `gotenna-mesh-beta.apk` separately.
 
 Protocol references: [sybip/pyGT](https://github.com/sybip/pyGT) and local `gotenna-test` wire vectors. See `THIRD_PARTY_NOTICES` and [execution evidence](../../docs/goals/gotenna-plugin/EVIDENCE.md).

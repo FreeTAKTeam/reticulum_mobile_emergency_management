@@ -2,11 +2,11 @@
 name = "reticulum_mobile_uniffi_bindgen"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.89"
 publish = false
 
 [dependencies]
-uniffi = { version = "=0.28.3", features = ["cli"] }
+uniffi = { version = "=0.32.2", features = ["cli"] }
 
 [lints.rust]
 unsafe_code = "warn"
@@ -14,3 +14,7 @@ unsafe_code = "warn"
 [lints.clippy]
 all = "warn"
 pedantic = "warn"
+
+[patch.crates-io]
+# shortcut: Askama's parser fix is unreleased; remove this patch after release.
+askama_derive = { git = "https://github.com/askama-rs/askama.git", rev = "3863808cf594054f7644979ed92caaafc878f378" }

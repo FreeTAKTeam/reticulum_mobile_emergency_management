@@ -15,8 +15,12 @@ The implementation adapts the standard Heart Rate Service work by Giu Platania f
   bonded Heart Rate devices are accepted.
 - The plugin owns permission, pairing, GATT monitoring, configuration, and optional LXMF
   sharing. Sharing defaults to off.
-- Normalized `heart_rate_bpm` values are published to REM no more than once per second.
+- Normalized `heart_rate_bpm` values are published to REM no more than once per second,
+  using elapsed realtime for rate and sharing intervals. Remote sample times are clamped
+  within five minutes of the local wall clock.
 - The configuration UI is loaded dynamically from this APK by REM's isolated offline WebView.
+
+- A failed GATT connection creation reports `Connection failed` and uses the bounded reconnect policy.
 
 ## Build and signing
 

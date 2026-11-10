@@ -22,13 +22,20 @@ Shell:
 Each script:
 
 - Builds `reticulum_mobile` for platform targets (Android or iOS)
-- Runs `uniffi-bindgen` for the chosen language
+- Runs the pinned workspace `uniffi-bindgen` for the chosen language
 - Copies generated bindings into `apps/mobile/{android|ios}/uniffi`
 - Copies built native libraries into `apps/mobile/{android|ios}/uniffi/libs/<target>`
 - For Android (`kotlin`), also copies `libreticulum_mobile.so` into:
   - `apps/mobile/android/app/src/main/jniLibs/arm64-v8a`
   - `apps/mobile/android/app/src/main/jniLibs/armeabi-v7a`
   - `apps/mobile/android/app/src/main/jniLibs/x86_64`
+
+On Linux, set `UNIFFI_TEST_JNA_JAR` to a JNA 5.12.0+ jar and run
+`bash tools/codegen/test-uniffi-bindings.sh` with `kotlinc` and Java on `PATH`.
+The check generates Kotlin, Swift, and Python bindings and calls the native
+library through Kotlin and Python. Kotlin consumers need JNA 5.12.0 or newer;
+the subscription's native `close` method is named `closeSubscription` to
+avoid Kotlin's `AutoCloseable.close`.
 
 ## Android Prerequisites
 

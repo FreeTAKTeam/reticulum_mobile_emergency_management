@@ -168,7 +168,7 @@ fn plugin_publisher_approval_applies_to_every_matching_package() {
 }
 
 #[test]
-fn plugin_certificate_change_revokes_enablement_and_grants() {
+fn plugin_certificate_rotation_revokes_enablement_and_grants() {
     let storage_dir = test_storage_dir("plugin-certificate-change");
     let store = AppStateStore::new(storage_dir.to_str()).expect("store");
     let first = "ab".repeat(32);
@@ -192,9 +192,11 @@ fn plugin_certificate_change_revokes_enablement_and_grants() {
         .expect("enable plugin");
 
     let second = "cd".repeat(32);
+    let mut rotated = discovered_plugin(second.as_str());
+    rotated.publisher_history = vec![first];
     store
-        .sync_discovered_plugins(&[discovered_plugin(second.as_str())])
-        .expect("replace signer");
+        .sync_discovered_plugins(&[rotated])
+        .expect("replace signer with verified history");
     let plugin = store
         .get_plugin("org.freetakteam.rem.plugin.test")
         .expect("plugin lookup")
@@ -209,7 +211,7 @@ fn plugin_certificate_change_revokes_enablement_and_grants() {
 }
 
 #[test]
-fn plugin_signing_lineage_preserves_trust_and_revokes_as_one_publisher() {
+fn plugin_signing_rotation_requires_current_publisher_approval() {
     let storage_dir = test_storage_dir("plugin-signing-lineage");
     let store = AppStateStore::new(storage_dir.to_str()).expect("store");
     let old_fingerprint = "ab".repeat(32);
@@ -227,12 +229,24 @@ fn plugin_signing_lineage_preserves_trust_and_revokes_as_one_publisher() {
         .sync_discovered_plugins(&[rotated])
         .expect("discover rotated signer");
     assert!(
-        store
+        !store
             .get_plugin("org.freetakteam.rem.plugin.test")
             .expect("plugin lookup")
             .expect("plugin")
             .trusted
     );
+
+    assert!(store
+        .set_plugin_enabled("org.freetakteam.rem.plugin.test", true)
+        .is_err());
+    store
+        .approve_plugin_publisher("org.freetakteam.rem.plugin.test", None)
+        .expect("approve current signer");
+    assert!(store
+        .get_plugin("org.freetakteam.rem.plugin.test")
+        .expect("plugin lookup")
+        .expect("plugin")
+        .trusted);
 
     store
         .revoke_plugin_publisher(new_fingerprint.as_str())
@@ -289,4 +303,26 @@ fn readiness_eam(
         draft_created_at_ms: None,
         last_synced_at_ms: None,
     }
+}
+
+#[test]
+fn plugin_publisher_approval_does_not_authorize_history_only_match() {
+    let storage_dir = test_storage_dir("plugin-current-publisher-approval");
+    let store = AppStateStore::new(storage_dir.to_str()).expect("store");
+    let old = "ab".repeat(32);
+    let mut rotated = discovered_plugin(&"cd".repeat(32));
+    rotated.plugin_id = "org.freetakteam.rem.plugin.rotated".to_string();
+    rotated.package_name = rotated.plugin_id.clone();
+    rotated.publisher_history = vec![old.clone()];
+    store
+        .sync_discovered_plugins(&[discovered_plugin(&old), rotated])
+        .expect("discover publishers");
+    store
+        .approve_plugin_publisher("org.freetakteam.rem.plugin.test", None)
+        .expect("approve old publisher");
+    assert!(!store
+        .get_plugin("org.freetakteam.rem.plugin.rotated")
+        .expect("plugin lookup")
+        .expect("rotated plugin")
+        .trusted);
 }

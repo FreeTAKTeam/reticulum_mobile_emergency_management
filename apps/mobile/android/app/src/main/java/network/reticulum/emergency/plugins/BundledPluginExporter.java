@@ -140,8 +140,8 @@ public final class BundledPluginExporter {
     }
 
     static void validateAssets(String[] assets) throws IOException {
-        String[] names = { "ble-heart-rate", "watch-status", "atn-rangefinder" };
-        if (assets.length != names.length) throw new IOException("Expected three plugin installers");
+        String[] names = { "ble-heart-rate", "watch-status", "atn-rangefinder", "gotenna-mesh-beta" };
+        if (assets.length != names.length) throw new IOException("Expected four plugin installers");
         for (String name : names) {
             if (Arrays.stream(assets).filter(asset -> asset.matches(name + "-[a-f0-9]{64}\\.apk")).count() != 1) {
                 throw new IOException("Missing or invalid plugin installer: " + name);

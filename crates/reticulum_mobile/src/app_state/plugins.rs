@@ -104,12 +104,7 @@ impl AppStateStore {
         for mut signed_plugin in self.list_plugins()? {
             let signed_by_publisher =
                 normalize_fingerprint(signed_plugin.discovered.publisher_fingerprint.as_str())
-                    == fingerprint
-                    || signed_plugin
-                        .discovered
-                        .publisher_history
-                        .iter()
-                        .any(|value| normalize_fingerprint(value.as_str()) == fingerprint);
+                    == fingerprint;
             if !signed_by_publisher {
                 continue;
             }

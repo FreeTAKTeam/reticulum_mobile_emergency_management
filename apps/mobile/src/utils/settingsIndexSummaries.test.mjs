@@ -39,9 +39,9 @@ test("SOS summary lists active triggers", () => {
   assert.equal(summaries.sosSummary(true, none), "On · manual only");
   assert.equal(
     summaries.sosSummary(true, { ...none, shake: true, powerButton: true }),
-    "On · Shake + power button",
+    "On · Shake + screen cycles",
   );
-  assert.equal(summaries.sosSummary(true, { ...none, powerButton: true }), "On · Power button");
+  assert.equal(summaries.sosSummary(true, { ...none, powerButton: true }), "On · Screen cycles");
 });
 
 test("device summaries", () => {

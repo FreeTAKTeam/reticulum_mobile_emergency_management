@@ -86,38 +86,46 @@ fn upsert_saved_peer_persists_selected_lxmf_route() {
 
 #[test]
 fn legacy_saved_peers_migrate_once_into_local_yellow() {
-    let storage_dir = test_storage_dir("local-yellow-migration");
-    let store = AppStateStore::new(storage_dir.to_str()).expect("store");
-    let mut settings = app_settings_with_due_step(30);
-    settings.teams.local_teams.clear();
-    settings.teams.local_teams_initialized = false;
-    store.set_app_settings(&settings).expect("settings");
-    store
-        .set_saved_peers(&[SavedPeerRecord {
-            destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
-            label: Some("Family".to_string()),
-            saved_at_ms: 1,
-            identity_hex: None,
-            lxmf_destination_hex: None,
-            app_data: None,
-            display_name: None,
-            last_route_seen_at_ms: None,
-            last_hops: None,
-            circle_tier: CircleTier::Inner {},
-        }])
-        .expect("saved peer");
+    for include_peer in [false, true] {
+        let storage_dir = test_storage_dir(&format!("local-yellow-migration-{include_peer}"));
+        let store = AppStateStore::new(storage_dir.to_str()).expect("store");
+        let mut settings = app_settings_with_due_step(30);
+        settings.teams.local_teams.clear();
+        settings.teams.local_teams_initialized = false;
+        store.set_app_settings(&settings).expect("settings");
+        if include_peer {
+            store
+                .set_saved_peers(&[SavedPeerRecord {
+                    destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+                    label: Some("Family".to_string()),
+                    saved_at_ms: 1,
+                    identity_hex: None,
+                    lxmf_destination_hex: None,
+                    app_data: None,
+                    display_name: None,
+                    last_route_seen_at_ms: None,
+                    last_hops: None,
+                    circle_tier: CircleTier::Inner {},
+                }])
+                .expect("saved peer");
+        }
 
-    let migrated = store
-        .get_app_settings()
-        .expect("get settings")
-        .expect("settings exist");
-    assert!(migrated.teams.local_teams_initialized);
-    assert_eq!(migrated.teams.local_teams.len(), 1);
-    assert_eq!(migrated.teams.local_teams[0].team_uid, YELLOW_TEAM_UID);
-    assert_eq!(
-        migrated.teams.local_teams[0].member_destinations,
-        vec!["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
-    );
+        let migrated = store
+            .get_app_settings()
+            .expect("get settings")
+            .expect("settings exist");
+        assert!(migrated.teams.local_teams_initialized);
+        assert_eq!(migrated.teams.local_teams.len(), 1);
+        assert_eq!(migrated.teams.local_teams[0].team_uid, YELLOW_TEAM_UID);
+        if include_peer {
+            assert_eq!(
+                migrated.teams.local_teams[0].member_destinations,
+                vec!["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+            );
+        } else {
+            assert!(migrated.teams.local_teams[0].member_destinations.is_empty());
+        }
+    }
 }
 
 fn message(

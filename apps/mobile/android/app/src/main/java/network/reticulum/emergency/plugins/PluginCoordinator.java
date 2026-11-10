@@ -20,6 +20,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 import network.reticulum.emergency.R;
 import network.reticulum.emergency.ReticulumBridge;
 import network.reticulum.emergency.plugin.api.IRemPluginHost;
@@ -34,6 +35,7 @@ public final class PluginCoordinator implements AutoCloseable {
     private static final int MAX_RETRIES = 5;
     private final Context context;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    // shortcut: hung Binder calls occupy this worker; isolate plugins if independent progress is required.
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Map<String, PluginConnection> connections = new HashMap<>();
     private volatile boolean nodeRunning;
@@ -242,17 +244,18 @@ public final class PluginCoordinator implements AutoCloseable {
     public void close() {
         nodeRunning = false;
         stopAll("host-destroyed");
-        executor.shutdownNow();
+        executor.shutdown();
     }
 
     private final class PluginConnection implements ServiceConnection, IBinder.DeathRecipient {
         private final JSONObject plugin;
         private final String pluginId;
         private final ComponentName component;
-        private IRemPluginService service;
+        private volatile IRemPluginService service;
+        private final AtomicInteger generation = new AtomicInteger();
         private int retryCount;
         private boolean bound;
-        private boolean active = true;
+        private volatile boolean active = true;
 
         PluginConnection(JSONObject plugin) throws JSONException {
             this.plugin = plugin;
@@ -281,10 +284,23 @@ public final class PluginCoordinator implements AutoCloseable {
                 cleanup("inactive");
                 return;
             }
-            service = IRemPluginService.Stub.asInterface(binder);
+            final IRemPluginService connectedService = IRemPluginService.Stub.asInterface(binder);
+            service = connectedService;
+            final int attempt = generation.incrementAndGet();
+            executor.execute(() -> startService(binder, connectedService, attempt));
+        }
+
+        private boolean isCurrent(IRemPluginService connectedService, int attempt) {
+            return active && nodeRunning && service == connectedService && generation.get() == attempt;
+        }
+
+        private void startService(IBinder binder, IRemPluginService connectedService, int attempt) {
             try {
+                if (!isCurrent(connectedService, attempt)) {
+                    return;
+                }
                 binder.linkToDeath(this, 0);
-                final String descriptorJson = service.getDescriptorJson();
+                final String descriptorJson = connectedService.getDescriptorJson();
                 PluginProtocol.requireJsonSize(descriptorJson, "Plugin descriptor");
                 final JSONObject descriptor = new JSONObject(descriptorJson);
                 if (!pluginId.equals(descriptor.optString("pluginId"))
@@ -306,11 +322,22 @@ public final class PluginCoordinator implements AutoCloseable {
                     .put("apiMinor", apiMinor)
                     .put("sessionId", UUID.randomUUID().toString())
                     .put("hostPackage", context.getPackageName());
-                service.start(new HostCallback(this), session.toString());
-                retryCount = 0;
-                setState("Running", null);
+                if (!isCurrent(connectedService, attempt)) {
+                    return;
+                }
+                connectedService.start(new HostCallback(this), session.toString());
+                mainHandler.post(() -> {
+                    if (isCurrent(connectedService, attempt)) {
+                        retryCount = 0;
+                        setState("Running", null);
+                    }
+                });
             } catch (Exception error) {
-                fail("Plugin start failed: " + error.getMessage());
+                mainHandler.post(() -> {
+                    if (isCurrent(connectedService, attempt)) {
+                        fail("Plugin start failed: " + error.getMessage());
+                    }
+                });
             }
         }
 
@@ -331,12 +358,17 @@ public final class PluginCoordinator implements AutoCloseable {
 
         private void cleanup(String reason) {
             endMapSessions(reason);
-            if (service != null) {
-                try {
-                    service.stop(reason);
-                } catch (RemoteException cleanupError) {
-                    Log.d(TAG, "Plugin stop callback failed during cleanup: " + pluginId, cleanupError);
-                }
+            generation.incrementAndGet();
+            final IRemPluginService connectedService = service;
+            service = null;
+            if (connectedService != null) {
+                executor.execute(() -> {
+                    try {
+                        connectedService.stop(reason);
+                    } catch (RemoteException | RuntimeException cleanupError) {
+                        Log.d(TAG, "Plugin stop callback failed during cleanup: " + pluginId, cleanupError);
+                    }
+                });
             }
             if (bound) {
                 try {
@@ -432,7 +464,7 @@ public final class PluginCoordinator implements AutoCloseable {
             try {
                 service.onHostResponse(response);
             } catch (RemoteException error) {
-                connection.fail("Host response failed: " + error.getMessage());
+                mainHandler.post(() -> connection.fail("Host response failed: " + error.getMessage()));
             }
         }
     }

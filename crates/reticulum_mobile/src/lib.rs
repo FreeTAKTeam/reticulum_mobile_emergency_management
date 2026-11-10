@@ -7,8 +7,6 @@
         clippy::unwrap_used
     )
 )]
-// UniFFI 0.28 emits a separated metadata doc comment in generated scaffolding.
-#![allow(clippy::empty_line_after_doc_comments)]
 // JNI tests share the include-based bridge module with the exported functions they exercise.
 #![allow(clippy::items_after_test_module)]
 // Generated UniFFI and JNI exports require unsafe attributes such as `no_mangle`.
@@ -110,7 +108,13 @@ pub fn healthcheck() -> String {
     "reticulum-mobile-ready".to_string()
 }
 
-// UniFFI generates the required unmangled C ABI exports from the UDL.
-uniffi::include_scaffolding!("reticulum_mobile");
+// UniFFI emits the large metadata const and unmangled C ABI exports from the UDL.
+#[allow(clippy::large_const_arrays)]
+mod uniffi_scaffolding {
+    use super::*;
+    uniffi::include_scaffolding!("reticulum_mobile");
+}
+#[doc(hidden)]
+pub use uniffi_scaffolding::UniFfiTag;
 
 mod telemetry_publication;

@@ -1,4 +1,10 @@
+use argon2::{
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    Argon2,
+};
+use rand_core::{OsRng, RngCore};
 use sha2::{Digest, Sha256};
+use subtle::ConstantTimeEq;
 
 use crate::runtime::now_ms;
 use crate::sos_fields::{sos_kind_to_str, trigger_source_to_str};
@@ -82,9 +88,17 @@ pub(crate) fn set_pin(settings: &mut SosSettingsRecord, pin: &str) -> Result<(),
     if normalized.len() < 4 || !normalized.chars().all(|ch| ch.is_ascii_digit()) {
         return Err(NodeError::InvalidConfig {});
     }
-    let salt = format!("{:x}{:x}", now_ms(), normalized.len());
-    settings.deactivation_pin_hash = Some(hash_pin(normalized, salt.as_str()));
-    settings.deactivation_pin_salt = Some(salt);
+    let mut salt_bytes = [0_u8; 16];
+    OsRng
+        .try_fill_bytes(&mut salt_bytes)
+        .map_err(|_| NodeError::InternalError {})?;
+    let salt = SaltString::encode_b64(&salt_bytes).map_err(|_| NodeError::InternalError {})?;
+    let hash = Argon2::default()
+        .hash_password(normalized.as_bytes(), &salt)
+        .map_err(|_| NodeError::InternalError {})?
+        .to_string();
+    settings.deactivation_pin_hash = Some(hash);
+    settings.deactivation_pin_salt = Some(salt.to_string());
     Ok(())
 }
 
@@ -98,7 +112,15 @@ pub(crate) fn verify_pin(settings: &SosSettingsRecord, pin: Option<&str>) -> boo
     let Some(pin) = pin.map(str::trim).filter(|value| !value.is_empty()) else {
         return false;
     };
-    hash_pin(pin, salt) == stored_hash
+    if stored_hash.starts_with('$') {
+        return PasswordHash::new(stored_hash).is_ok_and(|hash| {
+            Argon2::default()
+                .verify_password(pin.as_bytes(), &hash)
+                .is_ok()
+        });
+    }
+    // Legacy SHA-256 records remain usable until successful verification upgrades them.
+    bool::from(hash_pin(pin, salt).as_bytes().ct_eq(stored_hash.as_bytes()))
 }
 
 pub(crate) fn hash_pin(pin: &str, salt: &str) -> String {
@@ -259,6 +281,33 @@ pub(crate) fn sos_kind_label(kind: SosMessageKind) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pin_uses_random_salt_and_argon2id() {
+        let mut first = default_sos_settings();
+        let mut second = default_sos_settings();
+        set_pin(&mut first, "1234").expect("set pin");
+        set_pin(&mut second, "1234").expect("set pin");
+        assert!(first
+            .deactivation_pin_hash
+            .as_ref()
+            .unwrap()
+            .starts_with("$argon2id$v=19$m=19456,t=2,p=1$"));
+        assert_ne!(first.deactivation_pin_salt, second.deactivation_pin_salt);
+        assert!(verify_pin(&first, Some(" 1234 ")));
+        assert!(!verify_pin(&first, None));
+        first.deactivation_pin_hash = Some("$broken".into());
+        assert!(!verify_pin(&first, Some("1234")));
+    }
+
+    #[test]
+    fn legacy_pin_remains_verifiable() {
+        let mut settings = default_sos_settings();
+        settings.deactivation_pin_salt = Some("old-salt".into());
+        settings.deactivation_pin_hash = Some(hash_pin("1234", "old-salt"));
+        assert!(verify_pin(&settings, Some("1234")));
+        assert!(!verify_pin(&settings, Some("9999")));
+    }
 
     #[test]
     fn pin_hash_is_salted_and_verifiable() {

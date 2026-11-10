@@ -36,7 +36,12 @@ from `PackageManager`, not from the plugin descriptor.
 
 REM shows the plugin signing-certificate SHA-256 fingerprint before binding. Approving a publisher
 does not enable the plugin or grant capabilities. Certificate changes revoke the active session
-unless Android proves that the new signer belongs to the trusted signing lineage.
+and clears capability grants even when Android proves a signing lineage. The operator must
+explicitly approve the current certificate, grant capabilities, and enable the plugin again.
+Signing history is metadata, never authorization. Plugin SDK host allowlists likewise accept
+only current APK signers; update those allowlists when rotating REM keys and remove retired
+fingerprints. Revoke a compromised publisher in Settings before approving its replacement;
+revocation removes trust for the known lineage.
 
 Plugins must also validate the REM caller on every Binder call. Override
 `allowedHostPackageNames()` and `allowedHostCertificateFingerprints()` in `RemPluginService`
@@ -236,12 +241,12 @@ configuration validation, SDK packaging, discovery, and Binder integration.
 
 ## Offline release packages
 
-Each offline release contains `rem-complete.apk`, `rem-light.apk`, the individually signed
-`ble-heart-rate.apk`, `watch-status.apk`, and `atn-rangefinder.apk`, plus `SHA256SUMS` and
+Each offline release contains `rem-complete.apk`, `rem-light.apk`, `rem-light.aab`, the individually signed
+`ble-heart-rate.apk`, `watch-status.apk`, `atn-rangefinder.apk`, and `gotenna-mesh-beta.apk`, plus `SHA256SUMS` and
 `BUILD-INFO.txt`. Transfer either the complete APK or the light APK and the desired individual
 plugin APKs. Both REM APKs use the same application ID, version, and signing certificate.
 
-On the first launch of the complete APK, REM copies its three bundled plugin installers into
+On the first launch of the complete APK, REM copies its four bundled plugin installers into
 `Downloads/REM Plugins`. Android 8 and 9 require the user to grant storage access for this copy.
 If access is denied or copying fails, reopening REM retries. Install only the desired APKs from
 that folder with the Android file manager, then refresh Settings → Plugins and approve, grant,
@@ -249,11 +254,14 @@ enable, and configure them. Android's installation confirmation and publisher tr
 force. REM never installs plugins automatically. Plugin names include the APK SHA-256; a new
 release leaves previous installers in place. The light APK does not copy installers.
 
+goTenna Mesh is beta software. Its APK label, REM plugin name and configuration screen identify
+it as Beta; public forwarding stays off until the user explicitly enables it and grants access.
+
 ### Building the packages
 
 Use a clean, release-ready REM checkout with Node dependencies and its pinned LXMF-rs checkout
 in the location required by `crates/reticulum_mobile/Cargo.toml`. Configure the Android SDK,
-NDK, Rust Android targets, REM signing, and the existing Heart Rate and Watch Status signing
+NDK, Rust Android targets, UniFFI bindgen, REM signing, and Heart Rate, Watch Status and goTenna signing
 properties. Point `ATN_SOURCE` to an ATN git repository and `ATN_COMMIT` to the full commit to
 build; the script exports that commit to a temporary directory and does not use its working-tree
 changes. `ATN_GRADLE` must point to Gradle 8.11.1. Set `ANDROID_HOME`, `ANDROID_NDK_HOME`,
@@ -264,9 +272,9 @@ changes. `ATN_GRADLE` must point to Gradle 8.11.1. Set `ANDROID_HOME`, `ANDROID_
 bash tools/build-offline-release.sh
 ```
 
-Keep signing passwords and keys outside version control. The script builds both bundled REM
+Keep signing passwords and keys outside version control. The script builds the three bundled REM
 plugins, builds the ATN Rust and Android APK using the locally built REM SDK, signs the ATN APK,
-and builds both REM variants. It verifies APK signatures, plugin package IDs, the REM signer,
+and builds both REM APK variants plus the signed Light AAB. It verifies APK signatures and ZIP alignment, plugin package IDs, the REM signer,
 and equality of bundled and standalone APK bytes before writing `output/offline-release-<version>`.
 It does not publish, install, or verify real hardware. Android version codes must increase for
 updates, and all plugin signing keys must remain consistent across releases. REM host fingerprints
@@ -361,3 +369,12 @@ Received raw bytes, bounded fragment snapshots and pending admissions are only
 internal custody. A separate pending-sent receipt survives native recording failures without retransmitting the radio message. Terminal `InvalidRequest` is rejected visibly and does not block later receptions. The operator reads chat in normal REM conversations and events
 in the native event timeline. The APK is independently built and is not yet in
 the existing offline release bundle.
+
+### Plugin lifecycle threading
+
+The host exchanges Binder descriptors, starts plugins, and sends stop callbacks on its
+plugin executor. Main-handler completion checks reject stale starts after disable,
+disconnect, or node shutdown. A blocked remote lifecycle call does not block Android's
+main thread; it can still delay other work on the serialized plugin executor until the
+remote call returns or its process dies. Binder transactions have no cancellable host
+thread timeout in this implementation.

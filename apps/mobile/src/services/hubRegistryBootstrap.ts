@@ -1,3 +1,4 @@
+import { operationalStorage } from "./operationalStorage";
 import type { PacketReceivedEvent } from "@reticulum/node-client";
 
 import {
@@ -97,7 +98,7 @@ function createTrackingId(prefix: string): string {
 
 function loadJsonStorage<T>(key: string): T | null {
   try {
-    const raw = localStorage.getItem(key);
+    const raw = operationalStorage.getItem(key);
     if (!raw) {
       return null;
     }
@@ -108,7 +109,7 @@ function loadJsonStorage<T>(key: string): T | null {
 }
 
 function saveJsonStorage(key: string, value: unknown): void {
-  localStorage.setItem(key, JSON.stringify(value));
+  operationalStorage.setItem(key, JSON.stringify(value));
 }
 
 function loadPreferredTeamColor(): R3aktTeamColor {
@@ -177,7 +178,7 @@ export function saveHubRegistryLinkage(linkage: HubRegistryLinkage): void {
 }
 
 export function clearHubRegistryLinkage(): void {
-  localStorage.removeItem(HUB_REGISTRY_LINKAGE_STORAGE_KEY);
+  operationalStorage.removeItem(HUB_REGISTRY_LINKAGE_STORAGE_KEY);
 }
 
 export function buildHubRegistryBootstrapProfile(options: {

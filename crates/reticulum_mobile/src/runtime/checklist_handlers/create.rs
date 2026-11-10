@@ -125,6 +125,9 @@ fn handle_inbound_checklist_create(ctx: &InboundChecklistCommand<'_>) -> bool {
         if let Ok(mut snapshot) =
             serde_json::from_str::<ChecklistRecord>(snapshot_json.as_str())
         {
+            if !validate_inbound_checklist_clock(&snapshot, bus) {
+                return false;
+            }
             snapshot.uid = checklist_uid.clone();
             if snapshot.mission_uid.is_none() {
                 snapshot.mission_uid = checklist.mission_uid.clone();

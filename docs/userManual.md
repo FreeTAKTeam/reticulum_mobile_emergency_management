@@ -548,3 +548,8 @@ An empty screen does not always mean something is wrong. It often means the app 
 | Selected peer | A peer you have chosen as a sharing target. In the current version, they also need to select you for two-way sharing. |
 | SOS | An emergency mode for sending urgent distress information to trusted peers. |
 | Telemetry | Position information, such as a recent location shown on the Map. |
+
+The opt-in Android **Screen cycle trigger** requires six screen on/off transitions
+(three cycles) within two seconds. Android supplies screen events, not physical
+power-button presses; automatic wake or lock events can contribute. Three
+transitions (lock, wake, lock) alone do not start the SOS countdown.

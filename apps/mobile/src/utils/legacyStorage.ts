@@ -1,3 +1,8 @@
+import { Capacitor } from "@capacitor/core";
+import type { NodeUiSettings } from "../types/domain";
+import type { SavedPeerRecord } from "@reticulum/node-client";
+import { operationalStorage } from "../services/operationalStorage";
+
 export const LEGACY_SETTINGS_STORAGE_KEY = "reticulum.mobile.settings.v1";
 export const LEGACY_SAVED_STORAGE_KEY = "reticulum.mobile.savedPeers.v1";
 export const LEGACY_EAM_STORAGE_KEY = "reticulum.mobile.messages.v1";
@@ -14,7 +19,10 @@ export function nowMs(): number {
 
 export function readJson<T>(key: string): T | null {
   try {
-    const raw = localStorage.getItem(key);
+    const operationalKeys = [LEGACY_SAVED_STORAGE_KEY, LEGACY_EAM_STORAGE_KEY, LEGACY_EVENT_STORAGE_KEY,
+      LEGACY_INBOX_STORAGE_KEY, LEGACY_TELEMETRY_STORAGE_KEY];
+    const storage = operationalKeys.includes(key) ? operationalStorage : localStorage;
+    const raw = storage.getItem(key);
     if (!raw) {
       return null;
     }
@@ -41,4 +49,14 @@ export function optionalNumber(value: unknown): number | undefined {
   }
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : undefined;
+}
+
+export function persistWebLegacySavedPeers(records: SavedPeerRecord[]): void {
+  operationalStorage.setItem(LEGACY_SAVED_STORAGE_KEY, JSON.stringify(records));
+}
+
+export function persistWebLegacySettings(settings: NodeUiSettings): void {
+  const persisted = Capacitor.getPlatform() === "web"
+    ? { ...settings, hub: { ...settings.hub, apiKey: "" } } : settings;
+  localStorage.setItem(LEGACY_SETTINGS_STORAGE_KEY, JSON.stringify(persisted));
 }

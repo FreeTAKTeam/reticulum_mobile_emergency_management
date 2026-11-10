@@ -9,11 +9,9 @@ It answers two urgent questions:
 
 REM is built around simple pages for team status, chat, checklists, map positions, peer discovery, and event logs. It can work directly with trusted peers over Reticulum mesh networking, and it can also use Reticulum Community Hub support when a team chooses that setup.
 
-The current Android source version is `1.5.5`. The `main` branch builds against
-LXMF-rs `v0.16.0` at immutable release revision
-`45b5f5650b375ff418ec849cd9f99bf7f63a106c` (1.5.5, 1.5.4, 1.5.3, 1.5.1 and 1.5.0 ship with `v0.14.0`; 1.4.1 shipped with `v0.13.0`;
-wire formats are unchanged). This includes selected Reticulum 1.5.5 updates
-and does not claim full Reticulum 1.5.5 parity.
+The current Android source version is `1.6.1`. CI builds against LXMF-rs
+`0.16.1` at source revision `8c27a200939495e7d412a92ee171329d0c458d28`.
+This source pin is not a new LXMF-rs release.
 Automated validation and the two-phone TCP matrix are release gates; the
 remaining physical LoRa and mixed-interface rows are documented preview scope
 in the [manual release matrix](docs/rem-1.2-manual-release-gate.md).
@@ -135,10 +133,11 @@ npm --workspace apps/mobile run typecheck
 npm run web:build
 npm run mobile:build
 npm run test:e2e
-cargo +1.88 fetch --manifest-path crates/reticulum_mobile/Cargo.toml --locked
-cargo +1.88 clippy --manifest-path crates/reticulum_mobile/Cargo.toml --all-targets -- -D warnings
-cargo +1.88 test --manifest-path crates/reticulum_mobile/Cargo.toml --locked
-cargo audit --file crates/reticulum_mobile/Cargo.lock
+cargo +1.89 fetch --manifest-path crates/reticulum_mobile/Cargo.toml --locked
+cargo +1.89 clippy --manifest-path crates/reticulum_mobile/Cargo.toml --all-targets -- -D warnings
+cargo +1.89 test --manifest-path crates/reticulum_mobile/Cargo.toml --locked
+cargo audit --deny warnings --file crates/reticulum_mobile/Cargo.lock
+cargo audit --deny warnings --file tools/uniffi-bindgen/Cargo.lock
 ```
 
 The source-size check is a hard gate: first-party source and test files, and

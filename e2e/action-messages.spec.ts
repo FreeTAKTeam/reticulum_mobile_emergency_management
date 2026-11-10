@@ -4,8 +4,10 @@ import { defaultSettings, gotoApp, seedAppStorage } from "./support/app";
 
 test("operators can create, edit statuses, cycle status, view help, and delete an action message", async ({ page }) => {
   const updatedAtFor = async (callsign: string): Promise<number> =>
-    page.evaluate((targetCallsign) => {
-      const raw = globalThis.localStorage.getItem("reticulum.mobile.messages.v1");
+    page.evaluate(async (targetCallsign) => {
+      const path = "/src/services/operationalStorage.ts";
+      const { operationalStorage } = await import(/* @vite-ignore */ path);
+      const raw = operationalStorage.getItem("reticulum.mobile.messages.v1");
       if (!raw) {
         return 0;
       }

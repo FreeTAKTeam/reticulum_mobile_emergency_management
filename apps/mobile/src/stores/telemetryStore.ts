@@ -1,3 +1,4 @@
+import { operationalStorage } from "../services/operationalStorage";
 import type { TelemetryPublicationSnapshot } from "@reticulum/node-client";
 import {
   type ProjectionInvalidationEvent,
@@ -45,7 +46,7 @@ function normalizeTelemetryPosition(position: TelemetryPosition): TelemetryPosit
 
 function loadLegacyPositions(): TelemetryPosition[] {
   try {
-    const raw = localStorage.getItem(LEGACY_TELEMETRY_STORAGE_KEY);
+    const raw = operationalStorage.getItem(LEGACY_TELEMETRY_STORAGE_KEY);
     if (!raw) {
       return [];
     }
@@ -59,11 +60,11 @@ function loadLegacyPositions(): TelemetryPosition[] {
 }
 
 function clearLegacyPositionsStorage(): void {
-  localStorage.removeItem(LEGACY_TELEMETRY_STORAGE_KEY);
+  operationalStorage.removeItem(LEGACY_TELEMETRY_STORAGE_KEY);
 }
 
 function saveLegacyPositions(positions: TelemetryPosition[]): void {
-  localStorage.setItem(LEGACY_TELEMETRY_STORAGE_KEY, JSON.stringify(positions));
+  operationalStorage.setItem(LEGACY_TELEMETRY_STORAGE_KEY, JSON.stringify(positions));
 }
 
 function keyFor(callsign: string): string {

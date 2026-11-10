@@ -110,6 +110,12 @@ Flow of one `set_situation` call:
    `skipped_household_off`, `skipped_another_phone_reports`, `failed` or
    `waiting_for_sos_countdown`.
 
+SOS cancellation PINs use Argon2id v19 (19 MiB, two iterations, one lane)
+with a fresh 16-byte OS-random salt. The stored hash is a versioned PHC string.
+Legacy SHA-256 PIN records are verified with constant-time equality and upgraded
+only after successful cancellation PIN verification; invalid PINs leave settings
+unchanged. Existing records remain usable without resetting the PIN.
+
 Choosing the current situation again sends nothing, except `sos`. A different
 `detail` (another supply kind, medical code or destination) counts as a change.
 Situations without a follow-up ignore `detail`; an unknown supply kind or
@@ -416,6 +422,15 @@ sequenceDiagram
 ## Checklist / Excheck Flow
 
 Checklist state is Rust-authoritative. The Vue screens call the node-client checklist API, the Android bridge forwards those calls to the native service, and `crates/reticulum_mobile` persists checklist records before emitting projection invalidations. The UI refreshes `Checklists` and keyed `ChecklistDetail` projections instead of caching checklist state in the browser layer.
+
+Inbound checklist commands and merged snapshots reject invalid version timestamps
+or version timestamps more than 15 minutes ahead of the receiver's wall clock.
+The bound covers checklist creation/update/upload/deletion, task update/deletion/
+completion, cell updates, and feed publication timestamps. Scheduled start/due
+times remain unrestricted. Rejection emits an InvalidConfig runtime event and
+leaves stored checklist state unchanged; the sender must correct its clock and
+retry. This protects new inbound state; previously stored poisoned records are
+not migrated by this change.
 
 Checklist templates can be built in or imported from CSV. CSV import is handled in Rust. The importer accepts arbitrary normal columns and treats `CompletedDTG`, `Completed DTG`, `Due`, `DueRelativeDTG`, `Due Relative DTG`, `Due Relative Minutes`, or `Due Minutes` as the deadline column. REM stores that column as the pinned system column `DUE_RELATIVE_DTG` with relative task deadlines in `due_relative_minutes`. If the CSV does not include a deadline column, Rust creates one and applies the configured default deadline step, currently 30 minutes per row.
 
@@ -788,35 +803,27 @@ The repo now carries a local workspace runner for UniFFI CLI generation:
 - package: `tools/uniffi-bindgen`
 - binary: `reticulum_mobile_uniffi_bindgen`
 
-`tools/codegen/generate-uniffi-bindings.ps1` uses this order:
-
-1. use `uniffi-bindgen` from `PATH` if it exists
-2. otherwise run the workspace fallback:
-   - `cargo run -p reticulum_mobile_uniffi_bindgen -- generate --language <swift|kotlin> ...`
-
-This avoids relying on a globally installed `uniffi-bindgen` executable, which is not always present with the UniFFI `0.28.x` crate layout used by this repo.
+Both codegen scripts use the locked workspace runner, keeping the generated
+bindings on the same UniFFI version as the native library. A globally installed
+`uniffi-bindgen` is not used.
 
 ## Networking and shared map dependencies
 
-The compiled networking stack is pinned to LXMF-rs `v0.16.0` at
-`45b5f5650b375ff418ec849cd9f99bf7f63a106c` (REM 1.5.1 and 1.5.0 ship with `v0.14.0`; REM 1.4.1 shipped with `v0.13.0`
-at `fbc75b86e15550722923b366398f0a4116182894`; v0.14.0 keeps the Reticulum
-and LXMF wire formats and moves to `rusqlite` 0.40). REM logs the upstream
+The compiled networking stack is pinned to LXMF-rs `0.16.1` source revision
+`8c27a200939495e7d412a92ee171329d0c458d28`. REM logs the upstream
 `OutboundRejected` Resource event distinctly from local cancellation and
-transfer failure. Delivery outcome handling remains in the compiled LXMF
-runtime. This release includes selected Reticulum 1.5.5 changes and does not
-claim full 1.5.5 parity.
+transfer failure. Delivery outcome handling remains in the compiled LXMF runtime.
 
 Map objects (point markers, the symbol catalog and the Telemeter send/receive
 contract) come from the shared RCH crate `r3akt-map-core`, pinned to RCH
-`979e8fbb313a4a280a16bcd6f42b309cd5478ed2` with its `sqlite` feature
+`8f236558340e03322788f03f038ea6728e2720bf` with its `sqlite` feature
 ([REM #280](https://github.com/FreeTAKTeam/reticulum_mobile_emergency_management/issues/280),
 [RCH #259](https://github.com/FreeTAKTeam/Reticulum-Community-Hub/issues/259)).
 REM must not re-implement marker validation, symbols, idempotency or marker
 SQL; update the pin deliberately and together with RCH. Because the crate and
 LXMF-rs both bundle SQLite through `libsqlite3-sys`, REM, LXMF-rs and the
 pinned RCH revision must agree on one `rusqlite` minor version (currently
-0.40). The crate is EPL-2.0.
+0.41). The crate is EPL-2.0.
 
 ### Map markers (native service)
 
@@ -968,3 +975,6 @@ keeps a completed native admission in durable pending custody. These are interna
 transport records, not another chat store. Position import continues through the
 shared native map service. No UniFFI schema/bindings or LXMF protocol are recreated.
 See [the plugin contract and limits](../plugins/gotenna/README.md).
+
+Browser operational projection cache policy and plugin hardening are documented in
+[Local cache and plugin hardening](security-hardening.md).
