@@ -2,8 +2,8 @@
 name = "reticulum_mobile"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.88"
-# MSRV-aware resolution keeps freshly generated lockfiles buildable on 1.88.
+rust-version = "1.89"
+# MSRV-aware resolution keeps freshly generated lockfiles buildable on 1.89.
 resolver = "3"
 publish = false
 
@@ -40,10 +40,10 @@ lxmf-runtime = { path = "../../../LXMF-rs/crates/libs/lxmf-runtime" }
 rmp-serde = "1"
 rmpv = "1"
 # Shared RCH map objects (markers, symbol catalog, Telemeter contract); see docs/architecture.md.
-r3akt-map-core = { git = "https://github.com/FreeTAKTeam/Reticulum-Community-Hub.git", rev = "979e8fbb313a4a280a16bcd6f42b309cd5478ed2", features = ["sqlite"] }
+r3akt-map-core = { git = "https://github.com/FreeTAKTeam/Reticulum-Community-Hub.git", rev = "8f236558340e03322788f03f038ea6728e2720bf", features = ["sqlite"] }
 r3akt-mesh-delivery = { git = "https://github.com/FreeTAKTeam/R3AKTClient.git", rev = "e6d742fa281371f5346470e08cb723ec1dfd5723" }
 rand_core = { version = "0.6.4", features = ["getrandom"] }
-rusqlite = { version = "0.40.2", features = ["bundled"] }
+rusqlite = { version = "0.41.1", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

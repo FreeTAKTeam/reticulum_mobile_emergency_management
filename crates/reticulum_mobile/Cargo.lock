@@ -790,9 +790,9 @@ checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 
 [[package]]
 name = "libsqlite3-sys"
-version = "0.38.2"
+version = "0.39.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1d20bef17f513b9b3004532233187769cd072d790971f4e4da0e346eb6401e8"
+checksum = "14a5f01b87b92705d07b433c06f96cbc764637d81a0bffb5734ce17cf0f9a2b3"
 dependencies = [
  "cc",
  "pkg-config",
@@ -828,7 +828,7 @@ checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
 name = "lxmf-propagation"
-version = "0.14.0"
+version = "0.16.1"
 dependencies = [
  "hex",
  "hkdf",
@@ -845,14 +845,14 @@ dependencies = [
 
 [[package]]
 name = "lxmf-reference"
-version = "0.14.0"
+version = "0.16.1"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "lxmf-runtime"
-version = "0.14.0"
+version = "0.16.1"
 dependencies = [
  "base64",
  "hex",
@@ -871,7 +871,7 @@ dependencies = [
 
 [[package]]
 name = "lxmf-sdk"
-version = "0.14.0"
+version = "0.16.1"
 dependencies = [
  "hex",
  "hmac",
@@ -886,7 +886,7 @@ dependencies = [
 
 [[package]]
 name = "lxmf-wire"
-version = "0.14.0"
+version = "0.16.1"
 dependencies = [
  "base64",
  "ed25519-dalek",
@@ -1118,7 +1118,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 [[package]]
 name = "r3akt-map-core"
 version = "0.1.0"
-source = "git+https://github.com/FreeTAKTeam/Reticulum-Community-Hub.git?rev=979e8fbb313a4a280a16bcd6f42b309cd5478ed2#979e8fbb313a4a280a16bcd6f42b309cd5478ed2"
+source = "git+https://github.com/FreeTAKTeam/Reticulum-Community-Hub.git?rev=8f236558340e03322788f03f038ea6728e2720bf#8f236558340e03322788f03f038ea6728e2720bf"
 dependencies = [
  "base64",
  "chrono",
@@ -1149,7 +1149,7 @@ dependencies = [
 [[package]]
 name = "r3akt-profile-rch"
 version = "0.1.0"
-source = "git+https://github.com/FreeTAKTeam/Reticulum-Community-Hub.git?rev=979e8fbb313a4a280a16bcd6f42b309cd5478ed2#979e8fbb313a4a280a16bcd6f42b309cd5478ed2"
+source = "git+https://github.com/FreeTAKTeam/Reticulum-Community-Hub.git?rev=8f236558340e03322788f03f038ea6728e2720bf#8f236558340e03322788f03f038ea6728e2720bf"
 dependencies = [
  "r3akt-protocol",
  "rmp-serde",
@@ -1163,7 +1163,7 @@ dependencies = [
 [[package]]
 name = "r3akt-protocol"
 version = "0.1.0"
-source = "git+https://github.com/FreeTAKTeam/Reticulum-Community-Hub.git?rev=979e8fbb313a4a280a16bcd6f42b309cd5478ed2#979e8fbb313a4a280a16bcd6f42b309cd5478ed2"
+source = "git+https://github.com/FreeTAKTeam/Reticulum-Community-Hub.git?rev=8f236558340e03322788f03f038ea6728e2720bf#8f236558340e03322788f03f038ea6728e2720bf"
 dependencies = [
  "chrono",
  "rmp-serde",
@@ -1201,7 +1201,7 @@ dependencies = [
 
 [[package]]
 name = "reticulum-rs"
-version = "0.14.0"
+version = "0.16.1"
 dependencies = [
  "reticulum-rs-core",
  "reticulum-rs-transport",
@@ -1209,7 +1209,7 @@ dependencies = [
 
 [[package]]
 name = "reticulum-rs-core"
-version = "0.14.0"
+version = "0.16.1"
 dependencies = [
  "aes",
  "atomicwrites",
@@ -1229,7 +1229,7 @@ dependencies = [
 
 [[package]]
 name = "reticulum-rs-transport"
-version = "0.14.0"
+version = "0.16.1"
 dependencies = [
  "aes",
  "base64",
@@ -1341,9 +1341,9 @@ dependencies = [
 
 [[package]]
 name = "rusqlite"
-version = "0.40.2"
+version = "0.41.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23f2a97da3e3873c73cb2a2e71b35c40ff95e0b1eefa8d72d8499a6928c3b5b3"
+checksum = "da9bba6f3506135e120a6586df05be18b48d18896600646a4bec8f993d91a594"
 dependencies = [
  "bitflags 2.13.1",
  "fallible-iterator",
