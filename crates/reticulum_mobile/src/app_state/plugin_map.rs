@@ -20,7 +20,14 @@ impl AppStateStore {
                     crate::numeric::u64_to_i64_saturating(now_ms())
                 ],
             )
-            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
+            .map_err(|error| {
+                crate::error_context::contextual_node_error(NodeError::IoError {}, error)
+            })?;
+        if let Some(plugin) = self.get_plugin(plugin_id)? {
+            self.connect()?.execute("INSERT OR IGNORE INTO r3s_plugin_origin_owners(origin_id,plugin_id,fingerprint) VALUES (?1,?2,?3)",
+                params![object_destination_hash,plugin_id,plugin.discovered.publisher_fingerprint])
+                .map_err(|e|crate::error_context::contextual_node_error(NodeError::IoError {},e))?;
+        }
         Ok(())
     }
 
@@ -54,14 +61,18 @@ impl AppStateStore {
                     .query_map(params![plugin_id], |row| row.get::<_, String>(0))?
                     .collect::<Result<Vec<_>, _>>()
             })
-            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
+            .map_err(|error| {
+                crate::error_context::contextual_node_error(NodeError::IoError {}, error)
+            })?;
         let mut markers = Vec::new();
         for id in ids {
             if markers.len() >= limit {
                 break;
             }
-            if let Some(marker) = r3akt_map_core::sqlite::get(&connection, &id)
-                .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?
+            if let Some(marker) =
+                r3akt_map_core::sqlite::get(&connection, &id).map_err(|error| {
+                    crate::error_context::contextual_node_error(NodeError::IoError {}, error)
+                })?
             {
                 markers.push(marker);
             }
@@ -82,7 +93,9 @@ impl AppStateStore {
                  ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                 params![LOCAL_OBSERVER_FIX_KEY, json],
             )
-            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
+            .map_err(|error| {
+                crate::error_context::contextual_node_error(NodeError::IoError {}, error)
+            })?;
         Ok(())
     }
 
@@ -95,7 +108,9 @@ impl AppStateStore {
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
+            .map_err(|error| {
+                crate::error_context::contextual_node_error(NodeError::IoError {}, error)
+            })?;
         value
             .map(|json| {
                 serde_json::from_str(&json).map_err(|error| {

@@ -57,7 +57,7 @@ public final class PluginMapFixtureIntegrationTest {
             }
         }
         assertNotNull("map fixture plugin must be installed before instrumentation", fixture);
-        assertEquals(PluginProtocol.MAP_SESSION_API_MINOR, fixture.optInt("apiMinor"));
+        assertEquals(PluginProtocol.SENSOR_GEOMETRY_API_MINOR, fixture.optInt("apiMinor"));
         assertTrue(fixture.getJSONObject("declaredCapabilities").optBoolean("mapSelectionRead"));
 
         final CountDownLatch connected = new CountDownLatch(1);
@@ -104,6 +104,13 @@ public final class PluginMapFixtureIntegrationTest {
                 .put("updatedAtMs", 1L)));
             final JSONObject create = next(requests, "map.markers.create");
             assertEquals("hostile", create.getJSONObject("payload").getString("symbol"));
+            service.onHostResponse(ok(create, new JSONObject().put("marker", new JSONObject().put("object_destination_hash", SELECTED))));
+            final JSONObject origin = next(requests, PluginProtocol.MAP_ORIGIN_TELEMETRY_UPSERT);
+            assertEquals(SELECTED, origin.getJSONObject("payload").getString("originId"));
+            assertTrue(origin.getJSONObject("payload").getJSONObject("position").isNull("altM"));
+            next(requests, PluginProtocol.MAP_SENSOR_MANIFEST_UPSERT);
+            final JSONObject geometry = next(requests, PluginProtocol.MAP_SENSORS_UPSERT);
+            assertEquals(20, geometry.getJSONObject("payload").getJSONObject("sensor").getInt("horizontalFovDeg"));
 
             service.onHostEvent(PluginProtocol.hostEvent(
                 PluginProtocol.EVENT_MAP_SESSION_STARTED,

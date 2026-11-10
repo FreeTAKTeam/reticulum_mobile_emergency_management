@@ -24,7 +24,9 @@ fn map_marker_store_error(error: r3akt_map_core::sqlite::StoreError) -> NodeErro
     crate::error_context::contextual_node_error(NodeError::IoError {}, error)
 }
 
-pub(crate) fn map_marker_record(marker: &r3akt_map_core::MarkerRecord) -> crate::types::MapMarkerRecord {
+pub(crate) fn map_marker_record(
+    marker: &r3akt_map_core::MarkerRecord,
+) -> crate::types::MapMarkerRecord {
     crate::types::MapMarkerRecord {
         object_destination_hash: marker.object_destination_hash.clone(),
         origin_rch: marker.origin_rch.clone(),
@@ -106,8 +108,8 @@ fn uuid_local_id() -> String {
 
 impl AppStateStore {
     pub fn list_map_markers(&self) -> Result<Vec<crate::types::MapMarkerRecord>, NodeError> {
-        let markers = r3akt_map_core::sqlite::load_all(&self.connect()?)
-            .map_err(map_marker_store_error)?;
+        let markers =
+            r3akt_map_core::sqlite::load_all(&self.connect()?).map_err(map_marker_store_error)?;
         Ok(markers.iter().map(map_marker_record).collect())
     }
 
@@ -156,7 +158,14 @@ impl AppStateStore {
         let invalidation = self.bump_projection_revision(
             ProjectionScope::MapMarkers {},
             Some(stored.object_destination_hash.clone()),
-            Some(if created { "marker-created" } else { "marker-replayed" }.to_string()),
+            Some(
+                if created {
+                    "marker-created"
+                } else {
+                    "marker-replayed"
+                }
+                .to_string(),
+            ),
         )?;
         let result = crate::types::MapMarkerCreateResult {
             marker: map_marker_record(&stored),
@@ -171,9 +180,13 @@ impl AppStateStore {
     ) -> Result<(crate::types::MapMarkerRecord, ProjectionInvalidation), NodeError> {
         let name = r3akt_map_core::marker::normalize_name(&request.name)
             .ok_or_else(|| map_marker_invalid("Marker name is required"))?;
-        self.update_map_marker(&request.object_destination_hash, "marker-renamed", |marker, now| {
-            marker.rename(name, now);
-        })
+        self.update_map_marker(
+            &request.object_destination_hash,
+            "marker-renamed",
+            |marker, now| {
+                marker.rename(name, now);
+            },
+        )
     }
 
     pub fn move_map_marker(
@@ -182,9 +195,13 @@ impl AppStateStore {
     ) -> Result<(crate::types::MapMarkerRecord, ProjectionInvalidation), NodeError> {
         let position = r3akt_map_core::Position::new(request.lat, request.lon)
             .map_err(|error| map_marker_invalid(error.to_string()))?;
-        self.update_map_marker(&request.object_destination_hash, "marker-moved", |marker, now| {
-            marker.move_to(position, now);
-        })
+        self.update_map_marker(
+            &request.object_destination_hash,
+            "marker-moved",
+            |marker, now| {
+                marker.move_to(position, now);
+            },
+        )
     }
 
     /// Deletes a marker; returns `None` when it does not exist.
@@ -200,6 +217,7 @@ impl AppStateStore {
         {
             return Ok(None);
         }
+        self.remove_sensor_origin_for_marker(key)?;
         r3akt_map_core::sqlite::delete(&connection, key).map_err(map_marker_store_error)?;
         self.bump_projection_revision(
             ProjectionScope::MapMarkers {},
@@ -249,6 +267,12 @@ impl AppStateStore {
         let connection = self.connect()?;
         let id = r3akt_map_core::replica::replica_id(payload)
             .map_err(|error| map_marker_invalid(error.to_string()))?;
+        if self
+            .sensor_origin(&id)?
+            .is_some_and(|o| o.deleted_at_ms.is_some())
+        {
+            return Ok(None);
+        }
         let existing =
             r3akt_map_core::sqlite::get(&connection, &id).map_err(map_marker_store_error)?;
         let local_id = existing

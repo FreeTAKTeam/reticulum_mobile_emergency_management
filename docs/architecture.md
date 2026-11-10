@@ -195,6 +195,15 @@ restore ignores the boot-count match that same-boot sticky restarts still
 require. Location access remains while-in-use, so a boot-restored node gets
 location only after the UI is opened.
 
+`More` → `Quit` confirms the operator's intent, then awaits the existing
+native stop operation before closing the Android activity. Stop disables plugins,
+stops the runtime, clears the desired-running flag used by boot/sticky restore,
+and removes the foreground notification. Closing the activity releases the UI's
+service binding so Android can destroy the stopped service and its resources.
+Stop failures leave the app open with a retryable error. Settings and history
+remain intact; reopening REM uses normal startup. In a browser, shutdown stops
+the runtime and leaves the tab open.
+
 ### Battery saver
 
 The Android foreground service observes battery percentage and charging state
@@ -789,8 +798,8 @@ This avoids relying on a globally installed `uniffi-bindgen` executable, which i
 
 ## Networking and shared map dependencies
 
-The compiled networking stack is pinned to LXMF-rs `v0.14.0` at
-`7822b608f2cd2debd8170895bc580d01dda5356e` (REM 1.5.1 and 1.5.0 ship with `v0.14.0`; REM 1.4.1 shipped with `v0.13.0`
+The compiled networking stack is pinned to LXMF-rs `v0.16.0` at
+`45b5f5650b375ff418ec849cd9f99bf7f63a106c` (REM 1.5.1 and 1.5.0 ship with `v0.14.0`; REM 1.4.1 shipped with `v0.13.0`
 at `fbc75b86e15550722923b366398f0a4116182894`; v0.14.0 keeps the Reticulum
 and LXMF wire formats and moves to `rusqlite` 0.40). REM logs the upstream
 `OutboundRejected` Resource event distinctly from local cancellation and
@@ -920,6 +929,16 @@ delivery. Older native bridges without the snapshot explicitly report unavailabl
 status. UniFFI and LXMF wire contracts are unchanged. Host tests prove the direct
 application flow and state transitions; physical RNode/LoRa qualification uses the
 exact signed candidate and remains a separate release gate.
+
+### R3S/1 origin sensor extension
+
+The shared `r3akt-map-core` dependency owns checked origin/sensor types, provisional SID 128 codec, optional-extension isolation, canonical marker lifecycle hooks, bounded SQLite state and geodesic display geometry. Native `app_state/sensor_*`, `node/sensor_*` and `runtime/sensor_receive.rs` implement plugin/signer ownership, authenticated source/relay admission, monotonic source times, tombstones and coalesced publication through the existing telemetry delivery/custody lane. Independent object fixes never mutate the controller observer or its ordinary telemetry positions.
+
+Plugin API 1.4 adds separately granted geometry, origin position, geometry sharing and video sharing capabilities. Exact endpoint approval belongs to the operator and binds to plugin/signing identity. Queue/retry/recovered-custody checks regenerate the current authorized snapshot. Delivery receipts confirm static metadata; ordinary movement does not change its revision. Nullable origin fixes and explicit removal events use typed field-13 sidecars alongside unchanged standard Telemeter sensor 2.
+
+`packages/node-client` exposes native sensor projections and explicit operator approval through the existing JNI/UniFFI/Capacitor boundary. `SensorGeometryLayer.vue` and its focused projection store add a source/layers to the existing map. Native TTL, moving-origin skew and near-nadir decisions remain authoritative; UI service failures remove cached coverage. No protocol, geometry, replication authority or video playback engine is added to TypeScript.
+
+The paired RCH implementation supplies authenticated reception, complete collector snapshots, `/Sensors`, map overlays and CoT adapters. See [R3S/1](plans/R3AKT_Sensor_Telemetry_Extension_v1.md) and [evidence and release gates](goals/r3s-telemetry/EVIDENCE.md). The RCH daemon cannot revoke retries it has already admitted; operational release needs that upstream capability and physical route/cadence evidence. No iOS build is part of this work.
 
 ## goTenna Mesh plugin bridge
 

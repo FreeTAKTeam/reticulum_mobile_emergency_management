@@ -4,8 +4,9 @@ import { Capacitor } from "@capacitor/core";
 import { computed, onMounted, onUnmounted, shallowRef, watch } from "vue";
 import { RouterLink, RouterView, useRoute, useRouter } from "vue-router";
 
-import { footerItems, iconPaths, menuItems } from "./appNavigation";
+import { footerItems, iconPaths } from "./appNavigation";
 import logoUrl from "./assets/rem-logo.png";
+import AppToolsMenu from "./components/AppToolsMenu.vue";
 import SplashScreen from "./components/SplashScreen.vue";
 import SosOverlay from "./components/sos/SosOverlay.vue";
 import { initAppNotifications, registerNotificationNavigationHandler } from "./services/notifications";
@@ -391,56 +392,13 @@ onUnmounted(() => {
         <RouterView />
       </main>
 
-      <div
-        v-if="menuOpen && !setupActive"
-        class="menu-backdrop"
-        aria-hidden="true"
-        @click="closeMenu"
-      ></div>
-
-      <aside
-        v-if="menuOpen && !setupActive"
-        class="tools-menu"
-        aria-label="More tools"
-      >
-        <header class="tools-header">
-          <h2>Tools</h2>
-          <button
-            type="button"
-            class="tools-close"
-            aria-label="Close more tools"
-            @click="closeMenu"
-          >
-            <svg class="icon-svg" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-              <path d="M6 6l12 12" />
-              <path d="M18 6 6 18" />
-            </svg>
-          </button>
-        </header>
-
-        <div class="tools-grid">
-          <RouterLink
-            v-for="item in menuItems"
-            :key="`menu-${item.path}`"
-            :to="item.path"
-            class="tool-tile"
-            :class="{ active: isTabActive(item.path) }"
-            :aria-label="item.label"
-            :title="item.label"
-          >
-            <span class="tool-tile-icon" aria-hidden="true">
-              <svg class="icon-svg" viewBox="0 0 24 24" fill="none">
-                <path
-                  v-for="path in iconPaths[item.icon]"
-                  :key="path"
-                  :d="path"
-                />
-              </svg>
-            </span>
-            <span class="tool-tile-label">{{ item.label }}</span>
-          </RouterLink>
-        </div>
-      </aside>
+      <AppToolsMenu
+        v-if="!setupActive"
+        :open="menuOpen"
+        :current-path="route.path"
+        :stop-node="nodeStore.stopNode"
+        @close="closeMenu"
+      />
 
       <nav v-if="!setupActive" class="tabs" aria-label="Primary navigation">
         <RouterLink

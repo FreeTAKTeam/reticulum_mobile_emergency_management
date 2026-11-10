@@ -335,6 +335,14 @@ public abstract class ReticulumBridgeServiceApi extends Service {
         return ReticulumBridge.listMapMarkerSymbolsJson();
     }
 
+    public String getSensorOriginsJson() {
+        return ReticulumBridge.getSensorOriginsJson();
+    }
+
+    public String setSensorVideoSharingJson(String payloadJson) {
+        return ReticulumBridge.setSensorVideoSharingJson(payloadJson);
+    }
+
     public String listMapMarkersJson() {
         return ReticulumBridge.listMapMarkersJson();
     }

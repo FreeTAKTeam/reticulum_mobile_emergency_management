@@ -197,7 +197,7 @@ export function createNodeLifecycleController(context: NodeLifecycleContext) {
   async function stopNode(): Promise<void> {
     try {
       if (!client.value) {
-        return;
+        throw new Error("Node client is unavailable. Try again after REM finishes starting.");
       }
       clearLastError();
       clearReadinessError();

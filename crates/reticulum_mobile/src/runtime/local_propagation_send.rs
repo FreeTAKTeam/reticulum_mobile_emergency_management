@@ -171,11 +171,14 @@ async fn deposit_offline_message(
     let now = crate::numeric::u64_to_i64_saturating(now_ms() / 1000);
     let kind = match class {
         OutboundTrafficClass::Chat {} => r3akt_mesh_delivery::CustodyKind::Chat,
-        OutboundTrafficClass::Telemetry {} => {
-            r3akt_mesh_delivery::CustodyKind::Telemetry {
-                key: "latest-fix".to_owned(),
-            }
-        }
+        OutboundTrafficClass::Telemetry {} => r3akt_mesh_delivery::CustodyKind::Telemetry {
+            key: metadata
+                .as_ref()
+                .and_then(|m| m.command_id.as_deref())
+                .and_then(|s| s.strip_prefix("r3s:"))
+                .and_then(|s| s.split_once(':'))
+                .map_or_else(|| "latest-fix".to_owned(), |(id, _)| format!("r3s:{id}")),
+        },
         _ => r3akt_mesh_delivery::CustodyKind::Mission,
     };
     let kind = local_custody_storage_kind(kind);
@@ -184,11 +187,28 @@ async fn deposit_offline_message(
             .app_state
             .get_app_settings()?
             .ok_or(NodeError::InvalidConfig {})?;
-        let publication = state.app_state.telemetry_publication()?;
-        publication.fix.map(|fix| {
-            crate::numeric::u64_to_i64_saturating(fix.updated_at_ms / 1000)
-                .saturating_add(i64::from(settings.telemetry.expire_after_minutes) * 60)
-        })
+        let sensor_origin = metadata
+            .as_ref()
+            .and_then(|m| m.command_id.as_deref())
+            .and_then(|s| s.strip_prefix("r3s:"))
+            .and_then(|s| s.split_once(':'))
+            .map(|(id, _)| id);
+        if let Some(id) = sensor_origin {
+            state.app_state.sensor_origin(id)?.map(|o| {
+                crate::numeric::u64_to_i64_saturating(
+                    o.latest_source_time()
+                        .max(o.deleted_at_ms.unwrap_or(0))
+                        .saturating_add(u64::from(settings.telemetry.stale_after_minutes) * 60_000)
+                        / 1000,
+                )
+            })
+        } else {
+            let publication = state.app_state.telemetry_publication()?;
+            publication.fix.map(|fix| {
+                crate::numeric::u64_to_i64_saturating(fix.updated_at_ms / 1000)
+                    .saturating_add(i64::from(settings.telemetry.expire_after_minutes) * 60)
+            })
+        }
     } else {
         None
     };

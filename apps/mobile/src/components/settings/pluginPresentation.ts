@@ -7,6 +7,11 @@ export const PLUGIN_CAPABILITY_DEFINITIONS: Array<{
 }> = [
   { key: "communicationsRelay", label: "Bridge addressed chat, event codes and positions" },
   { key: "eventsPublish", label: "Publish events" },
+  { key: "sensorGeometryPublish", label: "Update sensor geometry" },
+  { key: "originTelemetryPublish", label: "Update independent object positions" },
+  { key: "sensorGeometryShare", label: "Share sensor geometry over LXMF" },
+  { key: "sensorVideoShare", label: "Share approved video references" },
+
   { key: "sensorsPublish", label: "Publish sensors" },
   { key: "lxmfSend", label: "Send LXMF" },
   { key: "lxmfReceive", label: "Receive LXMF" },

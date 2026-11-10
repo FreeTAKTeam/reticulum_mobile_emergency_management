@@ -94,7 +94,7 @@ fn wait_for_operational_ack(
     }
 }
 
-fn build_app_settings() -> AppSettingsRecord {
+pub(super) fn build_app_settings() -> AppSettingsRecord {
     AppSettingsRecord {
         display_name: "Atlas-1".to_string(),
         auto_connect_saved: true,
@@ -164,7 +164,7 @@ fn build_saved_peer_with_lxmf_route(
     }
 }
 
-fn build_status_for_tests() -> NodeStatus {
+pub(super) fn build_status_for_tests() -> NodeStatus {
     NodeStatus {
         readiness: RuntimeReadinessSnapshot::default(),
         running: true,
@@ -176,7 +176,7 @@ fn build_status_for_tests() -> NodeStatus {
     }
 }
 
-fn build_config_fingerprint_for_tests(
+pub(super) fn build_config_fingerprint_for_tests(
     hub_mode: HubMode,
     hub_identity_hash: Option<&str>,
 ) -> NodeConfigFingerprint {

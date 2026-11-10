@@ -31,7 +31,7 @@ public final class MapFixturePluginService extends RemPluginService {
     }
 
     @Override protected String getDescriptorJson() {
-        return "{\"pluginId\":\"org.freetakteam.rem.plugin.map_fixture\",\"apiMajor\":1,\"apiMinor\":3}";
+        return "{\"pluginId\":\"org.freetakteam.rem.plugin.map_fixture\",\"apiMajor\":1,\"apiMinor\":4}";
     }
 
     @Override protected synchronized void onPluginStart(IRemPluginHost host, String sessionJson) {

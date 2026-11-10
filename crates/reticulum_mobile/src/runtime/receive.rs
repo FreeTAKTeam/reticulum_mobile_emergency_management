@@ -49,9 +49,38 @@ async fn emit_received_payload(
             let metadata = fields_bytes
                 .as_deref()
                 .and_then(parse_mission_sync_metadata);
+            let persisted_marker = !is_sos_message
+                && persist_received_map_marker_if_present(
+                    state,
+                    bus,
+                    source_hex.as_deref(),
+                    metadata.as_ref(),
+                    fields_bytes.as_deref(),
+                );
+            let persisted_sensors = !is_sos_message
+                && persist_received_sensors(
+                    state,
+                    bus,
+                    fields_bytes.as_deref(),
+                    source_hex.as_deref(),
+                );
             let persisted_telemetry = if !is_sos_message {
-                persist_received_telemetry_if_present(state, bus, TelemetryReceiveContext { metadata: metadata.as_ref(), fields_bytes: fields_bytes.as_deref(), body: message.content.as_slice(), source_hex: source_hex.as_deref(), destination_hex: &destination_hex, message_id_hex: wire_message_id_hex.as_deref() }).await
-            } else { false };
+                persist_received_telemetry_if_present(
+                    state,
+                    bus,
+                    TelemetryReceiveContext {
+                        metadata: metadata.as_ref(),
+                        fields_bytes: fields_bytes.as_deref(),
+                        body: message.content.as_slice(),
+                        source_hex: source_hex.as_deref(),
+                        destination_hex: &destination_hex,
+                        message_id_hex: wire_message_id_hex.as_deref(),
+                    },
+                )
+                .await
+            } else {
+                false
+            };
             if let Some(metadata) = metadata.as_ref().filter(|_| !is_sos_message) {
                 if metadata.is_mission_related() {
                     info!(
@@ -91,13 +120,6 @@ async fn emit_received_payload(
                     fields_bytes.as_deref(),
                     Some(message.content.as_slice()),
                 );
-                let persisted_marker = persist_received_map_marker_if_present(
-                    &state.app_state,
-                    bus,
-                    source_hex.as_deref(),
-                    Some(metadata),
-                    fields_bytes.as_deref(),
-                );
                 send_operational_ack_if_needed(
                     state,
                     bus,
@@ -107,7 +129,8 @@ async fn emit_received_payload(
                         || persisted_event
                         || persisted_telemetry
                         || persisted_checklist
-                        || persisted_marker,
+                        || persisted_marker
+                        || persisted_sensors,
                 )
                 .await;
             }

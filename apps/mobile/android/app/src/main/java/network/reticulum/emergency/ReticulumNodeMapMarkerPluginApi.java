@@ -21,6 +21,17 @@ public abstract class ReticulumNodeMapMarkerPluginApi extends ReticulumNodeAppDa
     }
 
     @PluginMethod
+    public void getSensorOrigins(PluginCall call) {
+        runStringServiceCall(call, "Failed to read sensor origins.", "Invalid sensor projection.", ReticulumNodeService::getSensorOriginsJson);
+    }
+
+    @PluginMethod
+    public void setSensorVideoSharing(PluginCall call) {
+        final JSObject request = call.getObject("request", new JSObject());
+        runStringServiceCall(call, "Failed to update video sharing.", "Invalid sensor response.", service -> service.setSensorVideoSharingJson(request.toString()));
+    }
+
+    @PluginMethod
     public void listMapMarkers(PluginCall call) {
         runStringServiceCall(
             call,

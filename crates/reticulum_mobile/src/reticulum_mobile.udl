@@ -1240,6 +1240,10 @@ interface Node {
   [Throws=NodeError]
   sequence<MapMarkerRecord> list_map_markers();
   [Throws=NodeError]
+  string get_sensor_origins_json();
+  [Throws=NodeError]
+  void set_sensor_video_sharing(string origin_id, string sensor_id, boolean approved);
+  [Throws=NodeError]
   MapMarkerRecord? get_map_marker(string object_destination_hash);
   [Throws=NodeError]
   MapMarkerCreateResult create_map_marker(MapMarkerCreateRequest request);

@@ -363,7 +363,9 @@ export const useNodeStore = defineStore("node", () => {
     }
     return client.value;
   }
+  const sensorGeometryClient = async () => { await init(); if (!client.value) throw new Error("Node client is not initialized."); return client.value; };
   return {
+    sensorGeometryClient,
     ...createNodeStoreApi(
       state, logging, peers, projections, hub, selectors, lifecycle, actions, transport, community,
     ),

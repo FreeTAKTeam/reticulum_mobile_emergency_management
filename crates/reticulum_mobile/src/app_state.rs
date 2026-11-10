@@ -306,6 +306,7 @@ impl ConversationPeerResolver {
 include!("app_state/storage.rs");
 include!("app_state/settings.rs");
 include!("app_state/plugins.rs");
+include!("app_state/plugin_discovery.rs");
 include!("app_state/hub_directory.rs");
 include!("app_state/peers.rs");
 include!("app_state/block_onboarding.rs");
@@ -318,6 +319,8 @@ include!("app_state/telemetry_sos.rs");
 include!("app_state/map_markers.rs");
 include!("app_state/plugin_map.rs");
 include!("app_state/plugin_relay.rs");
+include!("app_state/sensor_geometry.rs");
+include!("app_state/sensor_producers.rs");
 include!("app_state/plugin_map_sessions.rs");
 include!("app_state/persistence.rs");
 include!("app_state/plugin_helpers.rs");
@@ -341,3 +344,7 @@ mod tests {
 }
 
 include!("app_state/telemetry_publication.rs");
+
+include!("app_state/sensor_receive.rs");
+
+include!("app_state/sensor_publication.rs");

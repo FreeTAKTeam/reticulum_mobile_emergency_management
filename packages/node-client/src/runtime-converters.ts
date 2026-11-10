@@ -23,6 +23,11 @@ export function toPluginCapabilities(value: unknown): PluginCapabilityRecord {
     operationalRead: Boolean(raw.operationalRead ?? raw.operational_read),
     mapMarkersRead: Boolean(raw.mapMarkersRead ?? raw.map_markers_read),
     mapMarkersWrite: Boolean(raw.mapMarkersWrite ?? raw.map_markers_write),
+    sensorGeometryPublish: Boolean(raw.sensorGeometryPublish ?? raw.sensor_geometry_publish),
+    originTelemetryPublish: Boolean(raw.originTelemetryPublish ?? raw.origin_telemetry_publish),
+    sensorGeometryShare: Boolean(raw.sensorGeometryShare ?? raw.sensor_geometry_share),
+    sensorVideoShare: Boolean(raw.sensorVideoShare ?? raw.sensor_video_share),
+
     mapObserverRead: Boolean(raw.mapObserverRead ?? raw.map_observer_read),
     mapSelectionRead: Boolean(raw.mapSelectionRead ?? raw.map_selection_read),
     mapNearbyRead: Boolean(raw.mapNearbyRead ?? raw.map_nearby_read),

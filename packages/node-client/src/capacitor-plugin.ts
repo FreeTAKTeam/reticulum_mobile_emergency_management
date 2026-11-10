@@ -58,6 +58,8 @@ export interface ReticulumNodePlugin {
   openPluginConfiguration(options: { pluginId: string }): Promise<void>;
   listPluginSensors(): Promise<{ items: Record<string, unknown>[] }>;
   listMapMarkerSymbols(): Promise<{ items?: unknown }>;
+  getSensorOrigins(): Promise<unknown>;
+  setSensorVideoSharing(input: {request: {originId: string; sensorId: string; approved: boolean}}): Promise<unknown>;
   listMapMarkers(): Promise<{ items?: unknown }>;
   createMapMarker(options: { request: MapMarkerCreateRequest }): Promise<Record<string, unknown>>;
   renameMapMarker(options: {

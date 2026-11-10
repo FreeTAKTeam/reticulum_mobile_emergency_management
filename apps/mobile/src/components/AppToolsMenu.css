@@ -1,0 +1,169 @@
+.menu-backdrop {
+  background: rgb(0 4 12 / 36%);
+  inset: 0;
+  position: fixed;
+  z-index: 8;
+}
+
+.tools-menu {
+  backdrop-filter: blur(14px);
+  background:
+    linear-gradient(145deg, rgb(3 11 26 / 95%), rgb(4 17 37 / 94%)),
+    radial-gradient(circle at 22% 0%, rgb(59 177 255 / 20%), transparent 42%);
+  border: 1px solid rgb(83 138 205 / 34%);
+  border-radius: 16px;
+  bottom: calc(62px + env(safe-area-inset-bottom, 0px) + 0.75rem);
+  box-shadow:
+    inset 0 1px 0 rgb(177 229 255 / 8%),
+    0 22px 48px rgb(0 0 0 / 46%);
+  max-height: min(70dvh, 560px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  position: absolute;
+  right: 0;
+  width: min(27rem, calc(100vw - 1.2rem));
+  z-index: 12;
+}
+
+.tools-close {
+  align-items: center;
+  color: #dff3ff;
+  display: inline-flex;
+  height: 3.2rem;
+  justify-content: center;
+  width: 3.2rem;
+}
+
+.tools-close .icon-svg {
+  height: 1.65rem;
+  width: 1.65rem;
+}
+
+.tools-close {
+  --btn-bg: transparent;
+  --btn-bg-pressed: rgb(22 52 83 / 92%);
+  --btn-border: transparent;
+  --btn-border-pressed: rgb(122 210 255 / 42%);
+  --btn-shadow: none;
+  --btn-shadow-pressed: inset 0 0 0 1px rgb(122 210 255 / 20%);
+  --btn-color: #dff3ff;
+  --btn-color-pressed: #f4fbff;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  padding: 0;
+}
+
+.tools-header {
+  align-items: center;
+  background: rgb(2 8 18 / 58%);
+  border-bottom: 1px solid rgb(89 126 181 / 26%);
+  display: flex;
+  justify-content: space-between;
+  min-height: 3.4rem;
+  padding: 0 1rem;
+}
+
+.tools-header h2 {
+  color: #f2f8ff;
+  font-family: var(--font-headline);
+  font-size: 1.45rem;
+  letter-spacing: 0;
+  margin: 0;
+}
+
+.tools-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.tool-tile {
+  align-items: center;
+  aspect-ratio: 1 / 0.88;
+  border-bottom: 1px solid rgb(165 207 255 / 22%);
+  border-right: 1px solid rgb(165 207 255 / 22%);
+  color: #d8ecff;
+  display: grid;
+  gap: 0.38rem;
+  justify-items: center;
+  min-height: 6.4rem;
+  padding: 0.76rem 0.5rem;
+  text-align: center;
+  text-decoration: none;
+}
+
+.tool-tile:nth-child(3n) {
+  border-right: 0;
+}
+
+.tool-tile.active {
+  background:
+    linear-gradient(180deg, rgb(32 140 219 / 28%), rgb(5 28 61 / 56%));
+  color: #70d8ff;
+}
+
+.tool-tile:focus-visible {
+  outline: 2px solid rgb(116 218 255 / 72%);
+  outline-offset: -3px;
+}
+
+.tool-tile-icon {
+  align-items: center;
+  color: currentColor;
+  display: inline-flex;
+  height: 2.25rem;
+  justify-content: center;
+  width: 2.25rem;
+}
+
+.tool-tile-label {
+  color: currentColor;
+  font-family: var(--font-ui);
+  font-size: clamp(0.82rem, 2.8vw, 1.02rem);
+  font-weight: 600;
+  line-height: 1.05;
+  overflow-wrap: anywhere;
+}
+
+.icon-svg {
+  height: 100%;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+  width: 100%;
+}
+
+@media (max-width: 780px) {
+  .tools-menu {
+    bottom: calc(61px + env(safe-area-inset-bottom, 0px) + 0.55rem);
+    width: min(25.5rem, calc(100vw - 1.2rem));
+  }
+
+  .tool-tile {
+    min-height: 5.9rem;
+  }
+
+}
+
+.tool-shutdown {
+  --btn-bg: transparent;
+  --btn-bg-pressed: rgb(92 32 40 / 70%);
+  --btn-color: #ffd1d1;
+  --btn-color-pressed: #fff0f0;
+  --btn-shadow: none;
+  background: var(--btn-bg);
+  border-left: 0;
+  border-top: 0;
+  border-radius: 0;
+  cursor: pointer;
+  color: var(--btn-color);
+  font: inherit;
+  width: 100%;
+}
+
+.shutdown-error {
+  color: #ffd1d1;
+  margin: 0;
+  padding: 0.8rem 1rem;
+}

@@ -272,6 +272,46 @@ It does not publish, install, or verify real hardware. Android version codes mus
 updates, and all plugin signing keys must remain consistent across releases. REM host fingerprints
 are derived from the actual signed light APK and applied to all plugin builds.
 
+## Origin sensor telemetry (1.4)
+
+API minor 4 adds the R3S/1 geometry operations below. The existing scalar `sensor.publish` operation and all 1.0–1.3 contracts retain their behavior. A plugin must declare minor 4, be installed, enabled and trusted under its current signing certificate, and receive explicit operator grants:
+
+| Grant | Purpose |
+|---|---|
+| `sensorGeometryPublish` | Register/update/remove local sensor geometry and manifests |
+| `originTelemetryPublish` | Publish an independently owned object's position |
+| `sensorGeometryShare` | Share those components over existing telemetry routes |
+| `sensorVideoShare` | Allow non-secret endpoint metadata to be considered for sharing |
+
+Network sharing also requires `lxmfSend`, enabled telemetry and current recipient/team/privacy policy. Revoking the producer, publisher or any required grant invalidates pending snapshots, retries and recovered local custody. Geometry and position grants are separate; a revoked position producer cannot leak its fix through parent metadata. API 1.4 does not grant any of these capabilities to legacy plugins.
+
+Create the independent origin with `map.markers.create` first. Its plugin ID and signing fingerprint own the origin. Legacy objects without verified plugin provenance cannot be adopted. Use the returned `object_destination_hash` as `originId`. `originId:"self"` attaches a sensor to REM's authenticated destination after the node has established its identity; another plugin cannot modify that component. Plugins cannot replace the controller observer fix.
+
+| Operation | Payload |
+|---|---|
+| `map.origins.telemetry.upsert` | `{originId, position}`; independent origin only |
+| `map.sensors.upsert` | `{originId, sensor}` |
+| `map.sensors.manifest.upsert` | `{originId, manifest}` |
+| `map.sensors.remove` | `{originId, sensorId}` |
+
+Example position and pose (JSON numbers remain nullable when unknown):
+
+```json
+{"originId":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","position":{"lat":45,"lon":-63,"altM":null,"altitudeDatum":"unknown","fixAtMs":1793440000000,"speedMps":15,"courseDeg":90,"accuracyM":null}}
+```
+
+```json
+{"originId":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","sensor":{"sensorId":"eo-main","sampleAtMs":1793440000000,"azimuthDeg":0,"elevationDeg":-30,"rollDeg":12,"horizontalFovDeg":20,"verticalFovDeg":10,"slantRangeM":2000,"rangeKind":"display-limit","imageNorthDeg":180}}
+```
+
+The host returns `{accepted,originId,sensorId,sampleAtMs}` for pose updates and `{accepted,originId}` for other accepted operations, or the existing typed error envelope (`PermissionDenied`, `InvalidRequest`, `HostError`, `UnsupportedOperation`). Native validation enforces four sensors per origin, source ordering, clock bounds, ownership and the wire limit. Omission does not delete another component. Deletion persists a source-time tombstone; deleting the parent removes all its sensors and permanently retires its identity.
+
+Manifests use `{sensorId,label?,sensorType?,model?,mountId?,intrinsics?,video?}`. Video is `{sensorId,protocol,endpointRef}` with a non-secret RTSP/RTMP/HTTP/HTTPS reference: credentials, query tokens, fragments, escaping and control characters are rejected. The operator must also approve the exact descriptor in the native sensor panel. Approval binds to descriptor, plugin ID and signer; editing the endpoint or changing signer invalidates it. Plugins cannot approve themselves. REM does not fetch or play a stream automatically.
+
+The native runtime coalesces latest snapshots at up to 1 Hz for TCP, no more than once per 30 seconds when RNode/unknown routes are present, or once per 300 seconds in power saver. Static metadata is confirmed by delivery receipts and is re-announced after changes or route reconnection. It is not repeated with each gimbal sample. Those cadence values require physical radio qualification.
+
+`plugins/map-fixture` demonstrates the API 1.4 marker → nullable origin fix → manifest → pose sequence. SDK/fixture JVM tests and Java compilation cover the contract; physical Binder/radio acceptance is separate. See [the specification](../plans/R3AKT_Sensor_Telemetry_Extension_v1.md) and [execution evidence](../goals/r3s-telemetry/EVIDENCE.md).
+
 ## Communication relay (1.5)
 
 The experimental [goTenna Mesh plugin](../../plugins/gotenna/README.md) uses the

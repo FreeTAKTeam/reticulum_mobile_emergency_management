@@ -6,3 +6,5 @@ export * from "./contracts-domain";
 export * from "./contracts-client";
 
 export type { TelemetryPublicationState, TelemetryRecipientPublication, TelemetryReceiveFailure, TelemetryPublicationSnapshot } from "./contracts-telemetry";
+
+export * from "./contracts-sensors";

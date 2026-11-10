@@ -19,12 +19,22 @@ impl MapMarkerChange {
             "lon": marker.lon,
             "notes": marker.notes,
         });
-        Self::new("mission.marker.create", "mission.marker.created", args, marker)
+        Self::new(
+            "mission.marker.create",
+            "mission.marker.created",
+            args,
+            marker,
+        )
     }
 
     fn renamed(marker: r3akt_map_core::MarkerRecord) -> Self {
         let args = json!({ "object_destination_hash": marker.object_destination_hash, "name": marker.name });
-        Self::new("mission.marker.patch", "mission.marker.updated", args, marker)
+        Self::new(
+            "mission.marker.patch",
+            "mission.marker.updated",
+            args,
+            marker,
+        )
     }
 
     fn moved(marker: r3akt_map_core::MarkerRecord) -> Self {
@@ -33,12 +43,22 @@ impl MapMarkerChange {
             "lat": marker.lat,
             "lon": marker.lon,
         });
-        Self::new("mission.marker.position.patch", "mission.marker.position.updated", args, marker)
+        Self::new(
+            "mission.marker.position.patch",
+            "mission.marker.position.updated",
+            args,
+            marker,
+        )
     }
 
     fn deleted(marker: r3akt_map_core::MarkerRecord) -> Self {
         let args = json!({ "object_destination_hash": marker.object_destination_hash });
-        Self::new("mission.marker.delete", "mission.marker.deleted", args, marker)
+        Self::new(
+            "mission.marker.delete",
+            "mission.marker.deleted",
+            args,
+            marker,
+        )
     }
 
     fn new(
@@ -50,7 +70,12 @@ impl MapMarkerChange {
         if let Some(object) = args.as_object_mut() {
             object.retain(|_, value| !value.is_null());
         }
-        Self { command_type, event_type, args, marker }
+        Self {
+            command_type,
+            event_type,
+            args,
+            marker,
+        }
     }
 }
 
@@ -81,7 +106,8 @@ fn map_marker_replication_payload(
         &change.marker,
         &status.identity_hex,
         Some(&json!([command])),
-    ).map_err(|error| {
+    )
+    .map_err(|error| {
         crate::error_context::contextual_node_error(NodeError::InternalError {}, error)
     })?;
     let action = change.event_type.trim_start_matches("mission.marker.");
@@ -100,20 +126,44 @@ impl Node {
             crate::error_context::contextual_node_error(NodeError::InternalError {}, error)
         })?;
         let bus = inner.bus.clone();
+        // Sensor-derived coordinates use the telemetry lane and its retry-time privacy checks.
+        if inner
+            .app_state
+            .sensor_origin(&change.marker.object_destination_hash)?
+            .is_some()
+        {
+            return Ok((bus, Vec::new()));
+        }
         if inner.cmd_tx.is_none() {
             return Ok((bus, Vec::new()));
         }
-        let status = inner.status.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?.clone();
-        let peers = inner.peers_snapshot.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?.clone();
+        let status = inner
+            .status
+            .lock()
+            .map_err(|error| {
+                crate::error_context::contextual_node_error(NodeError::InternalError {}, error)
+            })?
+            .clone();
+        let peers = inner
+            .peers_snapshot
+            .lock()
+            .map_err(|error| {
+                crate::error_context::contextual_node_error(NodeError::InternalError {}, error)
+            })?
+            .clone();
         let hub_directory_snapshot = inner
             .hub_directory_snapshot
             .lock()
-            .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
+            .map_err(|error| {
+                crate::error_context::contextual_node_error(NodeError::InternalError {}, error)
+            })?
             .clone();
         let sync_status = inner
             .sync_status_snapshot
             .lock()
-            .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
+            .map_err(|error| {
+                crate::error_context::contextual_node_error(NodeError::InternalError {}, error)
+            })?
             .clone();
         let saved_peers = saved_peers_for_replication(&inner.app_state, &bus, "map-marker");
         let route_hops = route_hops_for_replication(&inner.app_state, &bus, "map-marker");
@@ -129,11 +179,22 @@ impl Node {
             emit_replication_planning_error(&bus, "map-marker", "target-selection", err);
             Vec::new()
         });
-        prioritize_replication_targets_by_route_hops(targets.as_mut_slice(), peers.as_slice(), &route_hops);
+        prioritize_replication_targets_by_route_hops(
+            targets.as_mut_slice(),
+            peers.as_slice(),
+            &route_hops,
+        );
         let (body, fields) = map_marker_replication_payload(&status, change)?;
         let sends = targets
             .into_iter()
-            .map(|target| (target.app_destination_hex, body.clone(), fields.clone(), target.send_mode))
+            .map(|target| {
+                (
+                    target.app_destination_hex,
+                    body.clone(),
+                    fields.clone(),
+                    target.send_mode,
+                )
+            })
             .collect();
         Ok((bus, sends))
     }
