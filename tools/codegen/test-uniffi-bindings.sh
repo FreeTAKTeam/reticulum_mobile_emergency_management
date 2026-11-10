@@ -2,6 +2,7 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+: "${UNIFFI_TEST_JNA_JAR:?Set UNIFFI_TEST_JNA_JAR to a JNA 5.12.0+ jar}"
 output="$(mktemp -d)"
 trap 'rm -rf "$output"' EXIT
 export CARGO_TARGET_DIR="$root/target/uniffi-test"
@@ -28,3 +29,24 @@ import reticulum_mobile
 
 assert reticulum_mobile.healthcheck() == "reticulum-mobile-ready"
 PY
+
+cat > "$output/Smoke.kt" <<'KOTLIN'
+import uniffi.reticulum_mobile.Node
+import uniffi.reticulum_mobile.healthcheck
+
+fun main() {
+    check(healthcheck() == "reticulum-mobile-ready")
+    Node().use { node ->
+        node.subscribeEvents().use { subscription ->
+            subscription.closeSubscription()
+            check(subscription.next(0u) == null)
+        }
+    }
+}
+KOTLIN
+kotlinc "$output/uniffi/reticulum_mobile/reticulum_mobile.kt" "$output/Smoke.kt" \
+  -classpath "$UNIFFI_TEST_JNA_JAR" -include-runtime -d "$output/smoke.jar"
+(
+  cd "$output"
+  java -Djna.library.path="$output" -cp "$output/smoke.jar:$UNIFFI_TEST_JNA_JAR" SmokeKt
+)

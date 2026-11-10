@@ -30,9 +30,12 @@ Each script:
   - `apps/mobile/android/app/src/main/jniLibs/armeabi-v7a`
   - `apps/mobile/android/app/src/main/jniLibs/x86_64`
 
-On Linux, `bash tools/codegen/test-uniffi-bindings.sh` checks that the locked
-generator produces Kotlin and Swift bindings and that the generated Python
-binding can load and call the native library.
+On Linux, set `UNIFFI_TEST_JNA_JAR` to a JNA 5.12.0+ jar and run
+`bash tools/codegen/test-uniffi-bindings.sh` with `kotlinc` and Java on `PATH`.
+The check generates Kotlin, Swift, and Python bindings and calls the native
+library through Kotlin and Python. Kotlin consumers need JNA 5.12.0 or newer;
+the subscription's native `close` method is named `closeSubscription` to
+avoid Kotlin's `AutoCloseable.close`.
 
 ## Android Prerequisites
 

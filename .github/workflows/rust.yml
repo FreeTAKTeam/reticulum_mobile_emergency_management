@@ -160,6 +160,20 @@ jobs:
         if: matrix.check == 'audit'
         run: cargo install cargo-audit --locked
 
+      - name: Set up Java for the binding smoke test
+        if: matrix.check == 'bindings'
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Prepare JNA for the binding smoke test
+        if: matrix.check == 'bindings'
+        run: |
+          curl --fail --location --retry 3 --output "$RUNNER_TEMP/jna-5.12.0.jar" \
+            https://repo.maven.apache.org/maven2/net/java/dev/jna/jna/5.12.0/jna-5.12.0.jar
+          echo "f96112f6b94c68d95af54ebf257e8acc25a912287a6a891cd6576bba861297b7  $RUNNER_TEMP/jna-5.12.0.jar" | sha256sum --check
+
       - name: Run independent Rust check
         working-directory: rem
         env:
@@ -179,7 +193,7 @@ jobs:
               cargo audit --deny warnings --file crates/reticulum_mobile/Cargo.lock
               cargo audit --deny warnings --file tools/uniffi-bindgen/Cargo.lock
               ;;
-            bindings) bash tools/codegen/test-uniffi-bindings.sh ;;
+            bindings) UNIFFI_TEST_JNA_JAR="$RUNNER_TEMP/jna-5.12.0.jar" bash tools/codegen/test-uniffi-bindings.sh ;;
             *) exit 1 ;;
           esac
 
