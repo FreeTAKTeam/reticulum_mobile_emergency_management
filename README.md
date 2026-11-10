@@ -136,7 +136,8 @@ npm run test:e2e
 cargo +1.89 fetch --manifest-path crates/reticulum_mobile/Cargo.toml --locked
 cargo +1.89 clippy --manifest-path crates/reticulum_mobile/Cargo.toml --all-targets -- -D warnings
 cargo +1.89 test --manifest-path crates/reticulum_mobile/Cargo.toml --locked
-cargo audit --file crates/reticulum_mobile/Cargo.lock
+cargo audit --deny warnings --file crates/reticulum_mobile/Cargo.lock
+cargo audit --deny warnings --file tools/uniffi-bindgen/Cargo.lock
 ```
 
 The source-size check is a hard gate: first-party source and test files, and

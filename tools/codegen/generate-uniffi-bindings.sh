@@ -119,18 +119,15 @@ for target in "${TARGETS[@]}"; do
   fi
 done
 
-if command -v uniffi-bindgen >/dev/null 2>&1; then
-  echo "Generating UniFFI bindings ($LANGUAGE)..."
-  uniffi-bindgen generate "$UDL_PATH" --language "$LANGUAGE" --out-dir "$TMP_OUT"
+echo "Generating UniFFI bindings ($LANGUAGE)..."
+(
+  cd "$REPO_ROOT/crates/reticulum_mobile"
+  cargo run --manifest-path "$REPO_ROOT/tools/uniffi-bindgen/Cargo.toml" --locked -- \
+    generate "$UDL_PATH" --language "$LANGUAGE" --out-dir "$TMP_OUT"
+)
 
-  echo "Copying generated bindings to $TARGET_OUT..."
-  cp -R "$TMP_OUT"/. "$TARGET_OUT"/
-elif [[ "$LANGUAGE" == "kotlin" ]]; then
-  echo "uniffi-bindgen not found; skipping Kotlin binding generation. Native .so files will still be copied."
-else
-  echo "uniffi-bindgen not found in PATH" >&2
-  exit 1
-fi
+echo "Copying generated bindings to $TARGET_OUT..."
+cp -R "$TMP_OUT"/. "$TARGET_OUT"/
 
 echo "Copying built native libraries..."
 for target in "${TARGETS[@]}"; do

@@ -1,0 +1,8 @@
+[bindings.kotlin]
+cdylib_name = "reticulum_mobile"
+
+[bindings.kotlin.rename]
+"EventSubscription.close" = "close_subscription"
+
+[bindings.python]
+cdylib_name = "reticulum_mobile"

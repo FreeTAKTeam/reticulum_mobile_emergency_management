@@ -154,8 +154,7 @@ Run the narrowest command set that proves the change:
   - PowerShell: `./tools/codegen/generate-uniffi-bindings.ps1 -Language swift`
   - Shell: `./tools/codegen/generate-uniffi-bindings.sh kotlin`
   - Shell: `./tools/codegen/generate-uniffi-bindings.sh swift`
-  - The PowerShell script falls back to the workspace `tools/uniffi-bindgen` crate when `uniffi-bindgen` is not on `PATH`.
-  - The shell script does not have the same fallback: it skips Kotlin binding generation without `uniffi-bindgen` on `PATH` and fails for Swift.
+  - Both scripts use the locked workspace `tools/uniffi-bindgen` crate so the generator matches the native library.
 - Android release artifacts:
   - From `apps/mobile/android`: `cmd /c gradlew.bat assembleRelease bundleRelease`
 

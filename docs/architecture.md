@@ -803,13 +803,9 @@ The repo now carries a local workspace runner for UniFFI CLI generation:
 - package: `tools/uniffi-bindgen`
 - binary: `reticulum_mobile_uniffi_bindgen`
 
-`tools/codegen/generate-uniffi-bindings.ps1` uses this order:
-
-1. use `uniffi-bindgen` from `PATH` if it exists
-2. otherwise run the workspace fallback:
-   - `cargo run -p reticulum_mobile_uniffi_bindgen -- generate --language <swift|kotlin> ...`
-
-This avoids relying on a globally installed `uniffi-bindgen` executable, which is not always present with the UniFFI `0.28.x` crate layout used by this repo.
+Both codegen scripts use the locked workspace runner, keeping the generated
+bindings on the same UniFFI version as the native library. A globally installed
+`uniffi-bindgen` is not used.
 
 ## Networking and shared map dependencies
 

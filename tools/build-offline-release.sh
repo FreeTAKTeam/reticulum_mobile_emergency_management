@@ -23,7 +23,6 @@ lxmf_pin="$(awk '/^  LXMF_RS_REF:/ {print $2; exit}' "$root/.github/workflows/pl
 for file in keystore.properties ble-heart-rate-keystore.properties watch-status-keystore.properties gotenna-keystore.properties; do
     [[ -f "$android/$file" ]] || { echo "Missing Android signing configuration: $file" >&2; exit 1; }
 done
-command -v uniffi-bindgen >/dev/null || { echo 'uniffi-bindgen is required for release Kotlin generation' >&2; exit 1; }
 apksigner="$ANDROID_HOME/build-tools/35.0.0/apksigner"
 aapt="$ANDROID_HOME/build-tools/35.0.0/aapt"
 [[ -x "$apksigner" && -x "$aapt" ]] || { echo 'Android build tools 35.0.0 are required' >&2; exit 1; }
