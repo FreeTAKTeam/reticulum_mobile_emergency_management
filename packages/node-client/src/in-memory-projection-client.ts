@@ -30,6 +30,11 @@ export abstract class InMemoryProjectionClient {
     });
   });
 
+  async getSensorOrigins(): Promise<import("./contracts-sensors").SensorOriginsSnapshot> {
+    return { items: [], observedAtMs: Date.now(), ttlMs: 300_000 };
+  }
+  async setSensorVideoSharing(): Promise<void> { throw new Error("Sensor video sharing requires the native runtime."); }
+
   async listMapMarkerSymbols(): Promise<MapMarkerSymbolRecord[]> { return this.mapMarkers.symbols(); }
   async listMapMarkers(): Promise<MapMarkerRecord[]> { return this.mapMarkers.list(); }
   async createMapMarker(request: MapMarkerCreateRequest): Promise<MapMarkerCreateResult> {

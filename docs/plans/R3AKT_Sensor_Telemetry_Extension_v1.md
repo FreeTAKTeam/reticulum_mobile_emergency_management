@@ -1,6 +1,6 @@
 # R3AKT Sensor Geometry Telemetry Extension (R3S/1)
 
-**Status:** Proposed implementation specification, 31 October 2026. Not implemented or field-qualified.
+**Status:** Software implementation in REM and shared RCH, 31 October 2026. See [implementation evidence and outstanding release gates](../goals/r3s-telemetry/EVIDENCE.md). Provisional SID; not field-qualified.
 
 **Target:** REM Android/Rust, shared `r3akt-map-core`, RCH reception and map, and external R3AKT drone/camera applications.
 
@@ -96,7 +96,7 @@ The following names are the application-facing schema (not LXMF field names). JS
 
 `position` is optional if a previously known origin position exists; no position must be fabricated. `altM` is nullable, and altitude datum may be `hae` (height above WGS84 ellipsoid), `msl` (mean sea level), `agl` (height above ground), or `unknown`. Conversion is explicit and never inferred from a 0 or sentinel value. Position age is based on `fixAtMs`.
 
-Each `SensorState` has **required** `sensorId` (1–32 printable ASCII characters) and `sampleAtMs` (positive Unix UTC milliseconds). All angular and range values are **nullable** if unknown; drawing a sector requires valid azimuth, horizontal FOV > 0 and slant range > 0. `rangeKind` is `measured-target` (optically observed center target), `display-limit` (configured visibility radius, not measured), or `unknown` (range missing). A display limit must never be reported as observed target distance. Text model/type strings are limited to 64 bytes UTF-8 each.
+Each `SensorState` has **required** `sensorId` (1–32 printable ASCII characters) and `sampleAtMs` (positive Unix UTC milliseconds). All angular and range values are **nullable** if unknown; drawing a sector requires valid azimuth, elevation, horizontal FOV > 0 and slant range > 0. `rangeKind` is `measured-target` (optically observed center target), `display-limit` (configured visibility radius, not measured), or `unknown` (range missing). A display limit must never be reported as observed target distance. Text model/type strings are limited to 64 bytes UTF-8 each.
 
 Optional metadata stored with the origin/sensor manifest: a human label, `sensorType`, `model`, camera mount identifier, calibrated intrinsic parameters, and a **non-secret**, explicitly approved video descriptor (`protocol`, endpoint reference, `sensorId`). The manifest is low-frequency and independent of the sensor pose stream. Do **not** attach credentials or signed stream tokens to telemetry.
 
@@ -260,11 +260,48 @@ An ATAK-compliant video link only establishes an endpoint association. It does n
 
 ## 11. Design limitations and decisions still requiring review
 
+### Implementation contract amendments (31 October 2026)
+
+The authorized implementation is tracked in
+[the execution plan](../goals/r3s-telemetry/PLAN.md). PRE review identified
+two wire details that require explicit contracts:
+
+- Standard Sideband location sensor 2 cannot represent unknown altitude or
+  other required readings. R3S origin streams therefore omit sensor 2 when
+  required slots are unknown and carry the exact nullable fix in the typed
+  field-13 event `mission.registry.origin.telemetry.upsert` with
+  `{originId, position}`. This position is canonical; when sensor 2 also exists,
+  its coordinates and fix seconds must agree after standard wire rounding.
+  Standard sensor-2 encoding remains unchanged.
+- Explicit deletion events are `mission.registry.sensor.remove` with
+  `{originId, sensorId, deletedAtMs}` and `mission.registry.origin.remove`
+  with `{originId, deletedAtMs}`. Native hosts mint deletion times later than
+  accepted samples and retain tombstones across restart. Snapshot omission
+  does not remove a sensor. Manifest events carry
+  `{originId, manifest, updatedAtMs}` independently from pose samples.
+
+Remote origins require a persisted authenticated creator/writer binding;
+neither a tuple hash nor a claimed `origin_rch` establishes ownership.
+Plugin API 1.4 separates operator grants for geometry publication, independent
+origin fixes, network sharing and video metadata sharing. Self sensors retain
+plugin/publisher ownership even though the device itself is not a marker.
+
 1. **SID allocation:** 0x80 is provisional R3AKT space, not reserved by Sideband or a global standards body. Confirm no downstream collision before publishing R3S/1.
 2. **ATAK interoperability:** the static `<sensor>`/`<__video>` mechanism is verified; ATAK UAS Tool's 3D footprint, SPI and gimbal-control protocol are separate and are not claimed implemented or equivalent here.
 3. **Source geometry:** center-ray slant distance and 2D display radius are not the real four-corner footprint. A next revision may add terrain elevation, complete intrinsics, SPI and measured range confidence.
-4. **Current REM plugin:** `sensor.publish` is a local sensor value projection. The proposed authenticated origin-sensor operations are **new implementation work**.
+4. **Current REM plugin:** `sensor.publish` remains a local scalar sensor projection. The authenticated origin-sensor operations are implemented separately in plugin API 1.4.
 5. **Non-REM clients:** old clients do not understand SID 0x80. Do not conflate retention of the original binary packet with support for rendering the extension.
 6. **Video:** a `rtsp://` or `rtmp://` URL can be unreachable across LoRa; REM should not disclose local IP addresses to an untrusted recipient or automatically fetch untrusted streams.
 
 **Assessment confidence:** ATAK semantics 0.97 (source and XSD); existing REM/RCH transport 0.95 (current repository); selected R3S/1 encoding/architecture 0.84 (proposed design awaiting client/field tests). Overall 0.90 for suitability as an implementation starting specification, not proof of live interoperability.
+
+### Final implementation details
+
+- Authorized relay assertions use `mission.registry.sensor_origin.assert` with `{originId,writerId,originKind,label}`. Only an already authorized hub can supply these assertions. They allow new self origins and previously unseen deletion tombstones to be synchronized without trusting the claimed writer of an ordinary tuple. Repeated assertions preserve permanent tombstones.
+- CoT source expiry uses optional `mission.registry.sensor.expiry` with `{originId,sensorId,sampleAtMs,expiresAtMs}` and a maximum one-day interval. It applies only to the matching accepted sample revision. Native TTL still limits display lifetime.
+- The decoder allows 1,024 ordinary field-3 tuples and at most 16 sensor-bearing origins, 2,304 bounded sidecar events and a 1 MiB outer frame. RCH sends one sensor origin per reply. Original checked packets remain unchanged when they represent complete current state; otherwise collectors rebuild accepted state without dropping surviving sensors or unrelated SID values.
+- Static metadata confirmation uses delivery receipts. Moving fixes do not change static revisions. CoT export revisions include label/type/model/source expiry as well as pose/fix, and sensor imports update source-time positions atomically.
+- CoT video candidates stay separate and unapproved; the bridge does not share them or export video links. Explicit playback remains outside geometry acceptance. Stock ATAK export deterministically selects the first native-sorted sensor per origin.
+- REM implements conservative 1 Hz TCP / 30 s RNode-or-unknown / 300 s power-saver coalescing. RCH uses the bounded durable broker but has no separate per-radio coalescing worker; high-rate relay/cadence qualification remains open.
+- The unmodified pinned Sideband `Telemeter` class was executed against five standard location fixtures: repacking preserved ordinary SID 2 and discarded optional SID 128. See the [probe report](../goals/r3s-telemetry/evidence/sideband-repacking.json). Live Sideband application and routing behavior remains unqualified.
+- **RCH release gate:** current daemon APIs cannot cancel or re-authorize a retry after broker admission. RCH rechecks policy before admission; this does not guarantee immediate revocation afterward. Do not claim full T11 network revocation or operational readiness until that upstream capability is available. T12 physical acceptance, SID allocation and on-device permission/radio measurements remain open.

@@ -161,3 +161,5 @@ mod derived_tier_contract_tests {
         }
     }
 }
+
+include!("jni_bridge/sensor_geometry_api.rs");

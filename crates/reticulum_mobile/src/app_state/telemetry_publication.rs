@@ -69,6 +69,10 @@ impl AppStateStore {
         update: &crate::types::LxmfDeliveryUpdate,
     ) -> Result<Option<ProjectionInvalidation>, NodeError> {
         use crate::telemetry_publication::TelemetryPublicationState as State;
+        if update.command_type.as_deref() == Some("r3s.telemetry") {
+            self.record_sensor_delivery(update)?;
+            return Ok(None);
+        }
         if update.command_type.as_deref() != Some("mission.registry.telemetry.upsert") {
             return Ok(None);
         }

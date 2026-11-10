@@ -14,6 +14,10 @@ no mass deletion and no relaxed quality or security rules.
 - Current LXMF main compatibility: scheduled/manual job generating an ephemeral
   lockfile, with independent clippy and runtime-test matrix jobs.
 
+The committed runtime lockfile and both CI workflow pins target LXMF-rs
+`v0.16.0` at `45b5f5650b375ff418ec849cd9f99bf7f63a106c`. Update the lockfile
+and both pins together when changing that baseline.
+
 Formatting selects the REM package rather than the sibling LXMF workspace.
 Both matrices disable fail-fast. Audit, clippy, typecheck or build failures cannot
 cancel unrelated test jobs. A failed lane still fails the workflow; no
@@ -43,3 +47,5 @@ JNI/device or physical mesh acceptance. Local path dependencies use the existing
 sibling LXMF checkout: a dirty/current sibling is not the pinned hosted release.
 Do not rewrite that checkout or silently update committed locks to manufacture
 compatibility. Report that mismatch explicitly when locked local checks block.
+
+R3S/1 cross-layer software evidence and the separate SID, daemon-cancellation and hardware release gates are tracked in [the implementation evidence](goals/r3s-telemetry/EVIDENCE.md). The sensor browser fixture comes from shared Rust projection code; it does not validate physical camera calibration or radio throughput. Use `npx playwright test e2e/sensor-geometry.spec.ts` for the focused REM map lifecycle check.

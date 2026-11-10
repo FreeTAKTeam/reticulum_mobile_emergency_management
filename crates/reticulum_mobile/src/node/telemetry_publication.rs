@@ -48,6 +48,12 @@ impl Node {
         let invalidation = inner.app_state.record_local_telemetry_fix(&position)?;
         emit_projection_invalidation(&inner.bus, invalidation);
         inner.app_state.record_local_observer_fix(&position)?;
+        if let Some(id) = inner.app_state.local_sensor_writer()? {
+            if inner.app_state.sensor_origin(&id)?.is_some() {
+                sync_sensor_observer(&inner.app_state, &id)
+                    .map_err(|_| NodeError::InvalidConfig {})?;
+            }
+        }
         let summary = inner.app_state.bump_projection_revision(
             ProjectionScope::OperationalSummary {},
             None,
@@ -282,17 +288,29 @@ impl Node {
                     peer.identity_hex.as_deref(),
                 )
             });
-            let route_ready = peer.is_some_and(|peer| peer.active_link || peer_has_current_known_lxmf_route(peer));
+            let route_ready = peer
+                .is_some_and(|peer| peer.active_link || peer_has_current_known_lxmf_route(peer));
             let stored_route = saved.iter().any(|saved_peer| {
                 crate::team_membership::destinations_include_peer(
-                    std::slice::from_ref(&target.app_destination_hex), &saved_peer.destination_hex,
-                    saved_peer.lxmf_destination_hex.as_deref(), saved_peer.identity_hex.as_deref(),
-                ) && saved_peer.lxmf_destination_hex.as_deref().and_then(normalize_hex_32).is_some()
+                    std::slice::from_ref(&target.app_destination_hex),
+                    &saved_peer.destination_hex,
+                    saved_peer.lxmf_destination_hex.as_deref(),
+                    saved_peer.identity_hex.as_deref(),
+                ) && saved_peer
+                    .lxmf_destination_hex
+                    .as_deref()
+                    .and_then(normalize_hex_32)
+                    .is_some()
             });
-            let offline = offline_saved_targets(&status, &peers, &saved, &[], true).iter()
+            let offline = offline_saved_targets(&status, &peers, &saved, &[], true)
+                .iter()
                 .any(|candidate| candidate.app_destination_hex == target.app_destination_hex);
-            if !(route_ready || stored_route || matches!(target.send_mode, SendMode::PropagationOnly {}) || offline)
-                || status.interfaces.is_empty() && !offline {
+            if !(route_ready
+                || stored_route
+                || matches!(target.send_mode, SendMode::PropagationOnly {})
+                || offline)
+                || status.interfaces.is_empty() && !offline
+            {
                 continue;
             }
             let route = format!(
@@ -390,6 +408,7 @@ fn spawn_telemetry_publication_worker(runtime: &Runtime, node: std::sync::Weak<M
     runtime.spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(1));
         let mut inflight = HashMap::new();
+        let mut sensor_inflight = HashMap::new();
         if let Some(inner) = node.upgrade() {
             if let Ok(inner) = inner.lock() {
                 let _ = emit_telemetry_projection(&inner.app_state, &inner.bus, |publication| {
@@ -403,6 +422,14 @@ fn spawn_telemetry_publication_worker(runtime: &Runtime, node: std::sync::Weak<M
                 break;
             };
             let node = Node { inner };
+            if let Err(error) = node.flush_sensor_telemetry(&mut sensor_inflight) {
+                if let Ok(inner) = node.inner.lock() {
+                    inner.bus.emit(NodeEvent::Error {
+                        code: "SensorPublicationError".into(),
+                        message: format!("sensor publication failed: {error}"),
+                    });
+                }
+            }
             if let Err(error) = node.flush_pending_telemetry(&mut inflight) {
                 if let Ok(inner) = node.inner.lock() {
                     inner.bus.emit(NodeEvent::Error {

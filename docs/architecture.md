@@ -937,6 +937,16 @@ status. UniFFI and LXMF wire contracts are unchanged. Host tests prove the direc
 application flow and state transitions; physical RNode/LoRa qualification uses the
 exact signed candidate and remains a separate release gate.
 
+### R3S/1 origin sensor extension
+
+The shared `r3akt-map-core` dependency owns checked origin/sensor types, provisional SID 128 codec, optional-extension isolation, canonical marker lifecycle hooks, bounded SQLite state and geodesic display geometry. Native `app_state/sensor_*`, `node/sensor_*` and `runtime/sensor_receive.rs` implement plugin/signer ownership, authenticated source/relay admission, monotonic source times, tombstones and coalesced publication through the existing telemetry delivery/custody lane. Independent object fixes never mutate the controller observer or its ordinary telemetry positions.
+
+Plugin API 1.4 adds separately granted geometry, origin position, geometry sharing and video sharing capabilities. Exact endpoint approval belongs to the operator and binds to plugin/signing identity. Queue/retry/recovered-custody checks regenerate the current authorized snapshot. Delivery receipts confirm static metadata; ordinary movement does not change its revision. Nullable origin fixes and explicit removal events use typed field-13 sidecars alongside unchanged standard Telemeter sensor 2.
+
+`packages/node-client` exposes native sensor projections and explicit operator approval through the existing JNI/UniFFI/Capacitor boundary. `SensorGeometryLayer.vue` and its focused projection store add a source/layers to the existing map. Native TTL, moving-origin skew and near-nadir decisions remain authoritative; UI service failures remove cached coverage. No protocol, geometry, replication authority or video playback engine is added to TypeScript.
+
+The paired RCH implementation supplies authenticated reception, complete collector snapshots, `/Sensors`, map overlays and CoT adapters. See [R3S/1](plans/R3AKT_Sensor_Telemetry_Extension_v1.md) and [evidence and release gates](goals/r3s-telemetry/EVIDENCE.md). The RCH daemon cannot revoke retries it has already admitted; operational release needs that upstream capability and physical route/cadence evidence. No iOS build is part of this work.
+
 ## goTenna Mesh plugin bridge
 
 `plugins/gotenna` is a separate Mesh BLE application bridge. API 1.5's explicit

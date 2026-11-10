@@ -314,6 +314,7 @@ pub struct Node {
 }
 
 include!("node/lifecycle.rs");
+include!("node/outbound_queue.rs");
 include!("node/status.rs");
 include!("node/messaging.rs");
 include!("node/local_propagation.rs");
@@ -333,6 +334,7 @@ include!("node/plugin_map.rs");
 include!("node/plugin_relay.rs");
 include!("node/events_plugins_telemetry.rs");
 include!("node/telemetry_publication.rs");
+include!("node/sensor_geometry.rs");
 include!("node/event_replication.rs");
 include!("node/sos.rs");
 include!("node/sos_events.rs");
@@ -390,3 +392,11 @@ mod tests {
     include!("node/tests/block_onboarding.rs");
     include!("node/tests/map_markers.rs");
 }
+
+include!("node/sensor_admission.rs");
+
+include!("node/sensor_payload.rs");
+
+include!("node/sensor_publication.rs");
+
+include!("node/sensor_tests.rs");

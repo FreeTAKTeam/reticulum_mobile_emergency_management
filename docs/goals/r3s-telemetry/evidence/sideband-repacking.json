@@ -1,0 +1,42 @@
+{
+  "source": "https://github.com/markqvist/Sideband/blob/ef572b58e88ff4e4326d51778336922a53b2a03f/sbapp/sideband/sense.py",
+  "commit": "ef572b58e88ff4e4326d51778336922a53b2a03f",
+  "scope": "Pinned Telemeter.from_packed/packed source executed in isolated Python; no Sideband UI, service or radio",
+  "rns_version": "1.5.7",
+  "source_sha256": {
+    "sense.py": "1cb97015e6a7b0aa45b7dca3e3b08d8ccae4ab2215598e9218ffd0e171281a02",
+    "geo.py": "2d73bd11365ed23947f9fcb63c7137639ac343f9a4c9d1fc8a9ef3b160100e82"
+  },
+  "results": [
+    {
+      "fixture": "san_francisco",
+      "ordinary_location_preserved": true,
+      "unknown_sid_128_dropped": true,
+      "sid_2_encoded_sha256": "e4c39597918f463e66f845bf40a01e9d45c6bfd7ea3df6ef76fb404dd5286b42"
+    },
+    {
+      "fixture": "bounds_signed",
+      "ordinary_location_preserved": true,
+      "unknown_sid_128_dropped": true,
+      "sid_2_encoded_sha256": "a9c96573c57dcb89573119fefc697fc01ffbe2a4d0491cba3158195aeb9ea1e0"
+    },
+    {
+      "fixture": "southern",
+      "ordinary_location_preserved": true,
+      "unknown_sid_128_dropped": true,
+      "sid_2_encoded_sha256": "6b29e489473add615229edeb624e03796e9c27ac67f264af74a3a3aa513549e6"
+    },
+    {
+      "fixture": "zero_time_accuracy",
+      "ordinary_location_preserved": true,
+      "unknown_sid_128_dropped": true,
+      "sid_2_encoded_sha256": "3a92bfd9b478ffb69251fcf827b7be0071bb2b2c51638a2ea7d337123e9ee440"
+    },
+    {
+      "fixture": "uint64_timestamps",
+      "ordinary_location_preserved": true,
+      "unknown_sid_128_dropped": true,
+      "sid_2_encoded_sha256": "57b3481a1e2cf8c41a8e470c594c6714b9352000103902d287add26b76e65881"
+    }
+  ]
+}

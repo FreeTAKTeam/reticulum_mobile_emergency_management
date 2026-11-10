@@ -45,6 +45,14 @@ pub struct PluginCapabilityRecord {
     /// nearest first, without sharing each one (`map.markers.nearby`).
     #[serde(default)]
     pub map_nearby_read: bool,
+    #[serde(default)]
+    pub sensor_geometry_publish: bool,
+    #[serde(default)]
+    pub origin_telemetry_publish: bool,
+    #[serde(default)]
+    pub sensor_geometry_share: bool,
+    #[serde(default)]
+    pub sensor_video_share: bool,
 }
 
 impl PluginCapabilityRecord {
@@ -61,6 +69,10 @@ impl PluginCapabilityRecord {
             && (!self.map_observer_read || declared.map_observer_read)
             && (!self.map_selection_read || declared.map_selection_read)
             && (!self.map_nearby_read || declared.map_nearby_read)
+            && (!self.sensor_geometry_publish || declared.sensor_geometry_publish)
+            && (!self.origin_telemetry_publish || declared.origin_telemetry_publish)
+            && (!self.sensor_geometry_share || declared.sensor_geometry_share)
+            && (!self.sensor_video_share || declared.sensor_video_share)
     }
 }
 

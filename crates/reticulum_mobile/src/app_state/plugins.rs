@@ -3,13 +3,19 @@ impl AppStateStore {
         let connection = self.connect()?;
         let mut statement = connection
             .prepare("SELECT json FROM plugins ORDER BY plugin_id ASC")
-            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
+            .map_err(|error| {
+                crate::error_context::contextual_node_error(NodeError::IoError {}, error)
+            })?;
         let rows = statement
             .query_map([], |row| row.get::<_, String>(0))
-            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
+            .map_err(|error| {
+                crate::error_context::contextual_node_error(NodeError::IoError {}, error)
+            })?;
         let mut records = Vec::new();
         for row in rows {
-            records.push(deserialize_json(&row.map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?)?);
+            records.push(deserialize_json(&row.map_err(|error| {
+                crate::error_context::contextual_node_error(NodeError::IoError {}, error)
+            })?)?);
         }
         Ok(records)
     }
@@ -23,7 +29,9 @@ impl AppStateStore {
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
+            .map_err(|error| {
+                crate::error_context::contextual_node_error(NodeError::IoError {}, error)
+            })?;
         raw.map(|value| deserialize_json(value.as_str()))
             .transpose()
     }
@@ -34,113 +42,21 @@ impl AppStateStore {
         let connection = self.connect()?;
         let mut statement = connection
             .prepare("SELECT json FROM plugin_publishers ORDER BY fingerprint ASC")
-            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
+            .map_err(|error| {
+                crate::error_context::contextual_node_error(NodeError::IoError {}, error)
+            })?;
         let rows = statement
             .query_map([], |row| row.get::<_, String>(0))
-            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
+            .map_err(|error| {
+                crate::error_context::contextual_node_error(NodeError::IoError {}, error)
+            })?;
         let mut records = Vec::new();
         for row in rows {
-            records.push(deserialize_json(&row.map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?)?);
+            records.push(deserialize_json(&row.map_err(|error| {
+                crate::error_context::contextual_node_error(NodeError::IoError {}, error)
+            })?)?);
         }
         Ok(records)
-    }
-
-    pub fn sync_discovered_plugins(
-        &self,
-        discovered: &[DiscoveredPluginRecord],
-    ) -> Result<ProjectionInvalidation, NodeError> {
-        let existing = self
-            .list_plugins()?
-            .into_iter()
-            .map(|plugin| (plugin.discovered.plugin_id.clone(), plugin))
-            .collect::<HashMap<_, _>>();
-        let trusted_fingerprints = self
-            .list_trusted_plugin_publishers()?
-            .into_iter()
-            .map(|publisher| normalize_fingerprint(publisher.fingerprint.as_str()))
-            .collect::<std::collections::HashSet<_>>();
-        let mut connection = self.connect()?;
-        let transaction = connection
-            .transaction()
-            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
-        let mut seen = std::collections::HashSet::new();
-        let updated_at_ms = now_ms();
-
-        for item in discovered {
-            let mut item = item.clone();
-            normalize_discovered_plugin(&mut item)?;
-            if !seen.insert(item.plugin_id.clone()) {
-                return Err(NodeError::InvalidConfig {});
-            }
-            let trusted = trusted_fingerprints.contains(&item.publisher_fingerprint);
-            let previous = existing.get(item.plugin_id.as_str());
-            let same_signer = previous.is_some_and(|plugin| {
-                normalize_fingerprint(plugin.discovered.publisher_fingerprint.as_str())
-                    == item.publisher_fingerprint
-            });
-            let mut granted = if same_signer {
-                previous
-                    .map(|plugin| plugin.granted_capabilities.clone())
-                    .unwrap_or_default()
-            } else {
-                PluginCapabilityRecord::default()
-            };
-            intersect_capabilities(&mut granted, &item.declared_capabilities);
-            let compatible = item.api_major == 1 && item.api_minor <= 5;
-            let enabled = previous.is_some_and(|plugin| plugin.enabled)
-                && same_signer
-                && trusted
-                && compatible;
-            let state = if !compatible {
-                "Incompatible"
-            } else if !trusted {
-                "Untrusted"
-            } else if !enabled {
-                "Disabled"
-            } else {
-                "Stopped"
-            };
-            let record = InstalledPluginRecord {
-                discovered: item,
-                state: state.to_string(),
-                trusted,
-                enabled,
-                granted_capabilities: granted,
-                diagnostic: None,
-                updated_at_ms,
-            };
-            write_plugin_tx(&transaction, &record)?;
-            if previous.is_some() && !same_signer {
-                // A new signer must not inherit edit rights over markers the
-                // old one created; the shared markers themselves stay.
-                transaction
-                    .execute(
-                        "DELETE FROM plugin_map_markers WHERE plugin_id = ?1",
-                        params![record.discovered.plugin_id],
-                    )
-                    .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
-            }
-        }
-
-        for (plugin_id, previous) in existing {
-            if seen.contains(plugin_id.as_str()) {
-                continue;
-            }
-            let mut missing = previous;
-            missing.state = "Missing".to_string();
-            missing.diagnostic = Some("Plugin package is not installed".to_string());
-            missing.updated_at_ms = updated_at_ms;
-            write_plugin_tx(&transaction, &missing)?;
-        }
-
-        let invalidation = self.bump_projection_revision_tx(
-            &transaction,
-            ProjectionScope::Plugins {},
-            None,
-            Some("plugin-discovery-synchronized".to_string()),
-        )?;
-        transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
-        Ok(invalidation)
     }
 
     pub fn approve_plugin_publisher(
@@ -166,9 +82,9 @@ impl AppStateStore {
             approved_at_ms,
         };
         let mut connection = self.connect()?;
-        let transaction = connection
-            .transaction()
-            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
+        let transaction = connection.transaction().map_err(|error| {
+            crate::error_context::contextual_node_error(NodeError::IoError {}, error)
+        })?;
         transaction
             .execute(
                 "INSERT INTO plugin_publishers (fingerprint, json, updated_at_ms)
@@ -182,7 +98,9 @@ impl AppStateStore {
                     crate::numeric::u64_to_i64_saturating(approved_at_ms)
                 ],
             )
-            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
+            .map_err(|error| {
+                crate::error_context::contextual_node_error(NodeError::IoError {}, error)
+            })?;
         for mut signed_plugin in self.list_plugins()? {
             let signed_by_publisher =
                 normalize_fingerprint(signed_plugin.discovered.publisher_fingerprint.as_str())
@@ -209,7 +127,9 @@ impl AppStateStore {
             Some(plugin_id.to_string()),
             Some("plugin-publisher-approved".to_string()),
         )?;
-        transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
+        transaction.commit().map_err(|error| {
+            crate::error_context::contextual_node_error(NodeError::IoError {}, error)
+        })?;
         Ok(invalidation)
     }
 
@@ -236,16 +156,18 @@ impl AppStateStore {
             }
         }
         let mut connection = self.connect()?;
-        let transaction = connection
-            .transaction()
-            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
+        let transaction = connection.transaction().map_err(|error| {
+            crate::error_context::contextual_node_error(NodeError::IoError {}, error)
+        })?;
         for revoked in &revoked_fingerprints {
             transaction
                 .execute(
                     "DELETE FROM plugin_publishers WHERE fingerprint = ?1",
                     params![revoked],
                 )
-                .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
+                .map_err(|error| {
+                    crate::error_context::contextual_node_error(NodeError::IoError {}, error)
+                })?;
         }
         for mut plugin in plugins {
             let matches = std::iter::once(plugin.discovered.publisher_fingerprint.as_str())
@@ -274,7 +196,9 @@ impl AppStateStore {
             None,
             Some("plugin-publisher-revoked".to_string()),
         )?;
-        transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
+        transaction.commit().map_err(|error| {
+            crate::error_context::contextual_node_error(NodeError::IoError {}, error)
+        })?;
         Ok(invalidation)
     }
 
@@ -342,15 +266,20 @@ impl AppStateStore {
                 "SELECT json FROM plugin_sensors
                  ORDER BY sample_at_ms DESC, plugin_id ASC, device_id ASC, sensor_type ASC",
             )
-            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
+            .map_err(|error| {
+                crate::error_context::contextual_node_error(NodeError::IoError {}, error)
+            })?;
         let rows = statement
             .query_map([], |row| row.get::<_, String>(0))
-            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
+            .map_err(|error| {
+                crate::error_context::contextual_node_error(NodeError::IoError {}, error)
+            })?;
         let current = now_ms();
         let mut records = Vec::new();
         for row in rows {
-            let mut record: PluginSensorRecord =
-                deserialize_json(&row.map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?)?;
+            let mut record: PluginSensorRecord = deserialize_json(&row.map_err(|error| {
+                crate::error_context::contextual_node_error(NodeError::IoError {}, error)
+            })?)?;
             record.status = sensor_status(
                 record.connection_state.as_deref(),
                 record.sample_at_ms,
@@ -404,9 +333,9 @@ impl AppStateStore {
             origin: sample.origin.trim().to_ascii_lowercase(),
         };
         let mut connection = self.connect()?;
-        let transaction = connection
-            .transaction()
-            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
+        let transaction = connection.transaction().map_err(|error| {
+            crate::error_context::contextual_node_error(NodeError::IoError {}, error)
+        })?;
         transaction
             .execute(
                 "INSERT INTO plugin_sensors (
@@ -423,7 +352,9 @@ impl AppStateStore {
                     serialize_json(&record)?
                 ],
             )
-            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
+            .map_err(|error| {
+                crate::error_context::contextual_node_error(NodeError::IoError {}, error)
+            })?;
         let invalidation = self.bump_projection_revision_tx(
             &transaction,
             ProjectionScope::PluginSensors {},
@@ -433,7 +364,9 @@ impl AppStateStore {
             )),
             Some("plugin-sensor-updated".to_string()),
         )?;
-        transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
+        transaction.commit().map_err(|error| {
+            crate::error_context::contextual_node_error(NodeError::IoError {}, error)
+        })?;
         Ok((record, invalidation))
     }
 
@@ -443,9 +376,9 @@ impl AppStateStore {
         reason: &str,
     ) -> Result<ProjectionInvalidation, NodeError> {
         let mut connection = self.connect()?;
-        let transaction = connection
-            .transaction()
-            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
+        let transaction = connection.transaction().map_err(|error| {
+            crate::error_context::contextual_node_error(NodeError::IoError {}, error)
+        })?;
         write_plugin_tx(&transaction, &plugin)?;
         let invalidation = self.bump_projection_revision_tx(
             &transaction,
@@ -453,8 +386,9 @@ impl AppStateStore {
             Some(plugin.discovered.plugin_id.clone()),
             Some(reason.to_string()),
         )?;
-        transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
+        transaction.commit().map_err(|error| {
+            crate::error_context::contextual_node_error(NodeError::IoError {}, error)
+        })?;
         Ok(invalidation)
     }
-
 }

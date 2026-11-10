@@ -1,3 +1,4 @@
+import type { SensorGeometryClient } from "./contracts-sensors";
 import type { TelemetryPublicationSnapshot } from "./contracts-telemetry";
 import type {
   LogLevel, HubMode, RnodeRegion, RnodeProfileId, RnodeConnectionMode, RuntimeReadinessState, PeerState, AnnounceDestinationKind,
@@ -27,7 +28,7 @@ export type ChecklistDeleteOptions = {
   deleteRemote?: boolean;
 };
 
-export interface ReticulumNodeClient extends MapMarkerClient, PluginMapSessionClient {
+export interface ReticulumNodeClient extends MapMarkerClient, PluginMapSessionClient, SensorGeometryClient {
   start(config: NodeConfig): Promise<void>;
   stop(): Promise<void>;
   restart(config: NodeConfig): Promise<void>;

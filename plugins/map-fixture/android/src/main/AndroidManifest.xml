@@ -8,8 +8,8 @@
             <meta-data android:name="rem.plugin.displayName" android:value="Map Fixture" />
             <meta-data android:name="rem.plugin.version" android:value="1.0.0" />
             <meta-data android:name="rem.plugin.apiMajor" android:value="1" />
-            <meta-data android:name="rem.plugin.apiMinor" android:value="3" />
-            <meta-data android:name="rem.plugin.capabilities" android:value="{&quot;mapMarkersRead&quot;:true,&quot;mapMarkersWrite&quot;:true,&quot;mapObserverRead&quot;:true,&quot;mapSelectionRead&quot;:true}" />
+            <meta-data android:name="rem.plugin.apiMinor" android:value="4" />
+            <meta-data android:name="rem.plugin.capabilities" android:value="{&quot;sensorGeometryPublish&quot;:true,&quot;originTelemetryPublish&quot;:true,&quot;sensorGeometryShare&quot;:true,&quot;lxmfSend&quot;:true,&quot;mapMarkersRead&quot;:true,&quot;mapMarkersWrite&quot;:true,&quot;mapObserverRead&quot;:true,&quot;mapSelectionRead&quot;:true}" />
             <meta-data android:name="rem.plugin.messages" android:value="[]" />
         </service>
     </application>

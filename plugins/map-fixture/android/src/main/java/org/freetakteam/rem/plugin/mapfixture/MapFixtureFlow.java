@@ -35,6 +35,7 @@ final class MapFixtureFlow {
     private int apiMinor = -1;
     private String symbol = "";
     private String createdMarkerId = "";
+    private JSONObject targetPosition;
 
     MapFixtureFlow(RequestIds requestIds) {
         this.requestIds = requestIds;
@@ -78,7 +79,7 @@ final class MapFixtureFlow {
             case "map.markers.create":
                 final JSONObject marker = result.optJSONObject("marker");
                 createdMarkerId = marker == null ? "" : marker.optString("object_destination_hash", "");
-                return Collections.emptyList();
+                return sensorFixtureRequests();
             case "map.session.objects.get":
                 acceptSessionObjects(result);
                 return Collections.emptyList();
@@ -153,6 +154,9 @@ final class MapFixtureFlow {
             return Collections.emptyList();
         }
         final double lat = snapshot.getDouble("lat") + TARGET_DISTANCE_M / METERS_PER_DEGREE_LAT;
+        targetPosition = new JSONObject().put("lat", Math.min(90.0, lat)).put("lon", snapshot.getDouble("lon"))
+            .put("altM", JSONObject.NULL).put("altitudeDatum", "unknown").put("speedMps", JSONObject.NULL)
+            .put("courseDeg", JSONObject.NULL).put("accuracyM", JSONObject.NULL);
         final JSONObject payload = new JSONObject()
             .put("idempotencyKey", "fixture-target-" + snapshot.optLong("updatedAtMs"))
             .put("symbol", symbol)
@@ -161,6 +165,23 @@ final class MapFixtureFlow {
             .put("lat", Math.min(90.0, lat))
             .put("lon", snapshot.getDouble("lon"));
         return List.of(request("map.markers.create", payload));
+    }
+
+    private List<String> sensorFixtureRequests() throws JSONException {
+        if (apiMinor < PluginProtocol.SENSOR_GEOMETRY_API_MINOR || createdMarkerId.isEmpty() || targetPosition == null) {
+            return Collections.emptyList();
+        }
+        final long time = System.currentTimeMillis();
+        targetPosition.put("fixAtMs", time);
+        final JSONObject sensor = new JSONObject().put("sensorId", "fixture-eo").put("sampleAtMs", time)
+            .put("azimuthDeg", 0).put("elevationDeg", -30).put("horizontalFovDeg", 20)
+            .put("verticalFovDeg", 10).put("rollDeg", 0).put("imageNorthDeg", 180)
+            .put("slantRangeM", 2000).put("rangeKind", "display-limit");
+        return List.of(
+            request(PluginProtocol.MAP_ORIGIN_TELEMETRY_UPSERT, new JSONObject().put("originId", createdMarkerId).put("position", targetPosition)),
+            request(PluginProtocol.MAP_SENSOR_MANIFEST_UPSERT, new JSONObject().put("originId", createdMarkerId).put("manifest", new JSONObject().put("sensorId", "fixture-eo").put("label", "Synthetic camera").put("sensorType", "camera"))),
+            request(PluginProtocol.MAP_SENSORS_UPSERT, new JSONObject().put("originId", createdMarkerId).put("sensor", sensor))
+        );
     }
 
     private void acceptSessionObjects(JSONObject result) {

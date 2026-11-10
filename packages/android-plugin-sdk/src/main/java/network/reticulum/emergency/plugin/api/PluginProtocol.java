@@ -11,6 +11,11 @@ public final class PluginProtocol {
     public static final int MAP_API_MINOR = 2;
     /** First API minor with operator-selected map sessions and their events. */
     public static final int MAP_SESSION_API_MINOR = 3;
+    public static final int SENSOR_GEOMETRY_API_MINOR = 4;
+    public static final String MAP_SENSORS_UPSERT = "map.sensors.upsert";
+    public static final String MAP_SENSORS_REMOVE = "map.sensors.remove";
+    public static final String MAP_SENSOR_MANIFEST_UPSERT = "map.sensors.manifest.upsert";
+    public static final String MAP_ORIGIN_TELEMETRY_UPSERT = "map.origins.telemetry.upsert";
     public static final int MAX_JSON_BYTES = 65_536;
     public static final String SERVICE_ACTION = "network.reticulum.emergency.PLUGIN_V1";
 

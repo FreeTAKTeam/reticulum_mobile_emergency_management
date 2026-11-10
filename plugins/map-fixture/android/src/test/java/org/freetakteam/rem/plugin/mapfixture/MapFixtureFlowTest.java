@@ -143,4 +143,20 @@ public final class MapFixtureFlowTest {
         assertTrue(flow.start("{\"apiMajor\":1,\"apiMinor\":2}").isEmpty());
         assertTrue(flow.onHostEvent(sessionStarted()).isEmpty());
     }
+    @Test
+    public void api14AddsIndependentSensorRequestsWithoutAnAltitudeGuess() throws JSONException {
+        final JSONObject symbols = only(flow.start("{\"apiMajor\":1,\"apiMinor\":4}"));
+        final JSONObject catalog = new JSONObject().put("items", new JSONArray().put(new JSONObject().put("id", "hostile")));
+        final JSONObject observer = only(flow.onHostResponse(ok(symbols, catalog)));
+        final JSONObject create = only(flow.onHostResponse(ok(observer, new JSONObject().put("available", true).put("observer", new JSONObject().put("kind", "localDevice")).put("lat", 45).put("lon", 7.5))));
+        final List<String> requests = flow.onHostResponse(ok(create, new JSONObject().put("marker", marker(SELECTED, "Camera"))));
+        assertEquals(3, requests.size());
+        final JSONObject position = new JSONObject(requests.get(0));
+        assertEquals(PluginProtocol.MAP_ORIGIN_TELEMETRY_UPSERT, position.getString("operation"));
+        assertEquals(SELECTED, position.getJSONObject("payload").getString("originId"));
+        assertTrue(position.getJSONObject("payload").getJSONObject("position").isNull("altM"));
+        final JSONObject sensor = new JSONObject(requests.get(2)).getJSONObject("payload").getJSONObject("sensor");
+        assertEquals(20, sensor.getInt("horizontalFovDeg"));
+        assertEquals("display-limit", sensor.getString("rangeKind"));
+    }
 }

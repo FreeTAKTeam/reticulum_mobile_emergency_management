@@ -93,6 +93,11 @@ export type PluginState =
 
 export interface PluginCapabilityRecord {
   communicationsRelay?: boolean;
+  sensorGeometryPublish: boolean;
+  originTelemetryPublish: boolean;
+  sensorGeometryShare: boolean;
+  sensorVideoShare: boolean;
+
   eventsPublish: boolean;
   sensorsPublish: boolean;
   lxmfSend: boolean;

@@ -42,7 +42,7 @@ fn apply_map_marker_event(
 }
 
 fn persist_received_map_marker_if_present(
-    app_state: &AppStateStore,
+    state: &NodeRuntimeState,
     bus: &EventBus,
     source: Option<&str>,
     metadata: Option<&MissionSyncMetadata>,
@@ -51,18 +51,52 @@ fn persist_received_map_marker_if_present(
     if !metadata.is_some_and(|metadata| metadata.event_present) {
         return false;
     }
+    let app_state = &state.app_state;
     let mut applied = false;
     for (event_type, payload) in fields_bytes.map(map_marker_events).unwrap_or_default() {
+        let Ok(id) = r3akt_map_core::replica::replica_id(&payload) else {
+            continue;
+        };
+        let policy = source.and_then(|source| {
+            sensor_receive_policy(state, source)
+                .ok()
+                .map(|p| (source, p))
+        });
+        let binding = app_state.sensor_marker_writer(&id).ok().flatten();
+        if binding.is_some()
+            && !policy.is_some_and(|(source, (allowed, relay))| {
+                allowed && (relay || binding.as_deref() == Some(source))
+            })
+        {
+            continue;
+        }
+        let fresh = event_type == "mission.marker.created"
+            && app_state.get_map_marker(&id).ok().flatten().is_none();
         match apply_map_marker_event(app_state, &event_type, &payload) {
             Ok(Some(invalidation)) => {
                 crate::node::emit_map_marker_invalidation(app_state, bus, invalidation);
-                if let (Some(source), Some(marker)) = (source, r3akt_map_core::replica::replica_id(&payload).ok().and_then(|id| app_state.get_map_marker(&id).ok().flatten())) {
+                if let (Some(source), Ok(Some(marker))) = (source, app_state.get_map_marker(&id)) {
                     let imported = marker.notes.as_deref().is_some_and(|notes| notes.starts_with("[goTenna:") || notes.starts_with("[REM:"));
                     if !imported && event_type != r3akt_map_core::replica::DELETE_EVENT {
-                        let key = format!("marker:{}:{}", marker.object_destination_hash, marker.updated_at_ms);
+                        let key = format!("marker:{}:{}", id, marker.updated_at_ms);
                         if let Err(error) = app_state.record_relay_ingress("position", source, &key,
                             &serde_json::json!({"callsign":marker.name,"lat":marker.lat,"lon":marker.lon,"updatedAtMs":marker.updated_at_ms})) {
                             warn!("[plugin-relay] marker not queued: {error}");
+                        }
+                    }
+                }
+                if fresh {
+                    if let Some((source, (true, relay))) = policy {
+                        let writer = if relay {
+                            payload
+                                .get("origin_rch")
+                                .and_then(serde_json::Value::as_str)
+                                .and_then(crate::delivery_policy::normalize_hex_32)
+                        } else {
+                            Some(source.to_string())
+                        };
+                        if let Some(writer) = writer {
+                            let _ = app_state.remember_sensor_marker_writer(&id, &writer);
                         }
                     }
                 }
@@ -93,7 +127,9 @@ pub(crate) fn is_marker_telemetry(fields_bytes: &[u8]) -> bool {
                 let telemetry = command
                     .get("command_type")
                     .and_then(serde_json::Value::as_str)
-                    .is_some_and(|value| canonical_command_type(value) == "mission.registry.telemetry.upsert");
+                    .is_some_and(|value| {
+                        canonical_command_type(value) == "mission.registry.telemetry.upsert"
+                    });
                 let args = command.get("args");
                 let has = |key: &str| args.and_then(|args| args.get(key)).is_some();
                 telemetry && has("object_destination_hash") && has("marker_type")

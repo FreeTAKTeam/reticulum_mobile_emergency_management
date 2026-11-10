@@ -20,7 +20,9 @@ fn write_plugin_tx(
                 crate::numeric::u64_to_i64_saturating(plugin.updated_at_ms)
             ],
         )
-        .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
+        .map_err(|error| {
+            crate::error_context::contextual_node_error(NodeError::IoError {}, error)
+        })?;
     Ok(())
 }
 
@@ -81,6 +83,10 @@ fn intersect_capabilities(granted: &mut PluginCapabilityRecord, declared: &Plugi
     granted.map_observer_read &= declared.map_observer_read;
     granted.map_selection_read &= declared.map_selection_read;
     granted.map_nearby_read &= declared.map_nearby_read;
+    granted.sensor_geometry_publish &= declared.sensor_geometry_publish;
+    granted.origin_telemetry_publish &= declared.origin_telemetry_publish;
+    granted.sensor_geometry_share &= declared.sensor_geometry_share;
+    granted.sensor_video_share &= declared.sensor_video_share;
 }
 
 fn validate_sensor_sample(sample: &PluginSensorSampleRequest) -> Result<(), NodeError> {
@@ -135,11 +141,15 @@ fn sensor_status(
 }
 
 fn serialize_json<T: Serialize>(value: &T) -> Result<String, NodeError> {
-    serde_json::to_string(value).map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))
+    serde_json::to_string(value).map_err(|error| {
+        crate::error_context::contextual_node_error(NodeError::InternalError {}, error)
+    })
 }
 
 fn deserialize_json<T: serde::de::DeserializeOwned>(value: &str) -> Result<T, NodeError> {
-    serde_json::from_str(value).map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))
+    serde_json::from_str(value).map_err(|error| {
+        crate::error_context::contextual_node_error(NodeError::InternalError {}, error)
+    })
 }
 
 fn announce_class_name(class: AnnounceClass) -> &'static str {

@@ -12,6 +12,7 @@ import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vu
 import { useRoute } from "vue-router";
 
 import MapOverlayMenu from "../components/map/MapOverlayMenu.vue";
+import SensorGeometryLayer from "../components/map/SensorGeometryLayer.vue";
 import MapMarkerLayer from "../components/map/MapMarkerLayer.vue";
 import { useTelemetryMapActions } from "../composables/useTelemetryMapActions";
 import { useTelemetryRouteTargets } from "../composables/useTelemetryRouteTargets";
@@ -429,6 +430,7 @@ onBeforeUnmount(() => {
         />
       </div>
       <MapMarkerLayer :map="markerMap" />
+      <SensorGeometryLayer :map="markerMap" />
     </div>
   </section>
 </template>

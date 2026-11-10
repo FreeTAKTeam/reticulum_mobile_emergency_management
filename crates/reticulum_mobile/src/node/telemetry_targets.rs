@@ -240,6 +240,11 @@ pub(crate) fn telemetry_delivery_is_current(
     snapshot: Option<&HubDirectorySnapshot>,
     request: (&str, &str),
 ) -> Result<bool, NodeError> {
+    if request.1.starts_with("r3s:") {
+        return sensor_delivery_is_current(
+            app_state, status, config, peers, snapshot, request.0, request.1,
+        );
+    }
     let publication = app_state.telemetry_publication()?;
     let Some(fix) = publication.fix.as_ref() else {
         return Ok(false);
