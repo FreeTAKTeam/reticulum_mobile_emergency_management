@@ -22,13 +22,17 @@ Shell:
 Each script:
 
 - Builds `reticulum_mobile` for platform targets (Android or iOS)
-- Runs `uniffi-bindgen` for the chosen language
+- Runs the pinned workspace `uniffi-bindgen` for the chosen language
 - Copies generated bindings into `apps/mobile/{android|ios}/uniffi`
 - Copies built native libraries into `apps/mobile/{android|ios}/uniffi/libs/<target>`
 - For Android (`kotlin`), also copies `libreticulum_mobile.so` into:
   - `apps/mobile/android/app/src/main/jniLibs/arm64-v8a`
   - `apps/mobile/android/app/src/main/jniLibs/armeabi-v7a`
   - `apps/mobile/android/app/src/main/jniLibs/x86_64`
+
+On Linux, `bash tools/codegen/test-uniffi-bindings.sh` checks that the locked
+generator produces Kotlin and Swift bindings and that the generated Python
+binding can load and call the native library.
 
 ## Android Prerequisites
 

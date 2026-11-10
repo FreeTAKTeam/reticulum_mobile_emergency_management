@@ -131,7 +131,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        check: [fmt, clippy, tests, audit]
+        check: [fmt, clippy, tests, audit, bindings]
 
     steps:
       - name: Check out mobile app
@@ -175,7 +175,11 @@ jobs:
               cargo clippy --manifest-path crates/reticulum_mobile/jni-boundary-macro/Cargo.toml --all-targets -- -D warnings
               ;;
             tests) cargo test --manifest-path crates/reticulum_mobile/Cargo.toml --locked --verbose ;;
-            audit) cargo audit --file crates/reticulum_mobile/Cargo.lock ;;
+            audit)
+              cargo audit --deny warnings --file crates/reticulum_mobile/Cargo.lock
+              cargo audit --deny warnings --file tools/uniffi-bindgen/Cargo.lock
+              ;;
+            bindings) bash tools/codegen/test-uniffi-bindings.sh ;;
             *) exit 1 ;;
           esac
 

@@ -31,18 +31,12 @@ function Invoke-UniffiBindgen {
     [string]$OutputDir
   )
 
-  $bindgen = Get-Command uniffi-bindgen -ErrorAction SilentlyContinue
-  if ($bindgen) {
-    Write-Host "Generating UniFFI bindings ($LanguageName) via PATH tool..."
-    uniffi-bindgen generate $udlPath --language $LanguageName --out-dir $OutputDir
-    return
-  }
-
-  Write-Host "Generating UniFFI bindings ($LanguageName) via workspace fallback tool..."
+  Write-Host "Generating UniFFI bindings ($LanguageName) via the pinned workspace tool..."
   $cargoArgs = @(
     "run",
     "--manifest-path",
     $bindgenManifest,
+    "--locked",
     "--",
     "generate",
     "--language",
@@ -51,7 +45,12 @@ function Invoke-UniffiBindgen {
     $OutputDir,
     $udlPath
   )
-  cargo @cargoArgs
+  Push-Location (Split-Path $crateManifest)
+  try {
+    cargo @cargoArgs
+  } finally {
+    Pop-Location
+  }
 }
 
 if ($Language -eq "kotlin") {
