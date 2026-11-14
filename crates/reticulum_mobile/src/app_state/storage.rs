@@ -10,6 +10,7 @@ impl AppStateStore {
             db_path: base_dir.join(DB_FILE_NAME),
         };
         store.initialize()?;
+        store.prune_announces()?;
         store.seed_default_checklist_templates()?;
         Ok(store)
     }

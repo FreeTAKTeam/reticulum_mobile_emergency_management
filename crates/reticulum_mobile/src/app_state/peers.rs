@@ -203,6 +203,18 @@ impl AppStateStore {
         Ok(())
     }
 
+    fn prune_announces(&self) -> Result<(), NodeError> {
+        self.connect()?
+            .execute(
+                "DELETE FROM announces WHERE destination_hex NOT IN (
+                    SELECT destination_hex FROM announces ORDER BY received_at_ms DESC LIMIT ?1
+                 )",
+                params![i64::try_from(ANNOUNCE_RETENTION_LIMIT).unwrap_or(i64::MAX)],
+            )
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
+        Ok(())
+    }
+
     pub fn list_announces(&self) -> Result<Vec<AnnounceRecord>, NodeError> {
         let connection = self.connect()?;
         let mut statement = connection
