@@ -74,6 +74,7 @@ fn spawn_list_announces_command(
             .await
             .list_announces()
             .into_iter()
+            .take(crate::app_state::ANNOUNCE_RETENTION_LIMIT)
             .map(from_sdk_announce_record)
             .collect())
     });

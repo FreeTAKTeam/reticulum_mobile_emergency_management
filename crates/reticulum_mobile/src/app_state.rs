@@ -62,6 +62,8 @@ fn initialize_local_team_settings(
 
 const DEFAULT_STORAGE_DIR: &str = "reticulum-mobile";
 const DB_FILE_NAME: &str = "app_state.db";
+// Public meshes (rmap.world) announce thousands of destinations; unbounded, the JS snapshot OOMs the bridge.
+pub(crate) const ANNOUNCE_RETENTION_LIMIT: usize = 2000;
 const SQLITE_BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const EAM_STATUS_FIELDS: [(&str, &str); 6] = [
     ("securityStatus", "Security"),
@@ -338,6 +340,7 @@ mod tests {
     include!("app_state/tests/plugin_relay.rs");
     include!("app_state/tests/messages.rs");
     include!("app_state/tests/peers.rs");
+    include!("app_state/tests/announce_retention.rs");
     include!("app_state/tests/emergency.rs");
     include!("app_state/tests/map_markers.rs");
     include!("app_state/tests/plugin_map_sessions.rs");
