@@ -305,3 +305,19 @@ plugin/publisher ownership even though the device itself is not a marker.
 - REM implements conservative 1 Hz TCP / 30 s RNode-or-unknown / 300 s power-saver coalescing. RCH uses the bounded durable broker but has no separate per-radio coalescing worker; high-rate relay/cadence qualification remains open.
 - The unmodified pinned Sideband `Telemeter` class was executed against five standard location fixtures: repacking preserved ordinary SID 2 and discarded optional SID 128. See the [probe report](../goals/r3s-telemetry/evidence/sideband-repacking.json). Live Sideband application and routing behavior remains unqualified.
 - **RCH release gate:** current daemon APIs cannot cancel or re-authorize a retry after broker admission. RCH rechecks policy before admission; this does not guarantee immediate revocation afterward. Do not claim full T11 network revocation or operational readiness until that upstream capability is available. T12 physical acceptance, SID allocation and on-device permission/radio measurements remain open.
+
+## 12. Proposed Sensor Point of Interest (SPI) extension — 15 November 2026
+
+**Status: draft only; not implemented by REM/RCH.** The existing R3S/1 SID-128 binary sensor pose remains unchanged. See the proposed [LXMF-rs R3S/1 sensor/SPI interoperability profile](https://github.com/FreeTAKTeam/LXMF-rs/blob/docs/r3s-sensor-spi-extension/docs/contracts/r3s-sensor-telemetry-spi-v1.md) for exact proposed event payloads, limits, security rules and acceptance tests. Cross-project links should target main after acceptance.
+
+The reference ATAK screenshot distinguishes the platform, the sensor's bearing/FOV, and a crosshair called Sensor Point of Interest. A valid SPI is a geographic point associated with a specific (originId, sensorId), **not** a second origin location and **not** proof of a detected target. It may be the center of the camera image or an operator-designated point. A computed flat-earth/terrain estimate must be labeled as such; sensor range alone is insufficient to infer latitude and longitude.
+
+Propose optional typed LXMF FIELD_EVENT (0x0D) messages:
+- mission.registry.sensor_spi.upsert: originId, sensorId, point {lat, lon, altM, altitudeDatum}, sampleAtMs, pointKind, solution, horizontalUncertaintyM.
+- mission.registry.sensor_spi.remove: originId, sensorId, deletedAtMs.
+
+The new SPI events do not change Telemeter SID 128, field 2 self telemetry, field 3 remote-object telemetry or standard sensor 2. Older clients must remain able to process the platform position and existing R3S sensor FOV while ignoring the unknown SPI events. State is strictly authorized to the parent origin/writer and time-ordered per sensor. Removal is not inferred from omission. The live map projection expires when stale; it does not automatically create an independently managed marker.
+
+Implementation allocation: FreeTAKUAS publishes camera-reported points; signed REM plugin/native code validates authorization and timestamps and adds SPI operations; shared r3akt-map-core owns strict event codecs, stored binding and tombstones; REM/RCH MapLibre clients render a linked SPI crosshair. CoT adapter translation to a separate linked SPI track requires physical ATAK UAS interoperability tests.
+
+This is an additive **proposed protocol extension**, not a change to LXMF core or Reticulum routing. The existing R3S/1 implementation/release qualification statements above remain unchanged; the new SPI behavior cannot be claimed until its tests and cross-project implementation are complete.
