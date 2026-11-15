@@ -199,3 +199,41 @@ fn authoritative_refresh_rejects_a_selected_team_after_membership_disappears() {
         BLUE_TEAM_UID
     ));
 }
+
+#[test]
+fn hub_directory_item_listed_by_lxmf_hash_marks_the_live_peer() {
+    let lxmf = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd";
+    let mut peers = vec![PeerRecord {
+        destination_hex: "abababababababababababababababab".to_string(),
+        identity_hex: None,
+        lxmf_destination_hex: Some(lxmf.to_string()),
+        display_name: None,
+        app_data: None,
+        state: PeerState::Connected {},
+        saved: false,
+        stale: false,
+        active_link: true,
+        hub_derived: false,
+        last_resolution_error: None,
+        last_resolution_attempt_at_ms: None,
+        last_seen_at_ms: 1,
+        announce_last_seen_at_ms: Some(1),
+        lxmf_last_seen_at_ms: Some(1),
+    }];
+    let mut snapshot = HubDirectorySnapshot::yellow_only(1);
+    snapshot.items = vec![HubDirectoryPeerRecord {
+        identity: lxmf.to_string(),
+        destination_hash: lxmf.to_string(),
+        display_name: None,
+        announce_capabilities: vec!["r3akt".to_string()],
+        client_type: None,
+        registered_mode: None,
+        last_seen: None,
+        status: None,
+    }];
+
+    merge_hub_directory_peer_records(&mut peers, Some(&snapshot), "");
+
+    assert_eq!(peers.len(), 1);
+    assert!(peers[0].hub_derived);
+}
