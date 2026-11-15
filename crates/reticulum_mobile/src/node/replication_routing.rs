@@ -120,9 +120,9 @@ fn build_transient_replication_targets(
             continue;
         }
 
+        // RCH lists members by LXMF delivery hash; a live peer is keyed by its app hash.
         let matched_peer = peers.iter().find(|peer| {
-            normalize_hex_32(peer.destination_hex.as_str()).as_deref()
-                == Some(app_destination_hex.as_str())
+            peer_destination_hashes(peer).any(|hash| hash == app_destination_hex)
         });
         let Some(matched_peer) = matched_peer else {
             continue;

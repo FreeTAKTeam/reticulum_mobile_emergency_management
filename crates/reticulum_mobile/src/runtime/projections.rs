@@ -358,17 +358,20 @@ async fn seed_runtime_projection_snapshot(
             *current = sdk_sync_status;
         }
     });
-    // Saved peer management survives restart, but availability and "seen"
-    // timestamps must be rebuilt from fresh announces after startup.
-    for peer in snapshot.restored_peers() {
-        messaging.mark_peer_saved(peer.destination_hex.as_str(), peer.saved);
+    seed_restored_peer_errors(&mut messaging, snapshot.restored_peers().as_slice());
+    for message in snapshot.messages() {
+        messaging.upsert_message(to_sdk_message_record(message));
+    }
+}
+
+// The saved-peer table restores saved management next. The cached snapshot lists a live
+// peer under its app hash, so marking that saved created a phantom saved peer per restart.
+fn seed_restored_peer_errors(messaging: &mut sdkmsg::MessagingStore, peers: &[PeerRecord]) {
+    for peer in peers {
         messaging.record_resolution_error(
             peer.destination_hex.as_str(),
             peer.last_resolution_error.clone(),
         );
-    }
-    for message in snapshot.messages() {
-        messaging.upsert_message(to_sdk_message_record(message));
     }
 }
 

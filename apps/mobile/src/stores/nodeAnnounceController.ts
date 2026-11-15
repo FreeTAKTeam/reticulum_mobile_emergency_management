@@ -24,6 +24,7 @@ import {
   sleep,
 } from "./nodeStoreCore";
 import { runDetachedStoreTask } from "../utils/detachedStoreTask";
+import { isSavedPeerAppAlias } from "../utils/savedPeerAlias";
 
 interface NodeAnnounceContext {
   appendLog: (level: string, message: string) => void;
@@ -266,7 +267,16 @@ export function createNodeAnnounceController(context: NodeAnnounceContext) {
       : undefined;
     const saved = migrateSavedPeerAlias(aliasDestination, canonicalDestination)
       ?? savedByDestination[canonicalDestination];
-    if (saved || !nativeSaved) {
+    if (
+      saved
+      || !nativeSaved
+      || isSavedPeerAppAlias(
+        canonicalDestination,
+        appDestinationByIdentity,
+        lxmfDestinationByIdentity,
+        savedByDestination,
+      )
+    ) {
       return saved;
     }
 

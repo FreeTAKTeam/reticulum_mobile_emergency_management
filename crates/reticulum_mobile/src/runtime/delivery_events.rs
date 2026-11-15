@@ -302,11 +302,16 @@ fn merge_hub_directory_peer_records(
     };
 
     let local_app_destination_hex = normalize_hex_32(local_app_destination_hex);
+    // RCH lists members by LXMF delivery hash; a live peer is keyed by its app hash.
     let mut existing_by_destination = peers
         .iter()
         .enumerate()
-        .filter_map(|(index, peer)| {
-            normalize_hex_32(peer.destination_hex.as_str()).map(|destination| (destination, index))
+        .flat_map(|(index, peer)| {
+            [Some(peer.destination_hex.as_str()), peer.lxmf_destination_hex.as_deref()]
+                .into_iter()
+                .flatten()
+                .filter_map(normalize_hex_32)
+                .map(move |destination| (destination, index))
         })
         .collect::<HashMap<_, _>>();
 

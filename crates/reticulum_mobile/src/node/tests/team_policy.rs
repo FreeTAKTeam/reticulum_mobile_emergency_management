@@ -201,3 +201,40 @@ fn test_team_snapshot(destinations: &[&str]) -> HubDirectorySnapshot {
     }];
     snapshot
 }
+
+#[test]
+fn hub_directory_member_listed_by_lxmf_hash_is_an_event_target() {
+    const BLUE_TEAM_UID: &str = "43341e5c822d99857fa6e8641f2ca9c0";
+    let lxmf = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd";
+    let config = build_config_fingerprint_for_tests(
+        HubMode::SemiAutonomous {},
+        Some("56565656565656565656565656565656"),
+    );
+    let mut snapshot = HubDirectorySnapshot::yellow_only(1);
+    snapshot.active_team_uid = BLUE_TEAM_UID.to_string();
+    snapshot.members = vec![crate::types::HubTeamMemberRecord {
+        team_uid: BLUE_TEAM_UID.to_string(),
+        team_member_uid: "member".to_string(),
+        identity: lxmf.to_string(),
+        destination_hash: lxmf.to_string(),
+        display_name: None,
+        announce_capabilities: vec![],
+        client_type: None,
+        registered_mode: None,
+        last_seen: None,
+        status: None,
+    }];
+    // Unsaved and in no local team: only the hub roster makes this peer a target.
+    let peer = build_peer_record("abababababababababababababababab", lxmf, false, true, true);
+    let targets = build_runtime_event_replication_targets(
+        &build_status_for_tests(),
+        &[peer],
+        &[],
+        None,
+        Some(&config),
+        Some(&snapshot),
+    )
+    .unwrap();
+    assert_eq!(targets.len(), 1);
+    assert_eq!(targets[0].app_destination_hex, lxmf);
+}

@@ -420,3 +420,32 @@ fn startup_announce_burst_leaves_reticulum_rate_limit_headroom() {
     assert_eq!(STARTUP_ANNOUNCE_DELAYS_SECS.len(), 3);
     assert_eq!(STARTUP_ANNOUNCE_DELAYS_SECS[0], 0);
 }
+
+#[test]
+fn cached_snapshot_peer_under_app_hash_is_not_restored_as_saved() {
+    let mut messaging = sdkmsg::MessagingStore::new(30);
+    // A live saved peer is cached under its app hash; only the saved-peer table marks saved.
+    seed_restored_peer_errors(
+        &mut messaging,
+        &[PeerRecord {
+            destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            identity_hex: None,
+            lxmf_destination_hex: Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string()),
+            display_name: None,
+            app_data: None,
+            state: PeerState::Connected {},
+            saved: true,
+            stale: false,
+            active_link: true,
+            hub_derived: false,
+            last_resolution_error: None,
+            last_resolution_attempt_at_ms: None,
+            last_seen_at_ms: 1,
+            announce_last_seen_at_ms: None,
+            lxmf_last_seen_at_ms: None,
+        }],
+    );
+
+    assert!(messaging.saved_destination_hexes().is_empty());
+    assert!(messaging.list_peers().is_empty());
+}
