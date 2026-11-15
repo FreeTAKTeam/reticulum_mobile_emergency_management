@@ -321,3 +321,13 @@ The new SPI events do not change Telemeter SID 128, field 2 self telemetry, fiel
 Implementation allocation: FreeTAKUAS publishes camera-reported points; signed REM plugin/native code validates authorization and timestamps and adds SPI operations; shared r3akt-map-core owns strict event codecs, stored binding and tombstones; REM/RCH MapLibre clients render a linked SPI crosshair. CoT adapter translation to a separate linked SPI track requires physical ATAK UAS interoperability tests.
 
 This is an additive **proposed protocol extension**, not a change to LXMF core or Reticulum routing. The existing R3S/1 implementation/release qualification statements above remain unchanged; the new SPI behavior cannot be claimed until its tests and cross-project implementation are complete.
+
+## 13. Mandatory RCH/REM map graphics and interaction acceptance
+
+The [shared map graphics acceptance specification](https://github.com/FreeTAKTeam/Reticulum-Community-Hub/blob/docs/r3s-map-visual-acceptance/docs/r3s-map-visual-requirements.md) is normative for both REM `TelemetryMapView` and RCH `/webmap`. After merge, use its main-branch link.
+
+The annotated ATAK reference requires a single **UAV origin symbol with callsign**, a **bearing/centerline** at the sensor's absolute true azimuth, a **translucent FOV wedge** anchored at the UAV, a range extent that distinguishes measured-target from display-limit, and a geographically separate **SPI crosshair** that identifies its origin/sensor. Do not represent the crosshair as a second drone or confuse aircraft course with camera azimuth.
+
+Both maps must support per-sensor and SPI visibility, time/accuracy/provenance labeling, selection and Locate origin/SPI, mobile-friendly controls, and preservation on map style reset. Existing stale/unsynchronized sensor suppression remains a native decision. The new SPI point, association line, labels and interactions remain **proposed**, not implemented.
+
+**P0:** verify the rendered FOV fill/heading line on both maps (not only source GeoJSON feature counts), with camera motion, antimeridian, map switching and stale cleanup. **P1:** after SPI-native projections exist, verify the crosshair, provenance, selection, visibility, label and historical/uncertain states on both REM Android and RCH web using the same fixtures. The test matrix and visual acceptance artifacts are defined in the linked RCH document.
