@@ -222,6 +222,7 @@ fn parse_hub_directory_snapshot_value(
 
 enum HubDirectoryResultState {
     Accepted,
+    Rejected(String),
     Snapshot(HubDirectorySnapshot),
 }
 
@@ -250,6 +251,14 @@ fn parse_hub_directory_result_state(
         .ok_or(NodeError::InternalError {})?;
     if status == "accepted" {
         return Ok(Some(HubDirectoryResultState::Accepted));
+    }
+    if status == "rejected" {
+        let reason = msgpack_get_named(entries, &["detail", "reason", "reason_code"])
+            .and_then(msgpack_string)
+            .map(|reason| reason.trim().to_string())
+            .filter(|reason| !reason.is_empty())
+            .unwrap_or_else(|| "no reason given".to_string());
+        return Ok(Some(HubDirectoryResultState::Rejected(reason)));
     }
     if status != "result" && status != "completed" {
         return Err(NodeError::NetworkError {});
@@ -351,19 +360,10 @@ async fn publish_hub_directory_snapshot(
     bus.emit(NodeEvent::HubDirectoryUpdated { snapshot });
 }
 
-async fn publish_failed_hub_directory_refresh(bus: &EventBus, error: &NodeError) {
-    bus.emit(NodeEvent::Error {
-        code: node_error_code(error).to_string(),
-        message: format!(
-            "RCH TEAM peer directory refresh failed; retaining the last successful directory: {error}"
-        ),
-    });
-}
-
 async fn refresh_hub_directory_lxmf(
     config: &NodeConfig,
     state: &NodeRuntimeState,
-) -> Result<HubDirectorySnapshot, NodeError> {
+) -> Result<HubDirectorySnapshot, HubDirectoryRefreshError> {
     let hub_hex = config
         .hub_identity_hash
         .as_deref()
@@ -431,13 +431,13 @@ async fn refresh_hub_directory_lxmf(
         outcome,
         RnsSendOutcome::SentDirect | RnsSendOutcome::SentBroadcast
     ) {
-        return Err(NodeError::NetworkError {});
+        return Err(NodeError::NetworkError {}.into());
     }
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     loop {
         if tokio::time::Instant::now() >= deadline {
-            return Err(NodeError::Timeout {});
+            return Err(NodeError::Timeout {}.into());
         }
 
         let received_data = tokio::select! {
@@ -445,7 +445,7 @@ async fn refresh_hub_directory_lxmf(
                 Ok(event) => event.data.as_slice().to_vec(),
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                    return Err(NodeError::InternalError {});
+                    return Err(NodeError::InternalError {}.into());
                 }
             },
             received = resource_rx.recv() => match received {
@@ -455,7 +455,7 @@ async fn refresh_hub_directory_lxmf(
                 },
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                    return Err(NodeError::InternalError {});
+                    return Err(NodeError::InternalError {}.into());
                 }
             },
             () = tokio::time::sleep(Duration::from_millis(500)) => continue,
@@ -468,28 +468,18 @@ async fn refresh_hub_directory_lxmf(
             continue;
         }
 
-        let mut text = String::new();
-        if !reply.title.is_empty() {
-            text.push_str(&String::from_utf8_lossy(&reply.title));
-            text.push('\n');
-        }
-        if !reply.content.is_empty() {
-            text.push_str(&String::from_utf8_lossy(&reply.content));
-            text.push('\n');
-        }
-        if let Some(fields) = &reply.fields {
-            text.push_str(&format!("{fields:?}"));
-        }
-
         if let Some(fields) = reply.fields.as_ref() {
             match parse_hub_directory_result_state(fields, &command_id, now_ms()) {
                 Ok(Some(HubDirectoryResultState::Accepted)) => continue,
+                Ok(Some(HubDirectoryResultState::Rejected(reason))) => {
+                    return Err(HubDirectoryRefreshError::Rejected(reason));
+                }
                 Ok(Some(HubDirectoryResultState::Snapshot(mut snapshot))) => {
                     snapshot.hub_identity_hash = Some(hub_hex.clone());
                     return Ok(snapshot);
                 }
                 Ok(None) => {}
-                Err(error) => return Err(error),
+                Err(error) => return Err(error.into()),
             }
         }
     }

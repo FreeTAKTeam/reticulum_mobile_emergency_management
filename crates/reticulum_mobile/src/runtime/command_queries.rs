@@ -171,7 +171,7 @@ fn spawn_hub_refresh_command(
             }
             Err(error) => {
                 publish_failed_hub_directory_refresh(&bus, &error).await;
-                Err(error)
+                Err(error.node_error())
             }
         }
     });

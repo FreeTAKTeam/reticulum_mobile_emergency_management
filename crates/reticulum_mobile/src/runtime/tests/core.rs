@@ -305,6 +305,28 @@ fn parse_hub_directory_result_state_ignores_accepted_lifecycle() {
 }
 
 #[test]
+fn parse_hub_directory_result_state_keeps_rch_rejection_reason() {
+    // Shape RCH sends when the caller has no TEAM membership.
+    let result = MsgPackValue::Map(vec![(
+        MsgPackValue::from(FIELD_RESULTS),
+        MsgPackValue::Map(vec![
+            (MsgPackValue::from("command_id"), MsgPackValue::from("cmd-123")),
+            (MsgPackValue::from("detail"), MsgPackValue::from("TEAM membership is required")),
+            (MsgPackValue::from("reason_code"), MsgPackValue::from("unauthorized")),
+            (MsgPackValue::from("status"), MsgPackValue::from("rejected")),
+        ]),
+    )]);
+
+    let parsed =
+        parse_hub_directory_result_state(&result, "cmd-123", 123).expect("rejected result");
+
+    assert!(matches!(
+        parsed,
+        Some(HubDirectoryResultState::Rejected(reason)) if reason == "TEAM membership is required"
+    ));
+}
+
+#[test]
 fn hub_team_directory_command_fields_use_scoped_command_and_source() {
     let fields = hub_team_directory_command_fields(
         "hub-directory-123",

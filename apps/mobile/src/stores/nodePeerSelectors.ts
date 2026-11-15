@@ -246,15 +246,16 @@ export function createNodePeerSelectors(context: NodePeerSelectorsContext) {
   const hubAnnounceCandidates = computed<HubAnnounceCandidate[]>(() => {
     const byIdentity = new Map<string, HubAnnounceCandidate & { receivedAtMs: number }>();
     for (const announce of Object.values(announceByDestination)) {
-      if (announce.announceClass !== "RchHubServer") {
+      // The runtime sends hub commands to the hub's lxmf.delivery address, not its identity hash.
+      if (announce.announceClass !== "RchHubServer" || announce.destinationKind !== "lxmf_delivery") {
         continue;
       }
       const identity = isValidDestinationHex(announce.identityHex)
         ? announce.identityHex
         : announce.destinationHex;
       const candidate = {
-        destination: identity,
-        label: announce.displayName || identity,
+        destination: announce.destinationHex,
+        label: announce.displayName || announce.destinationHex,
         receivedAtMs: announce.receivedAtMs,
       };
       const existing = byIdentity.get(identity);
