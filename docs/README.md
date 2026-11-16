@@ -7,6 +7,7 @@ Markdown is the authoritative documentation format for the current REM source.
 - [Architecture and transport contracts](architecture.md)
 - [Runtime ownership](runtime-modules.md)
 - [Android plugin system](plugins/android-plugin-system.md)
+- [Device plugin foundation](plugins/device-plugin-foundation.md)
 - [Android development and release builds](../apps/mobile/README.md)
 - [1.5.4 release notes](releases/1.5.4.md)
 - [1.5.3 release notes](releases/1.5.3.md)

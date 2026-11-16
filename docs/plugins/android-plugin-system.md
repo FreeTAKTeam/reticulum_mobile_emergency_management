@@ -4,6 +4,8 @@ REM plugins are separate Android APKs. They run under their own Android UID and 
 `ReticulumNodeService` through the public `rem-plugin-sdk` AAR. REM does not download, install, or
 load executable code from plugin packages.
 
+Plugins for decoded field devices follow the [device plugin foundation](device-plugin-foundation.md).
+
 ## Discovery manifest
 
 Export one service using the SDK base class and the v1 action:
