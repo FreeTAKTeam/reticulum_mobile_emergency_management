@@ -108,3 +108,22 @@ pub(crate) fn emit_map_marker_invalidation(
     }
     emit_projection_invalidation(bus, invalidation);
 }
+
+/// A sensor origin change can move that origin's marker (origin fix), so the
+/// marker projection and plugin map sessions refresh along with the geometry.
+pub(crate) fn emit_sensor_origin_invalidation(
+    app_state: &AppStateStore,
+    bus: &EventBus,
+    origin_id: &str,
+) -> Result<(), NodeError> {
+    emit_projection_invalidation(bus, app_state.sensor_geometry_invalidation(origin_id)?);
+    if app_state.get_map_marker(origin_id)?.is_some() {
+        let invalidation = app_state.bump_projection_revision(
+            crate::types::ProjectionScope::MapMarkers {},
+            Some(origin_id.to_string()),
+            Some("marker-updated".to_string()),
+        )?;
+        emit_map_marker_invalidation(app_state, bus, invalidation);
+    }
+    Ok(())
+}

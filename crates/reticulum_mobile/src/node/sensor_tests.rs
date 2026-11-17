@@ -379,4 +379,5 @@ mod sensor_tests {
     }
     include!("sensor_receipt_tests.rs");
     include!("sensor_routing_tests.rs");
+    include!("sensor_relay_marker_tests.rs");
 }

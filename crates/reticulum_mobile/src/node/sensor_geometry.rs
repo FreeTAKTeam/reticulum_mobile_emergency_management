@@ -142,12 +142,8 @@ impl Node {
                     sync_sensor_observer(store, &id)?;
                 }
                 if changed {
-                    emit_projection_invalidation(
-                        &inner.bus,
-                        store
-                            .sensor_geometry_invalidation(&id)
-                            .map_err(sensor_operation_host)?,
-                    );
+                    emit_sensor_origin_invalidation(store, &inner.bus, &id)
+                        .map_err(sensor_operation_host)?;
                 }
                 return Ok(
                     json!({"accepted":true,"originId":id,"sensorId":sensor.sensor_id,"sampleAtMs":sensor.sample_at_ms}),
@@ -244,12 +240,8 @@ impl Node {
             )
             .map_err(sensor_operation_host)?
         {
-            emit_projection_invalidation(
-                &inner.bus,
-                store
-                    .sensor_geometry_invalidation(&id)
-                    .map_err(sensor_operation_host)?,
-            );
+            emit_sensor_origin_invalidation(store, &inner.bus, &id)
+                .map_err(sensor_operation_host)?;
         }
         Ok(json!({"accepted":true,"originId":id}))
     }
