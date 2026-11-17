@@ -47,8 +47,10 @@ fn persist_received_sensors(
             match state.app_state.receive_sensor_frame(source, relay, &frame) {
                 Ok(ids) => {
                     for id in &ids {
-                        if let Ok(invalidation) = state.app_state.sensor_geometry_invalidation(id) {
-                            bus.emit(NodeEvent::ProjectionInvalidated { invalidation });
+                        if let Err(error) =
+                            crate::node::emit_sensor_origin_invalidation(&state.app_state, bus, id)
+                        {
+                            warn!("[lxmf][sensor] invalidation for {id} failed: {error}");
                         }
                     }
                     !ids.is_empty()
