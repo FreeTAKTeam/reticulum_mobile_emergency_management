@@ -911,7 +911,11 @@ message, which RCH records as `picture.message_id`.
 - **Full image.** Only on the operator's request, `node/marker_pictures.rs`
   queues `mission.marker.picture.get {message_id}` (built with
   `r3akt_profile_rch::encode_commands`, the picture ID also in
-  `correlation_id`) to the configured hub. It is not awaited. RCH answers the
+  `correlation_id`) to the configured hub. It is not awaited. In autonomous
+  mode REM never asks RCH: the request fails with `InvalidConfig` and the map
+  hides the action. In semi-autonomous and connected mode the command is sent
+  `DirectOnly`, i.e. LXMF direct delivery over a Reticulum link to RCH (opened
+  or reused by the SDK), never by propagation. RCH answers the
   requester only, in field 10: `ok` with the reduced image in field 6,
   `pending`, `unavailable` or `unauthorized`. Answers are accepted only from
   the configured hub, the image only when it matches the announced SHA-256
