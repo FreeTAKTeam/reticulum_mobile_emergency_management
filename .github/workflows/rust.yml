@@ -190,7 +190,9 @@ jobs:
               ;;
             tests) cargo test --manifest-path crates/reticulum_mobile/Cargo.toml --locked --verbose ;;
             audit)
-              cargo audit --deny warnings --file crates/reticulum_mobile/Cargo.lock
+              # RUSTSEC-2026-0543: chrono is unmaintained (no vulnerability, no fixed
+              # release); it also comes from the pinned RCH and R3AKTClient crates.
+              cargo audit --deny warnings --ignore RUSTSEC-2026-0543 --file crates/reticulum_mobile/Cargo.lock
               cargo audit --deny warnings --file tools/uniffi-bindgen/Cargo.lock
               ;;
             bindings) UNIFFI_TEST_JNA_JAR="$RUNNER_TEMP/jna-5.12.0.jar" bash tools/codegen/test-uniffi-bindings.sh ;;
