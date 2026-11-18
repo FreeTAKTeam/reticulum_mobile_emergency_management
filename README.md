@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/branding/rem-logo.png" alt="REM — Reticulum Emergency Management" width="900">
+</p>
+
 # Reticulum Emergency Management
 
 Reticulum Emergency Management, or REM, helps a field team keep a shared picture when normal phones, internet, or command systems are unreliable.
@@ -104,6 +108,16 @@ five minutes.
 Use Obtainium to track releases from this repository and install updates directly:
 
 [![Add to Obtainium](https://img.shields.io/badge/Add%20to-Obtainium-3ddc84?style=for-the-badge&logo=android&logoColor=white)](https://apps.obtainium.imranr.dev/redirect.html?r=obtainium://add/https://github.com/FreeTAKTeam/reticulum_mobile_emergency_management)
+
+## Brand assets
+
+The approved REM branding shares the cyan-and-white visual style of R3AKT and Fabric.
+
+| REM app icon | REM wordmark |
+| --- | --- |
+| <img src="assets/branding/rem-icon.png" alt="REM app icon" width="160"> | <img src="assets/branding/rem-wordmark.png" alt="REM wordmark" width="420"> |
+
+The [complete REM logo](assets/branding/rem-logo.png) combines the icon and wordmark. All three original PNG files are stored in [assets/branding](assets/branding).
 
 ## For Maintainers
 
