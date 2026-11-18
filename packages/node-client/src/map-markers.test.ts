@@ -8,6 +8,8 @@ const plugin = vi.hoisted(() => ({
   renameMapMarker: vi.fn(),
   moveMapMarker: vi.fn(),
   deleteMapMarker: vi.fn(),
+  requestMapMarkerPicture: vi.fn(),
+  getMapMarkerPictureImage: vi.fn(),
   listPluginMapSessions: vi.fn(),
   startPluginMapSession: vi.fn(),
   stopPluginMapSession: vi.fn(),
@@ -41,6 +43,29 @@ describe("map marker converters", () => {
       ...nativeMarker,
       notes: undefined,
     });
+  });
+
+  it("maps picture metadata and accepts only image data URLs as thumbnails", () => {
+    const picture = {
+      messageId: "00ff",
+      capturedAt: "2026-11-17T12:00:00Z",
+      crop: "centre",
+      camera: null,
+      thumbnailWidth: 160,
+      thumbnailHeight: 120,
+      thumbnailDataUrl: "data:image/jpeg;base64,/9j/",
+      imageStatus: "pending",
+    };
+    expect(toMapMarkerRecord({ ...nativeMarker, markerType: "picture", picture }).picture).toEqual({
+      ...picture,
+      camera: undefined,
+    });
+    const unsafe = toMapMarkerRecord({
+      ...nativeMarker,
+      picture: { ...picture, thumbnailDataUrl: "javascript:alert(1)" },
+    });
+    expect(unsafe.picture?.thumbnailDataUrl).toBeUndefined();
+    expect(toMapMarkerRecord(nativeMarker).picture).toBeUndefined();
   });
 
   it("keeps only string aliases from the native catalog", () => {
@@ -83,6 +108,13 @@ describe("Capacitor map marker client", () => {
     });
     await expect(client.deleteMapMarker("a1b2")).resolves.toBe(true);
     await expect(client.listMapMarkers()).resolves.toHaveLength(1);
+    plugin.requestMapMarkerPicture.mockResolvedValue({ requested: true });
+    await client.requestMapMarkerPicture("a1b2");
+    expect(plugin.requestMapMarkerPicture).toHaveBeenCalledWith({ objectDestinationHash: "a1b2" });
+    plugin.getMapMarkerPictureImage.mockResolvedValue({ dataUrl: "data:image/jpeg;base64,/9j/" });
+    await expect(client.getMapMarkerPictureImage("a1b2")).resolves.toBe("data:image/jpeg;base64,/9j/");
+    plugin.getMapMarkerPictureImage.mockResolvedValue({ dataUrl: null });
+    await expect(client.getMapMarkerPictureImage("a1b2")).resolves.toBeUndefined();
     await client.dispose();
   });
 });
@@ -128,7 +160,7 @@ describe("in-memory map marker test double", () => {
     client.on("projectionInvalidated", (event) => scopes.push(event.scope));
 
     const symbols = await client.listMapMarkerSymbols();
-    expect(symbols).toHaveLength(20);
+    expect(symbols).toHaveLength(21);
     expect(symbols.find((symbol) => symbol.id === "vehicle")?.aliases).toContain("car");
 
     const { marker } = await client.createMapMarker({

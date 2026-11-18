@@ -57,6 +57,13 @@ async fn emit_received_payload(
                     metadata.as_ref(),
                     fields_bytes.as_deref(),
                 );
+            let persisted_picture = !is_sos_message
+                && persist_received_marker_picture_answer(
+                    state,
+                    bus,
+                    source_hex.as_deref(),
+                    fields_bytes.as_deref(),
+                );
             let persisted_sensors = !is_sos_message
                 && persist_received_sensors(
                     state,
@@ -130,6 +137,7 @@ async fn emit_received_payload(
                         || persisted_telemetry
                         || persisted_checklist
                         || persisted_marker
+                        || persisted_picture
                         || persisted_sensors,
                 )
                 .await;

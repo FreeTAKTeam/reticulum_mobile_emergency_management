@@ -33,6 +33,7 @@ include!("runtime/local_propagation_history.rs");
 include!("runtime/local_propagation_recovery.rs");
 include!("runtime/sensor_receive.rs");
 include!("runtime/map_marker_receive.rs");
+include!("runtime/marker_picture_receive.rs");
 include!("runtime/receive.rs");
 include!("runtime/ack_handlers.rs");
 include!("runtime/hub_team_selection.rs");

@@ -130,9 +130,57 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_listMapM
     _class: JClass,
 ) -> jstring {
     let node = initialized_node_or_return!();
-    let result = node.list_map_markers().map(|markers| {
-        json!({ "items": markers.iter().map(map_marker_json).collect::<Vec<_>>() })
+    let result = node.list_map_markers().and_then(|markers| {
+        let pictures = node.list_map_marker_pictures()?;
+        let items = markers
+            .iter()
+            .map(|marker| {
+                let mut item = serde_json::to_value(map_marker_json(marker))
+                    .unwrap_or(serde_json::Value::Null);
+                if let Some(picture) = pictures.get(&marker.object_destination_hash) {
+                    item["picture"] = serde_json::to_value(picture).unwrap_or_default();
+                }
+                item
+            })
+            .collect::<Vec<_>>();
+        Ok(json!({ "items": items }))
     });
+    map_marker_result(&mut env, result)
+}
+
+/// Queues `mission.marker.picture.get` to RCH; the answer updates the marker.
+#[jni_boundary]
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_requestMapMarkerPictureJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    payload: JString,
+) -> jstring {
+    let Some(input) = map_marker_input::<MapMarkerKeyInput>(&mut env, payload) else {
+        return ptr::null_mut();
+    };
+    let node = initialized_node_or_return!();
+    let result = node
+        .request_map_marker_picture(input.object_destination_hash)
+        .map(|()| json!({ "requested": true }));
+    map_marker_result(&mut env, result)
+}
+
+/// The fetched reduced image as a `data:` URL, or `null` before it arrives.
+#[jni_boundary]
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getMapMarkerPictureImageJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    payload: JString,
+) -> jstring {
+    let Some(input) = map_marker_input::<MapMarkerKeyInput>(&mut env, payload) else {
+        return ptr::null_mut();
+    };
+    let node = initialized_node_or_return!();
+    let result = node
+        .map_marker_picture_image(input.object_destination_hash)
+        .map(|image| json!({ "dataUrl": image.as_deref().map(crate::app_state::jpeg_data_url) }));
     map_marker_result(&mut env, result)
 }
 

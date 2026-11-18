@@ -330,6 +330,7 @@ include!("node/plugin_registry.rs");
 include!("node/events_api.rs");
 include!("node/map_markers.rs");
 include!("node/map_marker_replication.rs");
+include!("node/marker_pictures.rs");
 include!("node/plugin_map.rs");
 include!("node/plugin_relay.rs");
 include!("node/events_plugins_telemetry.rs");
@@ -391,6 +392,7 @@ mod tests {
     include!("node/tests/team_sos_policy.rs");
     include!("node/tests/block_onboarding.rs");
     include!("node/tests/map_markers.rs");
+    include!("node/tests/marker_pictures.rs");
 }
 
 include!("node/sensor_admission.rs");

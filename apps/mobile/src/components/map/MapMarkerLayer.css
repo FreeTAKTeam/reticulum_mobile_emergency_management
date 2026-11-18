@@ -206,3 +206,66 @@
   right: 0.75rem;
   top: calc(0.75rem + env(safe-area-inset-top, 0px));
 }
+
+/* Picture markers: the thumbnail is the marker, the stem tip marks the aim point. */
+.map-marker-pin.is-picture {
+  gap: 0;
+}
+
+.map-marker-pin.is-picture .map-marker-pin-label {
+  margin-bottom: 0.15rem;
+  order: -1;
+}
+
+.map-marker-pin.is-picture .map-marker-pin-icon {
+  height: auto;
+  width: auto;
+}
+
+.map-marker-picture-frame {
+  align-items: center;
+  aspect-ratio: 4 / 3;
+  background: #020710;
+  border: 2px solid currentColor;
+  border-radius: 4px;
+  box-shadow: 0 1px 3px #020710;
+  display: inline-flex;
+  justify-content: center;
+  overflow: hidden;
+  width: 4rem;
+}
+
+.map-marker-picture-frame img {
+  display: block;
+  height: 100%;
+  object-fit: cover;
+  width: 100%;
+}
+
+.map-marker-picture-frame.is-fallback {
+  border-style: dashed;
+}
+
+.map-marker-picture-frame.is-fallback svg {
+  height: 1.6rem;
+  width: 1.6rem;
+}
+
+.map-marker-picture-anchor {
+  background: currentColor;
+  height: 0.6rem;
+  position: relative;
+  width: 2px;
+}
+
+.map-marker-picture-anchor::after {
+  background: currentColor;
+  border: 1px solid #020710;
+  border-radius: 50%;
+  bottom: -3px;
+  content: "";
+  height: 6px;
+  left: -3px;
+  position: absolute;
+  width: 6px;
+}

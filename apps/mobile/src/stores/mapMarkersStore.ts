@@ -115,6 +115,15 @@ export const useMapMarkersStore = defineStore("mapMarkers", () => {
     return deleted;
   }
 
+  /** Queues the RCH request; its answer arrives as a marker projection update. */
+  async function requestPicture(key: string): Promise<void> {
+    await run(async () => (await nodeStore.mapMarkerClient()).requestMapMarkerPicture(key));
+  }
+
+  async function pictureImage(key: string): Promise<string | undefined> {
+    return (await nodeStore.mapMarkerClient()).getMapMarkerPictureImage(key);
+  }
+
   function setVisible(next: boolean): void {
     visible.value = next;
     writePreference(MARKERS_VISIBLE_STORAGE_KEY, next);
@@ -141,6 +150,8 @@ export const useMapMarkersStore = defineStore("mapMarkers", () => {
     rename,
     move,
     remove,
+    requestPicture,
+    pictureImage,
     setVisible,
     dispose,
   };

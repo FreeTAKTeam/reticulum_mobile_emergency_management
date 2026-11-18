@@ -13,11 +13,13 @@
     "group-community": "group",
     "hospital": "medic",
     "human": "person",
+    "image": "picture",
     "location": "marker",
     "medical": "medic",
     "mission": "task",
     "operator": "person",
     "pet": "animal",
+    "photo": "picture",
     "pin": "marker",
     "radar": "sensor",
     "team": "group",
@@ -189,6 +191,14 @@
       "description": "Task",
       "id": "task",
       "mdi": "clipboard-check",
+      "set": "mdi",
+      "tak": null
+    },
+    {
+      "category": "picture",
+      "description": "Picture",
+      "id": "picture",
+      "mdi": "image",
       "set": "mdi",
       "tak": null
     }

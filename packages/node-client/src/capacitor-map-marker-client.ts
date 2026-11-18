@@ -52,6 +52,19 @@ export abstract class CapacitorMapMarkerClient extends CapacitorProjectionClient
     return result.deleted === true;
   }
 
+  async requestMapMarkerPicture(objectDestinationHash: string): Promise<void> {
+    await this.ready();
+    await this.plugin.requestMapMarkerPicture({ objectDestinationHash });
+  }
+
+  async getMapMarkerPictureImage(objectDestinationHash: string): Promise<string | undefined> {
+    await this.ready();
+    const result = await this.plugin.getMapMarkerPictureImage({ objectDestinationHash });
+    return typeof result.dataUrl === "string" && result.dataUrl.startsWith("data:image/")
+      ? result.dataUrl
+      : undefined;
+  }
+
   async listPluginMapSessions(): Promise<PluginMapSessionRecord[]> {
     await this.ready();
     return toMapMarkerItems(await this.plugin.listPluginMapSessions()).map(toPluginMapSessionRecord);

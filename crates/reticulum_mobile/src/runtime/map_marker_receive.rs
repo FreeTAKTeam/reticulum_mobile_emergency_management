@@ -72,7 +72,14 @@ fn persist_received_map_marker_if_present(
         }
         let fresh = event_type == "mission.marker.created"
             && app_state.get_map_marker(&id).ok().flatten().is_none();
-        match apply_map_marker_event(app_state, &event_type, &payload) {
+        let applied_event = apply_map_marker_event(app_state, &event_type, &payload);
+        if applied_event.is_ok() && event_type != r3akt_map_core::replica::DELETE_EVENT {
+            // Before the invalidation, so the map reloads with the thumbnail.
+            if let Some(fields_bytes) = fields_bytes {
+                store_received_marker_picture_thumbnail(app_state, fields_bytes);
+            }
+        }
+        match applied_event {
             Ok(Some(invalidation)) => {
                 crate::node::emit_map_marker_invalidation(app_state, bus, invalidation);
                 if let (Some(source), Ok(Some(marker))) = (source, app_state.get_map_marker(&id)) {

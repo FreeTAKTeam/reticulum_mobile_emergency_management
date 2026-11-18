@@ -31,6 +31,8 @@ const mapRef = toRef(props, "map");
 const markers = computed(() => store.markers);
 const symbolsById = computed(() => store.symbolsById);
 const visible = computed(() => store.visible);
+// Picture markers come only from a drone camera; they are not placed by hand.
+const placeableSymbols = computed(() => store.symbols.filter((symbol) => symbol.id !== "picture"));
 
 const selectedKey = computed(() =>
   state.value.kind === "details" || state.value.kind === "moving" ? state.value.key : null,
@@ -219,7 +221,7 @@ onBeforeUnmount(() => {
 
     <MapMarkerSymbolSheet
       v-else-if="state.kind === 'picking'"
-      :symbols="store.symbols"
+      :symbols="placeableSymbols"
       :recent="store.recent"
       :loading="store.loading"
       :error="store.lastError"

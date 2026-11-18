@@ -29,6 +29,8 @@ public class ReticulumBridgeServiceApiTest {
         assertInherited("renameMapMarkerJson", String.class);
         assertInherited("moveMapMarkerJson", String.class);
         assertInherited("deleteMapMarkerJson", String.class);
+        assertInherited("requestMapMarkerPictureJson", String.class);
+        assertInherited("getMapMarkerPictureImageJson", String.class);
     }
 
     @Test
