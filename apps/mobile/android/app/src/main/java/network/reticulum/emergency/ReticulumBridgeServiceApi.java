@@ -362,4 +362,12 @@ public abstract class ReticulumBridgeServiceApi extends Service {
     public String deleteMapMarkerJson(String payloadJson) {
         return ReticulumBridge.deleteMapMarkerJson(payloadJson);
     }
+
+    public String requestMapMarkerPictureJson(String payloadJson) {
+        return ReticulumBridge.requestMapMarkerPictureJson(payloadJson);
+    }
+
+    public String getMapMarkerPictureImageJson(String payloadJson) {
+        return ReticulumBridge.getMapMarkerPictureImageJson(payloadJson);
+    }
 }

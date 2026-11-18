@@ -69,6 +69,8 @@ export interface ReticulumNodePlugin {
     request: { objectDestinationHash: string; lat: number; lon: number };
   }): Promise<Record<string, unknown>>;
   deleteMapMarker(options: { objectDestinationHash: string }): Promise<{ deleted?: boolean }>;
+  requestMapMarkerPicture(options: { objectDestinationHash: string }): Promise<{ requested?: boolean }>;
+  getMapMarkerPictureImage(options: { objectDestinationHash: string }): Promise<{ dataUrl?: unknown }>;
   listPluginMapSessions(): Promise<{ items?: unknown }>;
   startPluginMapSession(options: {
     pluginId: string;

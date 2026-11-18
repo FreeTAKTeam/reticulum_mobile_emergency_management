@@ -816,7 +816,7 @@ transfer failure. Delivery outcome handling remains in the compiled LXMF runtime
 
 Map objects (point markers, the symbol catalog and the Telemeter send/receive
 contract) come from the shared RCH crate `r3akt-map-core`, pinned to RCH
-`8f236558340e03322788f03f038ea6728e2720bf` with its `sqlite` feature
+`82f72e97326e7a6d341456c4ce88ca94240369ca` with its `sqlite` feature
 ([REM #280](https://github.com/FreeTAKTeam/reticulum_mobile_emergency_management/issues/280),
 [RCH #259](https://github.com/FreeTAKTeam/Reticulum-Community-Hub/issues/259)).
 REM must not re-implement marker validation, symbols, idempotency or marker
@@ -892,6 +892,38 @@ marker-as-telemetry command is ignored so markers stay out of the telemetry
 layer. Hub sync requires `mission.content.write` for the REM user on RCH.
 Deletes have no tombstones. The wire contract is documented in RCH's
 `docs/rem-southbound-interface.md`.
+
+### Picture markers
+
+Picture markers ([r3akt-uas #19](https://github.com/FreeTAKTeam/r3akt-uas/issues/19),
+[RCH #343](https://github.com/FreeTAKTeam/Reticulum-Community-Hub/pull/343))
+come from a drone camera through RCH; REM never creates them. Their picture
+metadata travels on the shared marker record (`MarkerRecord.picture`, stored
+with the marker). The picture ID is the LXMF message ID of the drone's marker
+message, which RCH records as `picture.message_id`.
+
+- **Thumbnail.** RCH's `mission.marker.created` relay carries a 160 x 120 JPEG
+  in standard LXMF field 6. `runtime/marker_picture_receive.rs` reads it with
+  `r3akt_map_core::marker_picture::decode_relay`, which drops a thumbnail whose
+  SHA-256 does not match `picture.thumbnail.sha256`. The marker is applied
+  either way; REM keeps the thumbnail bytes in `rem_marker_pictures`, keyed by
+  picture ID, and the map draws a picture fallback marker when there is none.
+- **Full image.** Only on the operator's request, `node/marker_pictures.rs`
+  queues `mission.marker.picture.get {message_id}` (built with
+  `r3akt_profile_rch::encode_commands`, the picture ID also in
+  `correlation_id`) to the configured hub. It is not awaited. RCH answers the
+  requester only, in field 10: `ok` with the reduced image in field 6,
+  `pending`, `unavailable` or `unauthorized`. Answers are accepted only from
+  the configured hub, the image only when it matches the announced SHA-256
+  (otherwise `invalid`), and each answer bumps the `MapMarkers` projection.
+- **JNI.** `listMapMarkersJson` adds a `picture` object to picture markers
+  (metadata, `thumbnailDataUrl`, `imageStatus`);
+  `requestMapMarkerPictureJson` and `getMapMarkerPictureImageJson` request and
+  read the reduced image.
+- **Display.** The map draws the thumbnail itself as the marker, bounded in
+  size, with a stem whose tip is the marker coordinate. The marker position is
+  the camera aim point; the UI never presents it as the position of what the
+  picture shows.
 
 ### Telemetry publication recovery (1.5.5)
 

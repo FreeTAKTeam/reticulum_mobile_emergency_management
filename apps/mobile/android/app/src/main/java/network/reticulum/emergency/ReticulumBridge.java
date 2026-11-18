@@ -106,6 +106,10 @@ public final class ReticulumBridge {
     public static native String renameMapMarkerJson(String payloadJson);
     public static native String moveMapMarkerJson(String payloadJson);
     public static native String deleteMapMarkerJson(String payloadJson);
+
+    public static native String requestMapMarkerPictureJson(String payloadJson);
+
+    public static native String getMapMarkerPictureImageJson(String payloadJson);
     public static native String handlePluginHostRequestJson(String payloadJson);
     public static native String startPluginMapSessionJson(String payloadJson);
     public static native String stopPluginMapSessionsJson(String payloadJson);

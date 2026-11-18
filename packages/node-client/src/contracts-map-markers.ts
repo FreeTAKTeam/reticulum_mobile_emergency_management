@@ -11,6 +11,26 @@ export interface MapMarkerRecord {
   notes?: string;
   createdAtMs: number;
   updatedAtMs: number;
+  /** Present on `picture` markers (r3akt-uas #19). */
+  picture?: MapMarkerPicture;
+}
+
+/**
+ * Picture metadata of a `picture` marker. The marker position is the camera aim point,
+ * not a confirmed position of anything in the picture.
+ */
+export interface MapMarkerPicture {
+  /** Picture ID: the LXMF message ID of the marker message. */
+  messageId?: string;
+  capturedAt?: string;
+  crop?: string;
+  camera?: Record<string, unknown>;
+  thumbnailWidth: number;
+  thumbnailHeight: number;
+  /** Hash-checked thumbnail; absent means draw the picture fallback marker. */
+  thumbnailDataUrl?: string;
+  /** `requested`, or RCH's answer: `ok`, `pending`, `unavailable`, `unauthorized`, `invalid`. */
+  imageStatus?: string;
 }
 
 /** One entry of the backend-owned symbol catalog shared with RCH. */
@@ -66,4 +86,8 @@ export interface MapMarkerClient {
   renameMapMarker(objectDestinationHash: string, name: string): Promise<MapMarkerRecord>;
   moveMapMarker(objectDestinationHash: string, lat: number, lon: number): Promise<MapMarkerRecord>;
   deleteMapMarker(objectDestinationHash: string): Promise<boolean>;
+  /** Asks RCH for the reduced image; the answer arrives as a marker update. */
+  requestMapMarkerPicture(objectDestinationHash: string): Promise<void>;
+  /** The fetched reduced image as a `data:` URL, once RCH has sent it. */
+  getMapMarkerPictureImage(objectDestinationHash: string): Promise<string | undefined>;
 }

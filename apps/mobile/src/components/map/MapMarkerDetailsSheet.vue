@@ -10,6 +10,7 @@ import {
   markerSymbolColor,
   markerOriginLabel,
 } from "../../utils/mapMarkerPresentation";
+import MapMarkerPicturePreview from "./MapMarkerPicturePreview.vue";
 
 const props = defineProps<{
   marker: MapMarkerRecord;
@@ -82,6 +83,7 @@ function submitRename(): void {
         Close
       </button>
     </div>
+    <MapMarkerPicturePreview v-if="marker.markerType === 'picture'" :marker="marker" />
     <p v-if="marker.notes" class="marker-detail-notes">{{ marker.notes }}</p>
     <p v-if="error" class="marker-sheet-error" role="alert">{{ error }}</p>
 

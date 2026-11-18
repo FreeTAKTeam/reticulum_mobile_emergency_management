@@ -21,9 +21,30 @@ interface MapMarkerPinOptions {
   onLongPress: (lat: number, lon: number) => void;
 }
 
-function pinElement(onSelect: () => void): HTMLDivElement {
+/** Picture markers (r3akt-uas #19) draw the relayed thumbnail itself. */
+function isPicture(marker: MapMarkerRecord): boolean {
+  return marker.markerType === "picture";
+}
+
+/** Thumbnail frame, or an explicit fallback when no valid thumbnail arrived. */
+function renderPictureIcon(icon: Element, thumbnail: string | undefined): void {
+  const frame = document.createElement("span");
+  frame.className = "map-marker-picture-frame";
+  if (thumbnail) {
+    const image = document.createElement("img");
+    image.alt = "";
+    image.src = thumbnail;
+    frame.append(image);
+  } else {
+    frame.classList.add("is-fallback");
+    frame.innerHTML = mdiSvgMarkup("image");
+  }
+  icon.replaceChildren(frame);
+}
+
+function pinElement(onSelect: () => void, picture: boolean): HTMLDivElement {
   const element = document.createElement("div");
-  element.className = "map-marker-pin";
+  element.className = picture ? "map-marker-pin is-picture" : "map-marker-pin";
   element.setAttribute("role", "button");
   element.tabIndex = 0;
   const icon = document.createElement("span");
@@ -31,6 +52,12 @@ function pinElement(onSelect: () => void): HTMLDivElement {
   const label = document.createElement("span");
   label.className = "map-marker-pin-label";
   element.append(icon, label);
+  if (picture) {
+    // The stem tip is the anchor: it sits on the marker coordinate.
+    const anchor = document.createElement("span");
+    anchor.className = "map-marker-picture-anchor";
+    element.append(anchor);
+  }
   element.addEventListener("click", (event) => {
     event.stopPropagation();
     onSelect();
@@ -72,9 +99,12 @@ export function useMapMarkerPins(options: MapMarkerPinOptions): void {
       const symbol = options.symbolsById.value.get(marker.symbol);
       let pin = pins.get(key);
       if (!pin) {
-        const element = pinElement(() => options.onSelect(key));
+        const picture = isPicture(marker);
+        const element = pinElement(() => options.onSelect(key), picture);
         pin = {
-          marker: new maplibregl.Marker({ element, anchor: "center" }).setLngLat([marker.lon, marker.lat]).addTo(map),
+          marker: new maplibregl.Marker({ element, anchor: picture ? "bottom" : "center" })
+            .setLngLat([marker.lon, marker.lat])
+            .addTo(map),
           element,
           icon: "",
         };
@@ -82,10 +112,14 @@ export function useMapMarkerPins(options: MapMarkerPinOptions): void {
       } else {
         pin.marker.setLngLat([marker.lon, marker.lat]);
       }
-      if (pin.icon !== (symbol?.mdi ?? "")) {
-        pin.icon = symbol?.mdi ?? "";
+      const thumbnail = marker.picture?.thumbnailDataUrl;
+      const iconKey = isPicture(marker) ? `picture:${thumbnail ?? "fallback"}` : symbol?.mdi ?? "";
+      if (pin.icon !== iconKey) {
+        pin.icon = iconKey;
         const icon = pin.element.querySelector(".map-marker-pin-icon");
-        if (icon) {
+        if (icon && isPicture(marker)) {
+          renderPictureIcon(icon, thumbnail);
+        } else if (icon) {
           icon.innerHTML = mdiSvgMarkup(symbol?.mdi);
         }
       }
@@ -95,7 +129,10 @@ export function useMapMarkerPins(options: MapMarkerPinOptions): void {
       }
       pin.element.style.color = markerSymbolColor(marker.symbol);
       pin.element.dataset.symbol = marker.symbol;
-      pin.element.setAttribute("aria-label", `${symbol?.description ?? marker.symbol} marker: ${marker.name}`);
+      const description = isPicture(marker) && !thumbnail
+        ? "Picture (no preview)"
+        : symbol?.description ?? marker.symbol;
+      pin.element.setAttribute("aria-label", `${description} marker: ${marker.name}`);
       pin.element.classList.toggle("is-selected", key === options.selectedKey.value);
     }
     for (const key of [...pins.keys()]) {

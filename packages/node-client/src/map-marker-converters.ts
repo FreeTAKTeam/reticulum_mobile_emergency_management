@@ -1,4 +1,4 @@
-import type { MapMarkerRecord, MapMarkerSymbolRecord, PluginMapSessionRecord } from "./contracts-map-markers";
+import type { MapMarkerPicture, MapMarkerRecord, MapMarkerSymbolRecord, PluginMapSessionRecord } from "./contracts-map-markers";
 
 function text(value: unknown): string {
   return typeof value === "string" ? value : "";
@@ -26,6 +26,27 @@ export function toMapMarkerRecord(raw: Record<string, unknown>): MapMarkerRecord
     notes: optionalText(raw.notes),
     createdAtMs: finiteNumber(raw.createdAtMs),
     updatedAtMs: finiteNumber(raw.updatedAtMs),
+    picture: toMapMarkerPicture(raw.picture),
+  };
+}
+
+function toMapMarkerPicture(raw: unknown): MapMarkerPicture | undefined {
+  if (typeof raw !== "object" || raw === null) {
+    return undefined;
+  }
+  const picture = raw as Record<string, unknown>;
+  const dataUrl = optionalText(picture.thumbnailDataUrl);
+  return {
+    messageId: optionalText(picture.messageId),
+    capturedAt: optionalText(picture.capturedAt),
+    crop: optionalText(picture.crop),
+    camera: typeof picture.camera === "object" && picture.camera !== null
+      ? picture.camera as Record<string, unknown>
+      : undefined,
+    thumbnailWidth: finiteNumber(picture.thumbnailWidth),
+    thumbnailHeight: finiteNumber(picture.thumbnailHeight),
+    thumbnailDataUrl: dataUrl?.startsWith("data:image/") ? dataUrl : undefined,
+    imageStatus: optionalText(picture.imageStatus),
   };
 }
 

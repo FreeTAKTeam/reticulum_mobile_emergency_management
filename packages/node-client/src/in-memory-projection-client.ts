@@ -47,6 +47,9 @@ export abstract class InMemoryProjectionClient {
     return this.mapMarkers.update(key, { lat, lon }, "marker-moved");
   }
   async deleteMapMarker(key: string): Promise<boolean> { return this.mapMarkers.delete(key); }
+  /** Picture images come only from RCH through the native runtime. */
+  async requestMapMarkerPicture(): Promise<void> { throw new Error("Picture images need the native RCH connection"); }
+  async getMapMarkerPictureImage(): Promise<string | undefined> { return undefined; }
   // Plugins are Android APKs; the web build has none to run sessions with.
   async listPluginMapSessions(): Promise<PluginMapSessionRecord[]> { return []; }
   async startPluginMapSession(): Promise<PluginMapSessionRecord> {

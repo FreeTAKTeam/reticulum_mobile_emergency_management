@@ -85,4 +85,28 @@ public abstract class ReticulumNodeMapMarkerPluginApi extends ReticulumNodeAppDa
             service -> service.deleteMapMarkerJson(payload.toString())
         );
     }
+
+    @PluginMethod
+    public void requestMapMarkerPicture(PluginCall call) {
+        final JSObject payload = new JSObject();
+        payload.put("objectDestinationHash", call.getString("objectDestinationHash", ""));
+        runStringServiceCall(
+            call,
+            "Failed to request the full picture.",
+            "Native map marker JSON parse failed.",
+            service -> service.requestMapMarkerPictureJson(payload.toString())
+        );
+    }
+
+    @PluginMethod
+    public void getMapMarkerPictureImage(PluginCall call) {
+        final JSObject payload = new JSObject();
+        payload.put("objectDestinationHash", call.getString("objectDestinationHash", ""));
+        runStringServiceCall(
+            call,
+            "Failed to read the full picture.",
+            "Native map marker JSON parse failed.",
+            service -> service.getMapMarkerPictureImageJson(payload.toString())
+        );
+    }
 }
