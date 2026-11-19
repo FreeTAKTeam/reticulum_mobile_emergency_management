@@ -321,6 +321,7 @@ include!("app_state/telemetry_sos.rs");
 include!("app_state/map_markers.rs");
 include!("app_state/marker_pictures.rs");
 include!("app_state/library.rs");
+include!("app_state/library_share.rs");
 include!("app_state/plugin_map.rs");
 include!("app_state/plugin_relay.rs");
 include!("app_state/sensor_geometry.rs");

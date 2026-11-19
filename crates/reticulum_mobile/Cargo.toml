@@ -37,6 +37,7 @@ log = "0.4"
 lxmf = { package = "lxmf-wire", path = "../../../LXMF-rs/crates/libs/lxmf-core", default-features = false, features = ["std"] }
 lxmf-sdk = { path = "../../../LXMF-rs/crates/libs/lxmf-sdk", default-features = false, features = ["std"] }
 lxmf-runtime = { path = "../../../LXMF-rs/crates/libs/lxmf-runtime" }
+rpp-core = { path = "../../../LXMF-rs/crates/libs/rpp-core", features = ["rns"] }
 rmp-serde = "1"
 rmpv = "1"
 # Shared RCH map objects (markers, symbol catalog, Telemeter contract); see docs/architecture.md.

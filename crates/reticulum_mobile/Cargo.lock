@@ -1196,6 +1196,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "rdo-core"
+version = "0.16.2-rc.2-linux"
+dependencies = [
+ "ed25519-dalek",
+ "log",
+ "reticulum-rs-core",
+ "reticulum-rs-transport",
+ "rmpv",
+ "sha2",
+ "thiserror 1.0.69",
+ "tokio",
+ "x25519-dalek",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1303,6 +1318,7 @@ dependencies = [
  "reticulum-rs-transport",
  "rmp-serde",
  "rmpv",
+ "rpp-core",
  "rusqlite",
  "serde",
  "serde_json",
@@ -1342,6 +1358,20 @@ dependencies = [
  "rmp",
  "serde",
  "serde_bytes",
+]
+
+[[package]]
+name = "rpp-core"
+version = "0.16.2-rc.2-linux"
+dependencies = [
+ "log",
+ "rand_core",
+ "rdo-core",
+ "reticulum-rs-transport",
+ "rmpv",
+ "sha2",
+ "thiserror 1.0.69",
+ "tokio",
 ]
 
 [[package]]

@@ -72,4 +72,14 @@ export abstract class CapacitorLibraryClient extends CapacitorMapMarkerClient im
     const { dataUrl } = await this.plugin.getLibraryThumbnail({ itemId });
     return typeof dataUrl === "string" && dataUrl.startsWith("data:image/") ? dataUrl : undefined;
   }
+
+  async shareLibraryItem(itemId: string, destinationHex: string): Promise<void> {
+    await this.ready();
+    await this.plugin.shareLibraryItem({ itemId, destinationHex });
+  }
+
+  async downloadLibraryItem(itemId: string): Promise<void> {
+    await this.ready();
+    await this.plugin.downloadLibraryItem({ itemId });
+  }
 }

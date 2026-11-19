@@ -390,4 +390,12 @@ public abstract class ReticulumBridgeServiceApi extends Service {
     public String setLibraryItemMissionsJson(String payloadJson) {
         return ReticulumBridge.setLibraryItemMissionsJson(payloadJson);
     }
+
+    public String shareLibraryItemJson(String payloadJson) {
+        return ReticulumBridge.shareLibraryItemJson(payloadJson);
+    }
+
+    public String downloadLibraryItemJson(String payloadJson) {
+        return ReticulumBridge.downloadLibraryItemJson(payloadJson);
+    }
 }

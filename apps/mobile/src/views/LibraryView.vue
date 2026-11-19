@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import {
   PhFileText as FileText,
   PhImage as ImageIcon,
@@ -9,8 +9,30 @@ import {
 import type { LibraryItem } from "@reticulum/node-client";
 
 import { type LibraryKindFilter, type LibrarySection, useLibraryStore } from "../stores/libraryStore";
+import { useNodeStore } from "../stores/nodeStore";
 
 const library = useLibraryStore();
+const nodeStore = useNodeStore();
+const sharingItem = ref("");
+const shareTarget = ref("");
+const savedPeers = computed(() =>
+  Object.values(nodeStore.savedByDestination).map((peer) => ({
+    destination: peer.destination,
+    label: peer.label?.trim() || peer.destination,
+  })),
+);
+
+function startShare(item: LibraryItem): void {
+  sharingItem.value = sharingItem.value === item.item_id ? "" : item.item_id;
+  shareTarget.value = savedPeers.value[0]?.destination ?? "";
+}
+
+function confirmShare(): void {
+  if (sharingItem.value && shareTarget.value) {
+    void library.share(sharingItem.value, shareTarget.value);
+    sharingItem.value = "";
+  }
+}
 
 const sections: { id: LibrarySection; label: string }[] = [
   { id: "device", label: "On Device" },
@@ -141,10 +163,26 @@ onMounted(() => {
           </div>
           <div class="actions">
             <button v-if="item.availability === 'local'" type="button" @click="library.open(item.item_id)">Open</button>
-            <template v-if="item.source === 'local'">
-              <button type="button" @click="editMissions(item)">Missions</button>
+            <button
+              v-if="item.source === 'peer' && item.availability !== 'local'"
+              type="button"
+              :disabled="item.availability === 'downloading'"
+              @click="library.download(item.item_id)"
+            >
+              {{ item.availability === "downloading" ? "Downloading" : item.availability === "failed" ? "Retry" : "Download" }}
+            </button>
+            <button v-if="item.availability === 'local'" type="button" @click="startShare(item)">Share</button>
+            <template v-if="item.source !== 'rch'">
+              <button v-if="item.availability === 'local'" type="button" @click="editMissions(item)">Missions</button>
               <button type="button" class="danger" @click="remove(item)">Remove</button>
             </template>
+          </div>
+          <div v-if="sharingItem === item.item_id" class="share-row">
+            <select v-model="shareTarget" class="mission-filter" aria-label="Share with">
+              <option v-for="peer in savedPeers" :key="peer.destination" :value="peer.destination">{{ peer.label }}</option>
+            </select>
+            <button type="button" :disabled="!shareTarget" @click="confirmShare">Send</button>
+            <p v-if="savedPeers.length === 0" class="empty-copy">Save a peer first to share with it.</p>
           </div>
         </article>
         <nav v-if="library.total > 20" class="pager" aria-label="Library pages">

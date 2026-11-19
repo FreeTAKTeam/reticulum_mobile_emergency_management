@@ -123,3 +123,44 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_setLibra
         .map(|item| json!({ "item": item }));
     map_marker_result(&mut env, result)
 }
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LibraryShareInput {
+    item_id: String,
+    destination_hex: String,
+}
+
+/// Publishes and offers a local item to one saved peer (REM #358).
+#[jni_boundary]
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_shareLibraryItemJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    payload: JString,
+) -> jstring {
+    let Some(input) = map_marker_input::<LibraryShareInput>(&mut env, payload) else {
+        return ptr::null_mut();
+    };
+    let node = initialized_node_or_return!();
+    let result = node
+        .library_share(input.item_id, input.destination_hex)
+        .map(|()| json!({ "queued": true }));
+    map_marker_result(&mut env, result)
+}
+
+/// Downloads an offered item over RPP; progress arrives as Library updates.
+#[jni_boundary]
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_downloadLibraryItemJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    payload: JString,
+) -> jstring {
+    let Some(input) = map_marker_input::<LibraryItemInput>(&mut env, payload) else {
+        return ptr::null_mut();
+    };
+    let node = initialized_node_or_return!();
+    let result = node.library_download(input.item_id).map(|()| json!({ "queued": true }));
+    map_marker_result(&mut env, result)
+}

@@ -74,3 +74,52 @@ fn library_delete_and_missions_and_partial_recovery() {
     let restarted = AppStateStore::new(Some(&storage)).expect("restart");
     assert!(!restarted.library_dir().join("deadbeef.part").exists(), "interrupted import cleaned");
 }
+
+#[test]
+fn library_offers_list_as_remote_items_and_receipt_adds_a_verified_peer_item() {
+    let storage_dir = test_storage_dir("library-offers");
+    let store = AppStateStore::new(Some(&storage_dir.to_string_lossy())).expect("store");
+    let package = "11".repeat(16);
+    let sender = "22".repeat(16);
+    store.library_record_offer(&package, &sender, &"33".repeat(32), 5).expect("offer");
+    store.library_record_offer(&package, &sender, &"33".repeat(32), 6).expect("repeat offer");
+    let offers: Vec<_> = store
+        .library_entries()
+        .expect("entries")
+        .into_iter()
+        .filter(|entry| entry.item.source == r3akt_library_core::Source::Peer)
+        .collect();
+    assert_eq!(offers.len(), 1, "a repeated Offer is listed once");
+    assert_eq!(offers[0].item.availability, r3akt_library_core::Availability::Remote);
+    assert!(offers[0].path.is_none(), "no bytes before download");
+    assert_eq!(library_offer_package(&offers[0].item.item_id), Some(package.as_str()));
+
+    // A verified fetch, as rpp-core returns it from the transfer store.
+    let owner = rpp_core::SigningIdentity::from_private_bytes(&[7u8; 64]);
+    let fetched_dir = storage_dir.join("library").join("rpp").join("packages").join("h");
+    std::fs::create_dir_all(&fetched_dir).expect("dir");
+    let path = fetched_dir.join("plan.pdf");
+    std::fs::write(&path, b"%PDF-1.7").expect("file");
+    let manifest = rpp_core::ManifestDraft {
+        package_destination: [0x11; 16],
+        manifest_destination: [0x44; 16],
+        files: vec![rpp_core::FileDraft::from_chunks("plan.pdf", [0x55; 16], &[b"%PDF-1.7"])],
+        ..rpp_core::ManifestDraft::default()
+    }
+    .sign(&owner)
+    .expect("manifest");
+    let fetched = rpp_core::rns_share::FetchedFile {
+        path,
+        name: "plan.pdf".into(),
+        media_type: Some("application/pdf".into()),
+        manifest,
+    };
+    let item = store.library_receive(&package, &fetched).expect("receive");
+    assert_eq!(item.source, r3akt_library_core::Source::Peer);
+    assert_eq!(item.publisher.as_deref(), Some(sender.as_str()));
+    assert_eq!(item.rpp.as_ref().map(|r| r.file_destination.as_str()), Some("55".repeat(16).as_str()));
+    assert!(!fetched_dir.exists(), "transfer copy removed after import");
+    let entries = store.library_entries().expect("entries");
+    assert!(entries.iter().all(|e| library_offer_package(&e.item.item_id).is_none()), "offer retired");
+    assert!(entries.iter().any(|e| e.item.item_id == item.item_id && e.path.is_some()));
+}

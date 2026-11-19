@@ -62,7 +62,14 @@ impl Node {
 
     pub(crate) fn library_delete(&self, item_id: &str) -> Result<bool, NodeError> {
         self.with_app_state(|app_state, bus| {
-            let removed = app_state.library_delete(item_id)?;
+            let removed = match crate::app_state::library_offer_package(item_id) {
+                // Dismissing an Offer only forgets it; nothing was downloaded.
+                Some(package) => {
+                    app_state.library_remove_offer(package)?;
+                    true
+                }
+                None => app_state.library_delete(item_id)?,
+            };
             if removed {
                 self.library_changed(bus, app_state, Some(item_id.to_string()));
             }
@@ -83,5 +90,31 @@ impl Node {
             }
             Ok(item)
         })
+    }
+
+    /// Offers a local item to one saved peer over RPP. Operator-initiated
+    /// bulk traffic: refused in power saver.
+    pub(crate) fn library_share(&self, item_id: String, destination_hex: String) -> Result<(), NodeError> {
+        self.library_bulk_admitted()?;
+        crate::runtime::library_share()?.share(item_id, destination_hex)
+    }
+
+    /// Downloads an item a peer offered. Operator-initiated only.
+    pub(crate) fn library_download(&self, item_id: String) -> Result<(), NodeError> {
+        self.library_bulk_admitted()?;
+        crate::runtime::library_share()?.download(item_id)
+    }
+
+    fn library_bulk_admitted(&self) -> Result<(), NodeError> {
+        let inner = self.inner.lock().map_err(|error| {
+            crate::error_context::contextual_node_error(NodeError::InternalError {}, error)
+        })?;
+        if inner.power_state.saver_active {
+            return Err(crate::error_context::contextual_node_error(
+                NodeError::InvalidConfig {},
+                "file transfers are paused in power saver",
+            ));
+        }
+        Ok(())
     }
 }

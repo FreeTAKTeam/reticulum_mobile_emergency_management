@@ -78,6 +78,8 @@ export interface ReticulumNodePlugin {
   setLibraryItemMissions(options: { itemId: string; missionUids: string[] }): Promise<{ item?: unknown }>;
   openLibraryItem(options: { itemId: string }): Promise<unknown>;
   getLibraryThumbnail(options: { itemId: string }): Promise<{ dataUrl?: unknown }>;
+  shareLibraryItem(options: { itemId: string; destinationHex: string }): Promise<unknown>;
+  downloadLibraryItem(options: { itemId: string }): Promise<unknown>;
   listPluginMapSessions(): Promise<{ items?: unknown }>;
   startPluginMapSession(options: {
     pluginId: string;

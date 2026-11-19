@@ -57,6 +57,21 @@ public abstract class ReticulumNodeLibraryPluginApi extends ReticulumNodeCheckli
     }
 
     @PluginMethod
+    public void shareLibraryItem(PluginCall call) {
+        final JSObject payload = itemPayload(call);
+        payload.put("destinationHex", call.getString("destinationHex", ""));
+        runStringServiceCall(call, "Failed to share the item.", "Invalid library response.",
+            service -> service.shareLibraryItemJson(payload.toString()));
+    }
+
+    @PluginMethod
+    public void downloadLibraryItem(PluginCall call) {
+        final JSObject payload = itemPayload(call);
+        runStringServiceCall(call, "Failed to start the download.", "Invalid library response.",
+            service -> service.downloadLibraryItemJson(payload.toString()));
+    }
+
+    @PluginMethod
     public void importLibraryFile(PluginCall call) {
         final Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);

@@ -36,6 +36,8 @@ public class ReticulumBridgeServiceApiTest {
         assertInherited("getLibraryItemJson", String.class);
         assertInherited("deleteLibraryItemJson", String.class);
         assertInherited("setLibraryItemMissionsJson", String.class);
+        assertInherited("shareLibraryItemJson", String.class);
+        assertInherited("downloadLibraryItemJson", String.class);
     }
 
     @Test

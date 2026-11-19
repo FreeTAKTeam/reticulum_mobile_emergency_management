@@ -117,6 +117,10 @@ export const useLibraryStore = defineStore("library", () => {
       run(async () => (await nodeStore.libraryClient()).importLibraryFile(pick)),
     open: (itemId: string) => run(async () => (await nodeStore.libraryClient()).openLibraryItem(itemId)),
     remove: (itemId: string) => run(async () => (await nodeStore.libraryClient()).deleteLibraryItem(itemId)),
+    share: (itemId: string, destinationHex: string) =>
+      run(async () => (await nodeStore.libraryClient()).shareLibraryItem(itemId, destinationHex)),
+    download: (itemId: string) =>
+      run(async () => (await nodeStore.libraryClient()).downloadLibraryItem(itemId)),
     setMissions: (itemId: string, uids: string[]) =>
       run(async () => (await nodeStore.libraryClient()).setLibraryItemMissions(itemId, uids)),
   };
