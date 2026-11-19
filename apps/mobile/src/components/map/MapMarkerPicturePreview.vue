@@ -3,11 +3,14 @@ import type { MapMarkerRecord } from "@reticulum/node-client";
 import { computed, ref, watch } from "vue";
 
 import { useMapMarkersStore } from "../../stores/mapMarkersStore";
+import { hubModeUsesRch } from "../../stores/nodeSettingsModel";
+import { useNodeStore } from "../../stores/nodeStore";
 import { mdiPathFor } from "../../utils/mapMarkerIcons";
 
 const props = defineProps<{ marker: MapMarkerRecord }>();
 
 const store = useMapMarkersStore();
+const nodeStore = useNodeStore();
 const fullImage = ref<string | undefined>();
 
 const picture = computed(() => props.marker.picture);
@@ -23,8 +26,10 @@ const STATUS_TEXT: Record<string, string> = {
   invalid: "The received image failed its integrity check.",
 };
 const statusText = computed(() => (status.value ? STATUS_TEXT[status.value] ?? "" : ""));
+// The native runtime refuses the request in autonomous mode; this only hides the action.
+const usesRch = computed(() => hubModeUsesRch(nodeStore.settings.hub.mode));
 const canRequest = computed(() =>
-  Boolean(picture.value?.messageId) && status.value !== "requested" && !fullImage.value,
+  usesRch.value && Boolean(picture.value?.messageId) && status.value !== "requested" && !fullImage.value,
 );
 const capturedAt = computed(() => {
   const value = picture.value?.capturedAt;
@@ -62,6 +67,9 @@ function load(): void {
       <template v-if="capturedAt"> Captured {{ capturedAt }}.</template>
     </figcaption>
     <p v-if="statusText" class="marker-picture-status" role="status">{{ statusText }}</p>
+    <p v-if="!usesRch && !fullImage" class="marker-picture-status">
+      The full image needs a link to RCH. Switch to semi-autonomous or connected mode to load it.
+    </p>
     <button v-if="canRequest" type="button" :disabled="store.busy" @click="load">
       {{ status && status !== "ok" ? "Try loading full image again" : "Load full image" }}
     </button>

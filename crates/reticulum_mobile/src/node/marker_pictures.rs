@@ -43,32 +43,22 @@ impl Node {
         })
     }
 
-    /// Queues `mission.marker.picture.get` to the configured RCH hub. The
-    /// answer arrives later in field 10 and updates the marker projection.
+    /// Sends `mission.marker.picture.get` to the configured RCH hub over a
+    /// link (LXMF direct delivery). Autonomous REM never asks RCH for the
+    /// full image. The answer arrives later in field 10 and updates the
+    /// marker projection.
     pub(crate) fn request_map_marker_picture(&self, object_destination_hash: String) -> Result<(), NodeError> {
-        let (identity_hex, message_id, hub, send_mode) = {
+        let (identity_hex, message_id, hub) = {
             let inner = self.inner.lock().map_err(|error| {
                 crate::error_context::contextual_node_error(NodeError::InternalError {}, error)
             })?;
             let message_id = picture_message_id(&inner.app_state, &object_destination_hash)?
                 .ok_or(NodeError::InvalidConfig {})?;
             let config = inner.active_config.as_ref().ok_or(NodeError::NotRunning {})?;
-            let peers = inner
-                .peers_snapshot
-                .lock()
-                .map_err(|error| {
-                    crate::error_context::contextual_node_error(NodeError::InternalError {}, error)
-                })?
-                .clone();
-            let propagation = inner
-                .sync_status_snapshot
-                .lock()
-                .map_err(|error| {
-                    crate::error_context::contextual_node_error(NodeError::InternalError {}, error)
-                })?
-                .active_propagation_node_hex
-                .clone();
-            let target = connected_hub_replication_target(&peers, propagation.as_deref(), config)?;
+            if matches!(config.hub_mode, HubMode::Autonomous {}) {
+                return Err(NodeError::InvalidConfig {});
+            }
+            let hub = configured_hub_destination(config)?;
             let identity_hex = inner
                 .status
                 .lock()
@@ -77,14 +67,15 @@ impl Node {
                 })?
                 .identity_hex
                 .clone();
-            (identity_hex, message_id, target.app_destination_hex, target.send_mode)
+            (identity_hex, message_id, hub)
         };
         let fields = marker_picture_get_fields(&identity_hex, &message_id)?;
         self.queue_bytes_with_class(
             hub,
             b"Picture request".to_vec(),
             Some(fields),
-            send_mode,
+            // DirectOnly is LXMF direct delivery: it opens (or reuses) a link to RCH.
+            SendMode::DirectOnly {},
             OutboundTrafficClass::Event {},
         )?;
         self.with_app_state(|app_state, bus| {

@@ -41,6 +41,8 @@ async function openMapWithPictures(page: Page): Promise<void> {
   await gotoApp(page, "/dashboard");
   await page.evaluate(async ({ markers, reduced }) => {
     const { useNodeStore } = await import("/src/stores/nodeStore.ts");
+    // Full images come from RCH, which autonomous REM never asks.
+    useNodeStore().settings.hub.mode = "SemiAutonomous";
     const client = await useNodeStore().mapMarkerClient();
     const w = window as any;
     w.pictureMarkers = markers;
@@ -127,4 +129,11 @@ test("picture markers draw the thumbnail, fall back explicitly and load the full
   const fallbackPreview = page.getByRole("dialog", { name: "Marker Picture 2" }).getByTestId("marker-picture-preview");
   await expect(fallbackPreview.getByRole("img", { name: "No picture preview received" })).toBeVisible();
   await expect(fallbackPreview.getByRole("button", { name: "Load full image" })).toBeVisible();
+
+  await page.evaluate(async () => {
+    const { useNodeStore } = await import("/src/stores/nodeStore.ts");
+    useNodeStore().settings.hub.mode = "Autonomous";
+  });
+  await expect(fallbackPreview.getByRole("button")).toHaveCount(0);
+  await expect(fallbackPreview).toContainText("needs a link to RCH");
 });

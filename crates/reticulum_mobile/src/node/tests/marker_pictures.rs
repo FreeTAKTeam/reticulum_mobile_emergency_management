@@ -148,3 +148,54 @@ fn picture_answers_are_read_from_field_10_and_hash_checked() {
     let other = picture_answer_fields("hub-directory-1", "result", json!({"status": "ok"}), None);
     assert!(crate::runtime::marker_picture_answers(&other).is_empty());
 }
+
+#[test]
+fn picture_get_is_refused_when_autonomous_and_sent_over_a_hub_link_otherwise() {
+    let hub = "ef".repeat(16);
+    for (name, mode) in [
+        ("autonomous", HubMode::Autonomous {}),
+        ("semi", HubMode::SemiAutonomous {}),
+        ("connected", HubMode::Connected {}),
+    ] {
+        let storage_dir = prepare_storage_dir(&format!("marker-picture-request-{name}"));
+        let node = Node::with_storage_dir(storage_dir.to_str()).expect("node storage");
+        let (tx, mut rx) = mpsc::channel(4);
+        {
+            let mut inner = node.inner.lock().expect("node lock");
+            inner
+                .app_state
+                .apply_map_marker_replica(&picture_marker_payload(&r3akt_map_core::marker_picture::sha256_hex(PICTURE_THUMB)))
+                .expect("replica");
+            inner.active_config = Some(build_config_fingerprint_for_tests(mode, Some(&hub)));
+            *inner.status.lock().expect("status lock") = build_status_for_tests();
+            // Connected routing needs an active team directory to reach RCH.
+            *inner.hub_directory_snapshot.lock().expect("directory lock") = Some(HubDirectorySnapshot {
+                items: vec![crate::types::HubDirectoryPeerRecord {
+                    identity: "78".repeat(16),
+                    destination_hash: "ab".repeat(16),
+                    display_name: None,
+                    announce_capabilities: Vec::new(),
+                    client_type: Some("rem".into()),
+                    registered_mode: None,
+                    last_seen: None,
+                    status: Some("active".into()),
+                }],
+                ..HubDirectorySnapshot::yellow_only(123)
+            });
+            inner.cmd_tx = Some(tx);
+        }
+        let result = node.request_map_marker_picture("0123456789abcdef0123456789abcdef".into());
+        if name == "autonomous" {
+            assert!(matches!(result, Err(NodeError::InvalidConfig {})));
+            assert!(rx.try_recv().is_err(), "autonomous REM sends nothing");
+            continue;
+        }
+        result.expect("request");
+        let Command::SendBytes { destination_hex, send_mode, .. } = rx.try_recv().expect("send")
+        else {
+            panic!("picture request send");
+        };
+        assert_eq!(destination_hex, hub);
+        assert_eq!(send_mode, SendMode::DirectOnly {}, "{name} uses a link to RCH");
+    }
+}

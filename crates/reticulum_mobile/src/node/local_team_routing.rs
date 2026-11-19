@@ -131,7 +131,7 @@ fn routed_outbound_destination_hex(
     if matches!(class, OutboundTrafficClass::Telemetry {}) && connected && hub_target {
         return Err(NodeError::InvalidConfig {});
     }
-    if local_target {
+    if local_target || (hub_target && !connected) {
         return Ok(destination);
     }
     let routed = routed_destination_hex(destination, config, snapshot)?;
