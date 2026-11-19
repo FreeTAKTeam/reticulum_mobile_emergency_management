@@ -19,7 +19,7 @@ use tokio::sync::{mpsc, watch};
 use crate::announce_metadata::has_capability_token;
 use crate::app_state::{
     canonicalize_chat_message, current_timestamp_rfc3339, AppStateStore, ConversationPeerResolver,
-    HouseholdSituationWrite,
+    HouseholdSituationWrite, LibraryEntry,
 };
 use crate::delivery_policy;
 use crate::delivery_policy::normalize_hex_32;
@@ -331,6 +331,7 @@ include!("node/events_api.rs");
 include!("node/map_markers.rs");
 include!("node/map_marker_replication.rs");
 include!("node/marker_pictures.rs");
+include!("node/library.rs");
 include!("node/plugin_map.rs");
 include!("node/plugin_relay.rs");
 include!("node/events_plugins_telemetry.rs");

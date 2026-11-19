@@ -370,4 +370,24 @@ public abstract class ReticulumBridgeServiceApi extends Service {
     public String getMapMarkerPictureImageJson(String payloadJson) {
         return ReticulumBridge.getMapMarkerPictureImageJson(payloadJson);
     }
+
+    public String importLibraryFileJson(String payloadJson) {
+        return ReticulumBridge.importLibraryFileJson(payloadJson);
+    }
+
+    public String listLibraryItemsJson(String payloadJson) {
+        return ReticulumBridge.listLibraryItemsJson(payloadJson);
+    }
+
+    public String getLibraryItemJson(String payloadJson) {
+        return ReticulumBridge.getLibraryItemJson(payloadJson);
+    }
+
+    public String deleteLibraryItemJson(String payloadJson) {
+        return ReticulumBridge.deleteLibraryItemJson(payloadJson);
+    }
+
+    public String setLibraryItemMissionsJson(String payloadJson) {
+        return ReticulumBridge.setLibraryItemMissionsJson(payloadJson);
+    }
 }

@@ -27,6 +27,7 @@ include!("jni_bridge/plugin_relay_api.rs");
 include!("jni_bridge/plugin_host_api.rs");
 include!("jni_bridge/plugin_decode_api.rs");
 include!("jni_bridge/map_markers_api.rs");
+include!("jni_bridge/library_api.rs");
 
 #[cfg(test)]
 mod rnode_config_tests {

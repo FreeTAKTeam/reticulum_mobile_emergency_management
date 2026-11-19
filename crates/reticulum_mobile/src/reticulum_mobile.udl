@@ -182,7 +182,8 @@ enum ProjectionScope {
   "Sos",
   "Plugins",
   "PluginSensors",
-  "MapMarkers"
+  "MapMarkers",
+  "Library"
 };
 
 // Error surface.

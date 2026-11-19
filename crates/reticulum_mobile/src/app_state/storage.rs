@@ -216,6 +216,7 @@ impl AppStateStore {
         })?;
         Self::initialize_sensor_geometry(&connection)?;
         Self::initialize_marker_pictures(&connection)?;
+        self.initialize_library(&connection)?;
         // Plugin map sessions never outlive the runtime that started them.
         Self::clear_plugin_map_sessions(&connection)?;
         self.repair_message_conversations(&connection, &ConversationPeerResolver::default())?;

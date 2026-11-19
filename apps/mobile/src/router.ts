@@ -69,6 +69,11 @@ const routes = [
     component: () => import("./views/PeersDiscoveryView.vue"),
   },
   {
+    path: "/library",
+    name: "library",
+    component: () => import("./views/LibraryView.vue"),
+  },
+  {
     path: "/telemetry",
     name: "telemetry",
     component: () => import("./views/TelemetryMapView.vue"),

@@ -320,6 +320,7 @@ include!("app_state/messaging.rs");
 include!("app_state/telemetry_sos.rs");
 include!("app_state/map_markers.rs");
 include!("app_state/marker_pictures.rs");
+include!("app_state/library.rs");
 include!("app_state/plugin_map.rs");
 include!("app_state/plugin_relay.rs");
 include!("app_state/sensor_geometry.rs");
@@ -344,6 +345,7 @@ mod tests {
     include!("app_state/tests/announce_retention.rs");
     include!("app_state/tests/emergency.rs");
     include!("app_state/tests/map_markers.rs");
+    include!("app_state/tests/library.rs");
     include!("app_state/tests/plugin_map_sessions.rs");
 }
 
