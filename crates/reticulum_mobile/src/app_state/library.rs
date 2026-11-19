@@ -208,6 +208,11 @@ impl AppStateStore {
             entries.push(LibraryEntry { item, path });
         }
         entries.extend(
+            self.library_hub_items()?
+                .into_iter()
+                .map(|item| LibraryEntry { item, path: None }),
+        );
+        entries.extend(
             self.library_offer_items()?
                 .into_iter()
                 .map(|item| LibraryEntry { item, path: None }),

@@ -72,7 +72,7 @@ export interface ReticulumNodePlugin {
   deleteMapMarker(options: { objectDestinationHash: string }): Promise<{ deleted?: boolean }>;
   requestMapMarkerPicture(options: { objectDestinationHash: string }): Promise<{ requested?: boolean }>;
   getMapMarkerPictureImage(options: { objectDestinationHash: string }): Promise<{ dataUrl?: unknown }>;
-  listLibraryItems(options: { query: LibraryQuery }): Promise<{ page?: unknown; missions?: unknown[] }>;
+  listLibraryItems(options: { query: LibraryQuery }): Promise<{ page?: unknown; missions?: unknown[]; hubStatus?: unknown }>;
   importLibraryFile(options: { kind: string }): Promise<{ cancelled?: boolean; item?: unknown }>;
   deleteLibraryItem(options: { itemId: string }): Promise<{ removed?: boolean }>;
   setLibraryItemMissions(options: { itemId: string; missionUids: string[] }): Promise<{ item?: unknown }>;
@@ -80,6 +80,7 @@ export interface ReticulumNodePlugin {
   getLibraryThumbnail(options: { itemId: string }): Promise<{ dataUrl?: unknown }>;
   shareLibraryItem(options: { itemId: string; destinationHex: string }): Promise<unknown>;
   downloadLibraryItem(options: { itemId: string }): Promise<unknown>;
+  refreshLibraryHub(options: { query: LibraryQuery }): Promise<unknown>;
   listPluginMapSessions(): Promise<{ items?: unknown }>;
   startPluginMapSession(options: {
     pluginId: string;

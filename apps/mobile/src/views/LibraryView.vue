@@ -47,7 +47,10 @@ const kinds: { id: LibraryKindFilter; label: string }[] = [
 
 const emptyCopy = computed(() => {
   if (library.section === "rch") {
-    return "Hub files appear here once REM is connected to an RCH that shares a Library.";
+    if (library.hubStatus && library.hubStatus !== "ok") {
+      return `The hub did not return a Library (${library.hubStatus}). It may run an older RCH.`;
+    }
+    return "No hub files listed. Use Refresh to ask the configured RCH.";
   }
   if (library.section === "shared") {
     return "Files other REM operators share with you appear here.";
@@ -147,6 +150,9 @@ onMounted(() => {
           <Plus :size="18" aria-hidden="true" /> Document
         </button>
       </div>
+      <div v-if="library.section === 'rch'" class="import-row">
+        <button type="button" :disabled="library.busy" @click="library.refreshHub()">Refresh from hub</button>
+      </div>
       <p v-if="library.lastError" class="error-copy" role="alert">{{ library.lastError }}</p>
 
       <div v-if="library.items.length > 0" class="library-list">
@@ -164,7 +170,7 @@ onMounted(() => {
           <div class="actions">
             <button v-if="item.availability === 'local'" type="button" @click="library.open(item.item_id)">Open</button>
             <button
-              v-if="item.source === 'peer' && item.availability !== 'local'"
+              v-if="item.source !== 'local' && item.availability !== 'local'"
               type="button"
               :disabled="item.availability === 'downloading'"
               @click="library.download(item.item_id)"
@@ -172,10 +178,15 @@ onMounted(() => {
               {{ item.availability === "downloading" ? "Downloading" : item.availability === "failed" ? "Retry" : "Download" }}
             </button>
             <button v-if="item.availability === 'local'" type="button" @click="startShare(item)">Share</button>
-            <template v-if="item.source !== 'rch'">
-              <button v-if="item.availability === 'local'" type="button" @click="editMissions(item)">Missions</button>
-              <button type="button" class="danger" @click="remove(item)">Remove</button>
-            </template>
+            <button v-if="item.source === 'local'" type="button" @click="editMissions(item)">Missions</button>
+            <button
+              v-if="item.availability === 'local' || item.source === 'peer'"
+              type="button"
+              class="danger"
+              @click="remove(item)"
+            >
+              Remove
+            </button>
           </div>
           <div v-if="sharingItem === item.item_id" class="share-row">
             <select v-model="shareTarget" class="mission-filter" aria-label="Share with">

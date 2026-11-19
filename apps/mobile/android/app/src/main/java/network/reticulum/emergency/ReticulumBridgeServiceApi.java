@@ -398,4 +398,8 @@ public abstract class ReticulumBridgeServiceApi extends Service {
     public String downloadLibraryItemJson(String payloadJson) {
         return ReticulumBridge.downloadLibraryItemJson(payloadJson);
     }
+
+    public String refreshLibraryHubJson(String payloadJson) {
+        return ReticulumBridge.refreshLibraryHubJson(payloadJson);
+    }
 }

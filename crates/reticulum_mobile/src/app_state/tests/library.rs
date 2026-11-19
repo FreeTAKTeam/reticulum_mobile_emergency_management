@@ -123,3 +123,43 @@ fn library_offers_list_as_remote_items_and_receipt_adds_a_verified_peer_item() {
     assert!(entries.iter().all(|e| library_offer_package(&e.item.item_id).is_none()), "offer retired");
     assert!(entries.iter().any(|e| e.item.item_id == item.item_id && e.path.is_some()));
 }
+
+#[test]
+fn library_hub_items_cache_metadata_and_record_status() {
+    let storage_dir = test_storage_dir("library-hub");
+    let store = AppStateStore::new(Some(&storage_dir.to_string_lossy())).expect("store");
+    let listed = r3akt_library_core::LibraryItem {
+        item_id: "rch:7".into(),
+        legacy_file_id: Some(7),
+        kind: r3akt_library_core::ItemKind::Image,
+        source: r3akt_library_core::Source::Rch,
+        availability: r3akt_library_core::Availability::Local,
+        name: "site.jpg".into(),
+        media_type: Some("image/jpeg".into()),
+        size: 9,
+        content_sha256: None,
+        rpp: None,
+        publisher: None,
+        mission_uids: vec!["alpha".into()],
+        team_uid: None,
+        created_ts_ms: 1,
+        updated_ts_ms: 1,
+    };
+    let mut bad = listed.clone();
+    bad.item_id = "rch:8".into();
+    bad.name = "../escape".into();
+    store.library_cache_hub_items(&[listed.clone(), bad]).expect("cache");
+    let hub = store.library_hub_items().expect("hub items");
+    assert_eq!(hub.len(), 1, "invalid hub metadata is dropped");
+    assert_eq!(hub[0].availability, r3akt_library_core::Availability::Remote, "metadata only");
+    store.library_set_hub_item_state("rch:7", "downloading").expect("state");
+    assert_eq!(
+        store.library_hub_item("rch:7").expect("item").expect("present").availability,
+        r3akt_library_core::Availability::Downloading
+    );
+    store.library_cache_hub_items(&[listed]).expect("refresh");
+    assert_eq!(store.library_hub_items().expect("items").len(), 1, "refresh does not duplicate");
+    assert_eq!(store.library_hub_status().expect("status"), None);
+    store.library_set_hub_status("unknown_command").expect("status");
+    assert_eq!(store.library_hub_status().expect("status").as_deref(), Some("unknown_command"));
+}

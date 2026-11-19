@@ -27,6 +27,7 @@ export const useLibraryStore = defineStore("library", () => {
   const loading = ref(false);
   const busy = ref(false);
   const lastError = ref("");
+  const hubStatus = ref<string | undefined>();
   const thumbnails = ref<Record<string, string>>({});
   let unsubscribe: (() => void) | null = null;
 
@@ -54,6 +55,7 @@ export const useLibraryStore = defineStore("library", () => {
       missions.value = listing.missions;
       total.value = listing.total;
       hasNext.value = listing.hasNext;
+      hubStatus.value = listing.hubStatus;
       lastError.value = "";
       void loadThumbnails(listing.items);
     } catch (error: unknown) {
@@ -111,7 +113,18 @@ export const useLibraryStore = defineStore("library", () => {
     busy,
     lastError,
     thumbnails,
+    hubStatus,
     init,
+    refreshHub: () =>
+      run(async () =>
+        (await nodeStore.libraryClient()).refreshLibraryHub({
+          kind: kind.value === "all" ? undefined : kind.value,
+          mission_uid: mission.value || undefined,
+          search: search.value.trim() || undefined,
+          page: 1,
+          per_page: 50,
+        }),
+      ),
     refresh,
     importFile: (pick: "all" | "image") =>
       run(async () => (await nodeStore.libraryClient()).importLibraryFile(pick)),

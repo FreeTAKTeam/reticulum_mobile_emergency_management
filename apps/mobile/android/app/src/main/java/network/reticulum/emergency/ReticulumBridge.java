@@ -117,6 +117,7 @@ public final class ReticulumBridge {
     public static native String setLibraryItemMissionsJson(String payloadJson);
     public static native String shareLibraryItemJson(String payloadJson);
     public static native String downloadLibraryItemJson(String payloadJson);
+    public static native String refreshLibraryHubJson(String payloadJson);
     public static native String handlePluginHostRequestJson(String payloadJson);
     public static native String startPluginMapSessionJson(String payloadJson);
     public static native String stopPluginMapSessionsJson(String payloadJson);

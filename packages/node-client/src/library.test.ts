@@ -19,7 +19,9 @@ describe("library converters", () => {
     const listing = toLibraryListing({
       page: { items: [item, { name: 42 }, null], page: 2, per_page: 20, total: 21, has_next: false },
       missions: ["alpha", 7],
+      hubStatus: "unknown_command",
     });
+    expect(listing.hubStatus).toBe("unknown_command");
     expect(listing.items).toEqual([{ ...item, mission_uids: [] }]);
     expect([listing.page, listing.perPage, listing.total, listing.hasNext]).toEqual([2, 20, 21, false]);
     expect(listing.missions).toEqual(["alpha"]);

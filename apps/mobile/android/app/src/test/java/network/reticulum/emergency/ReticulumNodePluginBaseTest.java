@@ -83,7 +83,7 @@ public class ReticulumNodePluginBaseTest {
             .filter(method -> method.isAnnotationPresent(PluginMethod.class))
             .count();
 
-        assertEquals(129L, methodCount);
+        assertEquals(130L, methodCount);
         for (String name : new String[] { "listLocalPropagation", "getLocalPropagationConfig" }) {
             assertTrue(ReticulumNodePlugin.class.getMethod(name, PluginCall.class)
                 .isAnnotationPresent(PluginMethod.class));

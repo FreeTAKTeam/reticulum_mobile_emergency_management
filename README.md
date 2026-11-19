@@ -14,7 +14,7 @@ It answers two urgent questions:
 REM is built around simple pages for team status, chat, checklists, map positions, peer discovery, and event logs. It can work directly with trusted peers over Reticulum mesh networking, and it can also use Reticulum Community Hub support when a team chooses that setup.
 
 The current Android source version is `1.7.0`. CI builds against LXMF-rs
-`0.16.2-rc.2` at source revision `9016d17fbd7d03c3327c15500a4b4798bb00becf`
+`0.16.2-rc.2` at source revision `b1c81356e584d19ccee54d8af7a917d220fa2f90`
 (RDO owner binding and RPP sharing, FreeTAKTeam/LXMF-rs PR 771).
 This source pin is not a new LXMF-rs release.
 Automated validation and the two-phone TCP matrix are release gates; the

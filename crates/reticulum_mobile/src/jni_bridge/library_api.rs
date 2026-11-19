@@ -164,3 +164,26 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_download
     let result = node.library_download(input.item_id).map(|()| json!({ "queued": true }));
     map_marker_result(&mut env, result)
 }
+
+/// Asks the configured RCH for one page of its Library (metadata only).
+#[jni_boundary]
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_refreshLibraryHubJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    payload: JString,
+) -> jstring {
+    let Some(args) = map_marker_input::<serde_json::Value>(&mut env, payload) else {
+        return ptr::null_mut();
+    };
+    let query = match r3akt_library_core::LibraryQuery::from_args(&args) {
+        Ok(query) => query,
+        Err(reason) => {
+            set_last_error("InvalidConfig", reason);
+            return ptr::null_mut();
+        }
+    };
+    let node = initialized_node_or_return!();
+    let result = node.library_refresh_hub(&query).map(|()| json!({ "requested": true }));
+    map_marker_result(&mut env, result)
+}

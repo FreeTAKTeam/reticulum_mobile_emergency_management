@@ -15,7 +15,7 @@ export function toLibraryItem(value: unknown): LibraryItem | undefined {
 }
 
 /** The runtime's `{ page, missions }` listing, with malformed entries dropped. */
-export function toLibraryListing(raw: { page?: unknown; missions?: unknown[] }): LibraryListing {
+export function toLibraryListing(raw: { page?: unknown; missions?: unknown[]; hubStatus?: unknown }): LibraryListing {
   const page = (raw.page ?? {}) as Record<string, unknown>;
   const items = Array.isArray(page.items)
     ? page.items.map(toLibraryItem).filter((item): item is LibraryItem => item !== undefined)
@@ -26,6 +26,7 @@ export function toLibraryListing(raw: { page?: unknown; missions?: unknown[] }):
     perPage: Number(page.per_page ?? items.length),
     total: Number(page.total ?? items.length),
     hasNext: page.has_next === true,
+    hubStatus: typeof raw.hubStatus === "string" ? raw.hubStatus : undefined,
     missions: Array.isArray(raw.missions)
       ? raw.missions.filter((mission): mission is string => typeof mission === "string")
       : [],
@@ -81,5 +82,10 @@ export abstract class CapacitorLibraryClient extends CapacitorMapMarkerClient im
   async downloadLibraryItem(itemId: string): Promise<void> {
     await this.ready();
     await this.plugin.downloadLibraryItem({ itemId });
+  }
+
+  async refreshLibraryHub(query: LibraryQuery): Promise<void> {
+    await this.ready();
+    await this.plugin.refreshLibraryHub({ query });
   }
 }

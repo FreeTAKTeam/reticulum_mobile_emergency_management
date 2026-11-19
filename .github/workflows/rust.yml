@@ -19,7 +19,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   # Generic custody storage; R3AKT classification is pinned by Cargo.toml.
-  LXMF_RS_REF: 9016d17fbd7d03c3327c15500a4b4798bb00becf
+  LXMF_RS_REF: b1c81356e584d19ccee54d8af7a917d220fa2f90
 
 jobs:
   web:

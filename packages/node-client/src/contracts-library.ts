@@ -45,6 +45,8 @@ export interface LibraryListing {
   hasNext: boolean;
   /** Every mission UID present on the device, for the filter. */
   missions: string[];
+  /** The hub's last Library answer: "ok", or why it refused (e.g. an older RCH). */
+  hubStatus?: string;
 }
 
 export type LibraryImportResult = { cancelled: true } | { cancelled: false; item: LibraryItem };
@@ -61,8 +63,10 @@ export interface LibraryClient {
   getLibraryThumbnail(itemId: string): Promise<string | undefined>;
   /** Offers a local item to one saved peer (RPP); progress arrives as Library updates. */
   shareLibraryItem(itemId: string, destinationHex: string): Promise<void>;
-  /** Downloads an item a peer offered; never started automatically. */
+  /** Downloads an offered or hub-listed item; never started automatically. */
   downloadLibraryItem(itemId: string): Promise<void>;
+  /** Asks the configured RCH for a page of its Library; answers update the projection. */
+  refreshLibraryHub(query: LibraryQuery): Promise<void>;
 }
 
 export function isLibraryClient(client: unknown): client is LibraryClient {

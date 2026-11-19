@@ -332,6 +332,7 @@ include!("node/map_markers.rs");
 include!("node/map_marker_replication.rs");
 include!("node/marker_pictures.rs");
 include!("node/library.rs");
+include!("node/library_hub.rs");
 include!("node/plugin_map.rs");
 include!("node/plugin_relay.rs");
 include!("node/events_plugins_telemetry.rs");

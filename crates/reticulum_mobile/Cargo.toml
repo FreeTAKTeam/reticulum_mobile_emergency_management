@@ -42,7 +42,7 @@ rmp-serde = "1"
 rmpv = "1"
 # Shared RCH map objects (markers, symbol catalog, Telemeter contract); see docs/architecture.md.
 r3akt-map-core = { git = "https://github.com/FreeTAKTeam/Reticulum-Community-Hub.git", rev = "82f72e97326e7a6d341456c4ce88ca94240369ca", features = ["sqlite"] }
-r3akt-library-core = { git = "https://github.com/FreeTAKTeam/Reticulum-Community-Hub.git", rev = "e0dba68b597f84ff7556377ce07ff238613f329c" }
+r3akt-library-core = { git = "https://github.com/FreeTAKTeam/Reticulum-Community-Hub.git", rev = "aaab494d0c3c71042822c1b0079619e3b3001885" }
 r3akt-profile-rch = { git = "https://github.com/FreeTAKTeam/Reticulum-Community-Hub.git", rev = "82f72e97326e7a6d341456c4ce88ca94240369ca" }
 r3akt-mesh-delivery = { git = "https://github.com/FreeTAKTeam/R3AKTClient.git", rev = "e6d742fa281371f5346470e08cb723ec1dfd5723" }
 rand_core = { version = "0.6.4", features = ["getrandom"] }

@@ -42,8 +42,15 @@
 
 Share and Download are refused in power saver. Transfers run as background tasks outside the SOS and acknowledgement command lanes. They never start on their own, so LoRa never begins a bulk transfer unasked.
 
+## RCH source (REM #357)
+
+1. **Refresh from hub** sends `mission.library.list` (field 9) to the configured hub. Answers (field 10) are trusted only from `hub_identity_hash`.
+2. List pages are cached in `rem_library_hub_items` as metadata only, so they can be browsed offline. A rejection, such as an older RCH without the command, is stored as the hub Library status and shown in place of a list.
+3. **Download** sends `mission.library.item.fetch` with REM's identity hash, and marks the item `downloading`.
+4. The `ok` answer carries the Package Destination. REM pulls it with the same RPP path as peer sharing and imports the file as an `rch` item.
+5. Refreshing never deletes downloaded files. Autonomous REM never asks the hub.
+
 ## Not yet covered
 
-- The RCH source (REM #357) depends on RCH RPP serving (RCH #355). Its section shows an empty state until then.
 - Two-device acceptance (TCP, split TCP/LoRa, interruption above 100 chunks, disk full, old peers) has not been run.
 - Received Offers do not show the file name until download, because RC1 Offers carry only identities.

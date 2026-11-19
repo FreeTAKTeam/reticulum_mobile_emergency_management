@@ -9,6 +9,8 @@ pub(crate) struct LibraryListing {
     pub page: r3akt_library_core::LibraryPage,
     /// Every mission UID present on device, for the mission filter.
     pub missions: Vec<String>,
+    /// The hub's last Library answer: `ok`, or the reason it refused.
+    pub hub_status: Option<String>,
 }
 
 impl Node {
@@ -52,7 +54,7 @@ impl Node {
             missions.dedup();
             // Local items belong to this operator; every right is granted.
             let page = query.apply(items, |_, _| true);
-            Ok(LibraryListing { page, missions })
+            Ok(LibraryListing { page, missions, hub_status: app_state.library_hub_status()? })
         })
     }
 
@@ -99,10 +101,13 @@ impl Node {
         crate::runtime::library_share()?.share(item_id, destination_hex)
     }
 
-    /// Downloads an item a peer offered. Operator-initiated only.
+    /// Downloads an offered or hub-listed item. Operator-initiated only.
     pub(crate) fn library_download(&self, item_id: String) -> Result<(), NodeError> {
         self.library_bulk_admitted()?;
-        crate::runtime::library_share()?.download(item_id)
+        if crate::app_state::library_offer_package(&item_id).is_some() {
+            return crate::runtime::library_share()?.download(item_id);
+        }
+        self.library_download_hub(item_id)
     }
 
     fn library_bulk_admitted(&self) -> Result<(), NodeError> {

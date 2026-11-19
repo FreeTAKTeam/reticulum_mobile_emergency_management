@@ -64,6 +64,13 @@ async fn emit_received_payload(
                     source_hex.as_deref(),
                     fields_bytes.as_deref(),
                 );
+            let persisted_library = !is_sos_message
+                && persist_received_library_answer(
+                    state,
+                    bus,
+                    source_hex.as_deref(),
+                    fields_bytes.as_deref(),
+                );
             let persisted_sensors = !is_sos_message
                 && persist_received_sensors(
                     state,
@@ -138,6 +145,7 @@ async fn emit_received_payload(
                         || persisted_checklist
                         || persisted_marker
                         || persisted_picture
+                        || persisted_library
                         || persisted_sensors,
                 )
                 .await;

@@ -1122,7 +1122,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 [[package]]
 name = "r3akt-library-core"
 version = "0.1.0"
-source = "git+https://github.com/FreeTAKTeam/Reticulum-Community-Hub.git?rev=e0dba68b597f84ff7556377ce07ff238613f329c#e0dba68b597f84ff7556377ce07ff238613f329c"
+source = "git+https://github.com/FreeTAKTeam/Reticulum-Community-Hub.git?rev=aaab494d0c3c71042822c1b0079619e3b3001885#aaab494d0c3c71042822c1b0079619e3b3001885"
 dependencies = [
  "serde",
  "serde_json",

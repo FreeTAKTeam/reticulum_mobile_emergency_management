@@ -42,6 +42,13 @@ public abstract class ReticulumNodeLibraryPluginApi extends ReticulumNodeCheckli
     }
 
     @PluginMethod
+    public void refreshLibraryHub(PluginCall call) {
+        final JSObject query = call.getObject("query", new JSObject());
+        runStringServiceCall(call, "Failed to ask the hub.", "Invalid library response.",
+            service -> service.refreshLibraryHubJson(query.toString()));
+    }
+
+    @PluginMethod
     public void deleteLibraryItem(PluginCall call) {
         final JSObject payload = itemPayload(call);
         runStringServiceCall(call, "Failed to remove the item.", "Invalid library response.",

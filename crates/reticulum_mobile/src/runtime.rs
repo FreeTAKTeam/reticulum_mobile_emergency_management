@@ -53,6 +53,7 @@ include!("runtime/command_send_lxmf.rs");
 include!("runtime/command_tasks.rs");
 include!("runtime/command_queries.rs");
 include!("runtime/library_share.rs");
+include!("runtime/library_hub_receive.rs");
 
 #[expect(
     clippy::too_many_arguments,

@@ -191,4 +191,23 @@ impl LibraryShare {
         });
         Ok(())
     }
+
+    /// Pulls a Package the hub prepared for `hub_item_id` and imports it.
+    pub(crate) fn download_from_hub(&self, hub_item_id: String, package: [u8; 16]) {
+        let this = self.clone();
+        self.handle.spawn(async move {
+            let store = this.app_state.library_dir().join("rpp");
+            let outcome = match this.node.fetch(package, &store, LIBRARY_SHARE_TIMEOUT).await {
+                Ok(fetched) => this.app_state.library_receive_from_hub(&hub_item_id, &fetched).map(|_| ()),
+                Err(error) => {
+                    log::warn!("[library] hub download {hub_item_id} failed: {error}");
+                    this.app_state.library_set_hub_item_state(&hub_item_id, "failed")
+                }
+            };
+            if let Err(error) = outcome {
+                log::warn!("[library] hub download bookkeeping failed: {error:?}");
+            }
+            library_share_changed(&this.app_state, &this.bus, Some(hub_item_id));
+        });
+    }
 }
