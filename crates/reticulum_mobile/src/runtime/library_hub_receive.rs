@@ -46,7 +46,13 @@ fn persist_received_library_answer(
             }
         } else if result.command_id.starts_with(crate::node::LIBRARY_FETCH_PREFIX) {
             handled = true;
-            let Some(item_id) = result.correlation_id.clone() else { continue };
+            let item_id = crate::node::library_fetch_item_id(&result.command_id)
+                .or_else(|| result.correlation_id.as_deref().and_then(crate::node::library_fetch_item_id))
+                .or_else(|| result.result.get("item_id").and_then(serde_json::Value::as_str).map(str::to_string));
+            let Some(item_id) = item_id else {
+                warn!("[library] hub fetch answer {} names no item", result.command_id);
+                continue;
+            };
             let package = result
                 .result
                 .pointer("/rpp/package_destination")

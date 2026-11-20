@@ -395,6 +395,7 @@ mod tests {
     include!("node/tests/block_onboarding.rs");
     include!("node/tests/map_markers.rs");
     include!("node/tests/marker_pictures.rs");
+    include!("node/tests/library_hub.rs");
 }
 
 include!("node/sensor_admission.rs");
