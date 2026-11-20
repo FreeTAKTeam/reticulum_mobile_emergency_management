@@ -170,7 +170,8 @@ jobs:
       - name: Prepare JNA for the binding smoke test
         if: matrix.check == 'bindings'
         run: |
-          curl --fail --location --retry 3 --output "$RUNNER_TEMP/jna-5.12.0.jar" \
+          # Maven Central sometimes answers 404 briefly; curl retries those only with --retry-all-errors.
+          curl --fail --location --retry 5 --retry-delay 10 --retry-all-errors --output "$RUNNER_TEMP/jna-5.12.0.jar" \
             https://repo.maven.apache.org/maven2/net/java/dev/jna/jna/5.12.0/jna-5.12.0.jar
           echo "f96112f6b94c68d95af54ebf257e8acc25a912287a6a891cd6576bba861297b7  $RUNNER_TEMP/jna-5.12.0.jar" | sha256sum --check
 
