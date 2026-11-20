@@ -17,7 +17,7 @@ import com.getcapacitor.annotation.Permission;
         )
     }
 )
-public class ReticulumNodePlugin extends ReticulumNodeChecklistPluginApi {
+public class ReticulumNodePlugin extends ReticulumNodeLibraryPluginApi {
 
     @PluginMethod
     public void getEams(PluginCall call) {

@@ -4,6 +4,7 @@ export type AppIcon =
   | "checklists"
   | "dashboard"
   | "events"
+  | "library"
   | "map"
   | "more"
   | "peers"
@@ -27,12 +28,18 @@ export const menuItems: NavigationItem[] = [
   { path: "/messages", label: "Action Messages", icon: "action-messages" },
   { path: "/events", label: "Events", icon: "events" },
   { path: "/checklists", label: "Checklists", icon: "checklists" },
+  { path: "/library", label: "Library", icon: "library" },
   { path: "/telemetry", label: "Map", icon: "map" },
   { path: "/peers", label: "Peers", icon: "peers" },
   { path: "/settings", label: "Settings", icon: "settings" },
 ];
 
 export const iconPaths: Record<AppIcon, string[]> = {
+  library: [
+    "M5 4.5h4v15H5z",
+    "M10.5 4.5h4v15h-4z",
+    "m16 5.5 3.6-1 3.3 14.3-3.6 1Z",
+  ],
   "action-messages": [
     "M8 4.5h6l4 4v10a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2v-12a2 2 0 0 1 2-2Z",
     "M14 4.5v4h4",

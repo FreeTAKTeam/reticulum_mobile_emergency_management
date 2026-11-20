@@ -52,6 +52,8 @@ include!("runtime/command_send_bytes.rs");
 include!("runtime/command_send_lxmf.rs");
 include!("runtime/command_tasks.rs");
 include!("runtime/command_queries.rs");
+include!("runtime/library_share.rs");
+include!("runtime/library_hub_receive.rs");
 
 #[expect(
     clippy::too_many_arguments,
@@ -278,6 +280,7 @@ pub async fn run_node(
     }
 
     refresh_peer_snapshot(&state).await;
+    start_library_share(&state, &bus).await;
     let saver_active_at_start = *power_saver_rx.borrow();
     if !saver_active_at_start {
         sync_auto_propagation_node(&state, &bus).await;
@@ -351,6 +354,7 @@ pub async fn run_node(
     let command_executor = RuntimeCommandExecutor::new();
 
     include!("runtime/command_loop.rs");
+    stop_library_share();
     let _ = state.sdk.shutdown().await;
     state.projection_journal.flush_now().await;
 

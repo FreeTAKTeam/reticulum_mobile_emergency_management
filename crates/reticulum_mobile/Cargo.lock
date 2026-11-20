@@ -848,7 +848,7 @@ checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
 name = "lxmf-propagation"
-version = "0.16.1"
+version = "0.16.2-rc.2-linux"
 dependencies = [
  "hex",
  "hkdf",
@@ -865,14 +865,14 @@ dependencies = [
 
 [[package]]
 name = "lxmf-reference"
-version = "0.16.1"
+version = "0.16.2-rc.2-linux"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "lxmf-runtime"
-version = "0.16.1"
+version = "0.16.2-rc.2-linux"
 dependencies = [
  "base64",
  "hex",
@@ -891,7 +891,7 @@ dependencies = [
 
 [[package]]
 name = "lxmf-sdk"
-version = "0.16.1"
+version = "0.16.2-rc.2-linux"
 dependencies = [
  "hex",
  "hmac",
@@ -906,7 +906,7 @@ dependencies = [
 
 [[package]]
 name = "lxmf-wire"
-version = "0.16.1"
+version = "0.16.2-rc.2-linux"
 dependencies = [
  "base64",
  "ed25519-dalek",
@@ -1120,6 +1120,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
+name = "r3akt-library-core"
+version = "0.1.0"
+source = "git+https://github.com/FreeTAKTeam/Reticulum-Community-Hub.git?rev=24ab5c6ce446b8649b77785c500e267598193516#24ab5c6ce446b8649b77785c500e267598193516"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "r3akt-map-core"
 version = "0.1.0"
 source = "git+https://github.com/FreeTAKTeam/Reticulum-Community-Hub.git?rev=82f72e97326e7a6d341456c4ce88ca94240369ca#82f72e97326e7a6d341456c4ce88ca94240369ca"
@@ -1187,6 +1196,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "rdo-core"
+version = "0.16.2-rc.2-linux"
+dependencies = [
+ "ed25519-dalek",
+ "log",
+ "reticulum-rs-core",
+ "reticulum-rs-transport",
+ "rmpv",
+ "sha2",
+ "thiserror 1.0.69",
+ "tokio",
+ "x25519-dalek",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1205,7 +1229,7 @@ dependencies = [
 
 [[package]]
 name = "reticulum-rs"
-version = "0.16.1"
+version = "0.16.2-rc.2-linux"
 dependencies = [
  "reticulum-rs-core",
  "reticulum-rs-transport",
@@ -1213,7 +1237,7 @@ dependencies = [
 
 [[package]]
 name = "reticulum-rs-core"
-version = "0.16.1"
+version = "0.16.2-rc.2-linux"
 dependencies = [
  "aes",
  "atomicwrites",
@@ -1233,7 +1257,7 @@ dependencies = [
 
 [[package]]
 name = "reticulum-rs-transport"
-version = "0.16.1"
+version = "0.16.2-rc.2-linux"
 dependencies = [
  "aes",
  "base64",
@@ -1284,6 +1308,7 @@ dependencies = [
  "lxmf-runtime",
  "lxmf-sdk",
  "lxmf-wire",
+ "r3akt-library-core",
  "r3akt-map-core",
  "r3akt-mesh-delivery",
  "r3akt-profile-rch",
@@ -1293,6 +1318,7 @@ dependencies = [
  "reticulum-rs-transport",
  "rmp-serde",
  "rmpv",
+ "rpp-core",
  "rusqlite",
  "serde",
  "serde_json",
@@ -1332,6 +1358,20 @@ dependencies = [
  "rmp",
  "serde",
  "serde_bytes",
+]
+
+[[package]]
+name = "rpp-core"
+version = "0.16.2-rc.2-linux"
+dependencies = [
+ "log",
+ "rand_core",
+ "rdo-core",
+ "reticulum-rs-transport",
+ "rmpv",
+ "sha2",
+ "thiserror 1.0.69",
+ "tokio",
 ]
 
 [[package]]

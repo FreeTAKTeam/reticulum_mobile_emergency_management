@@ -31,6 +31,14 @@ public class ReticulumBridgeServiceApiTest {
         assertInherited("deleteMapMarkerJson", String.class);
         assertInherited("requestMapMarkerPictureJson", String.class);
         assertInherited("getMapMarkerPictureImageJson", String.class);
+        assertInherited("importLibraryFileJson", String.class);
+        assertInherited("listLibraryItemsJson", String.class);
+        assertInherited("getLibraryItemJson", String.class);
+        assertInherited("deleteLibraryItemJson", String.class);
+        assertInherited("setLibraryItemMissionsJson", String.class);
+        assertInherited("shareLibraryItemJson", String.class);
+        assertInherited("downloadLibraryItemJson", String.class);
+        assertInherited("refreshLibraryHubJson", String.class);
     }
 
     @Test

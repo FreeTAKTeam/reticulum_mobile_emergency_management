@@ -11,7 +11,7 @@ test("More tools keeps navigation, active links and close controls", async ({ pa
   const more = page.getByRole("button", { name: "More", exact: true });
   const menu = page.getByRole("complementary", { name: "More tools" });
   await more.click();
-  await expect(menu.getByRole("link")).toHaveCount(7);
+  await expect(menu.getByRole("link")).toHaveCount(8);
   await menu.getByRole("button", { name: "Close more tools" }).focus();
   await page.keyboard.press("Enter");
   await expect(menu).toBeHidden();

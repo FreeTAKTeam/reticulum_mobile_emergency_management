@@ -1,4 +1,4 @@
-import { createReticulumNodeClient, type MapMarkerClient, type PluginMapSessionClient, type ReticulumNodeClient } from "@reticulum/node-client";
+import { createReticulumNodeClient, isLibraryClient, type LibraryClient, type MapMarkerClient, type PluginMapSessionClient, type ReticulumNodeClient } from "@reticulum/node-client";
 import { defineStore } from "pinia";
 
 import { loadUiSettingsProjection } from "../utils/legacyState";
@@ -355,6 +355,14 @@ export const useNodeStore = defineStore("node", () => {
     }
     return client.value;
   }
+  /** Library calls are native; only Android implements them today. */
+  async function libraryClient(): Promise<LibraryClient> {
+    await init();
+    if (!isLibraryClient(client.value)) {
+      throw new Error("The Library needs the Android runtime.");
+    }
+    return client.value;
+  }
   /** Plugin map sessions are native state; the UI only starts, lists and stops them. */
   async function pluginMapSessionClient(): Promise<PluginMapSessionClient> {
     await init();
@@ -370,6 +378,7 @@ export const useNodeStore = defineStore("node", () => {
       state, logging, peers, projections, hub, selectors, lifecycle, actions, transport, community,
     ),
     mapMarkerClient,
+    libraryClient,
     pluginMapSessionClient,
   };
 });

@@ -14,8 +14,12 @@ public class ReticulumNodePluginBaseTest {
     @Test
     public void concretePluginInheritsSharedLifecycle() throws Exception {
         assertEquals(
-            ReticulumNodeChecklistPluginApi.class,
+            ReticulumNodeLibraryPluginApi.class,
             ReticulumNodePlugin.class.getSuperclass()
+        );
+        assertEquals(
+            ReticulumNodeChecklistPluginApi.class,
+            ReticulumNodeLibraryPluginApi.class.getSuperclass()
         );
         assertEquals(
             ReticulumNodeMapMarkerPluginApi.class,
@@ -64,6 +68,10 @@ public class ReticulumNodePluginBaseTest {
             ReticulumNodePlugin.class.getMethod("getChecklists", PluginCall.class).getDeclaringClass()
         );
         assertEquals(
+            ReticulumNodeLibraryPluginApi.class,
+            ReticulumNodePlugin.class.getMethod("listLibraryItems", PluginCall.class).getDeclaringClass()
+        );
+        assertEquals(
             ReticulumNodePlugin.class,
             ReticulumNodePlugin.class.getMethod("getEams", PluginCall.class).getDeclaringClass()
         );
@@ -75,7 +83,7 @@ public class ReticulumNodePluginBaseTest {
             .filter(method -> method.isAnnotationPresent(PluginMethod.class))
             .count();
 
-        assertEquals(121L, methodCount);
+        assertEquals(130L, methodCount);
         for (String name : new String[] { "listLocalPropagation", "getLocalPropagationConfig" }) {
             assertTrue(ReticulumNodePlugin.class.getMethod(name, PluginCall.class)
                 .isAnnotationPresent(PluginMethod.class));
