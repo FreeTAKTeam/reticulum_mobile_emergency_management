@@ -10,7 +10,7 @@ env:
   CARGO_TERM_COLOR: always
   GOTENNA_RELAY_FIXTURE: ${{ github.workspace }}/rem/output/gotenna-relay.json
   # Generic custody storage; R3AKT classification is pinned by Cargo.toml.
-  LXMF_RS_REF: 50fb05e563c4a971114e969bc5928174ca7cae0c
+  LXMF_RS_REF: 008bf9e1cbc2b3f6859abf21f64dfdb87be8621f
 
 jobs:
   plugin-system:
