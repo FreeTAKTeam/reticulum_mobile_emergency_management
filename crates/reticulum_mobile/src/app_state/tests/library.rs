@@ -163,3 +163,69 @@ fn library_hub_items_cache_metadata_and_record_status() {
     store.library_set_hub_status("unknown_command").expect("status");
     assert_eq!(store.library_hub_status().expect("status").as_deref(), Some("unknown_command"));
 }
+
+fn hub_test_item(item_id: &str) -> r3akt_library_core::LibraryItem {
+    r3akt_library_core::LibraryItem {
+        item_id: item_id.into(),
+        legacy_file_id: None,
+        kind: r3akt_library_core::ItemKind::File,
+        source: r3akt_library_core::Source::Rch,
+        availability: r3akt_library_core::Availability::Remote,
+        name: "plan.pdf".into(),
+        media_type: None,
+        size: 1,
+        content_sha256: None,
+        rpp: None,
+        publisher: None,
+        mission_uids: Vec::new(),
+        team_uid: None,
+        created_ts_ms: 1,
+        updated_ts_ms: 1,
+    }
+}
+
+#[test]
+fn library_downloads_left_over_from_a_previous_run_restart_as_failed() {
+    let storage_dir = test_storage_dir("library-stuck-restart");
+    let storage = storage_dir.to_string_lossy().into_owned();
+    let store = AppStateStore::new(Some(&storage)).expect("store");
+    store.library_cache_hub_items(&[hub_test_item("rch:1"), hub_test_item("rch:2")]).expect("cache");
+    store.library_set_hub_item_state("rch:1", "downloading").expect("state");
+    let package = "44".repeat(16);
+    store.library_record_offer(&package, &"55".repeat(16), &"66".repeat(32), 5).expect("offer");
+    store.library_set_offer_state(&package, "downloading").expect("offer state");
+    drop(store);
+
+    let store = AppStateStore::new(Some(&storage)).expect("reopen");
+    let hub = store.library_hub_items().expect("hub items");
+    let availability = |id: &str| hub.iter().find(|item| item.item_id == id).expect(id).availability;
+    assert_eq!(availability("rch:1"), r3akt_library_core::Availability::Failed);
+    assert_eq!(availability("rch:2"), r3akt_library_core::Availability::Remote, "idle items untouched");
+    let offers = store.library_offer_items().expect("offers");
+    assert_eq!(offers.len(), 1, "offer kept");
+    assert_eq!(offers[0].availability, r3akt_library_core::Availability::Failed);
+}
+
+#[test]
+fn library_hub_download_without_an_answer_fails_after_the_deadline_and_retries() {
+    let storage_dir = test_storage_dir("library-stuck-deadline");
+    let store = AppStateStore::new(Some(&storage_dir.to_string_lossy())).expect("store");
+    store.library_cache_hub_items(&[hub_test_item("rch:1")]).expect("cache");
+    store.library_set_hub_item_state("rch:1", "downloading").expect("state");
+    let availability = || store.library_hub_item("rch:1").expect("item").expect("present").availability;
+    assert_eq!(availability(), r3akt_library_core::Availability::Downloading, "inside the deadline");
+
+    let started = crate::numeric::u64_to_i64_saturating(now_ms()) - LIBRARY_HUB_DOWNLOAD_DEADLINE_MS - 1;
+    store
+        .connect()
+        .expect("connect")
+        .execute("UPDATE rem_library_hub_items SET state_ts_ms = ?1", params![started])
+        .expect("backdate");
+    assert_eq!(availability(), r3akt_library_core::Availability::Failed, "lost answer can be retried");
+    store.library_cache_hub_items(&[hub_test_item("rch:1")]).expect("refresh");
+    assert_eq!(availability(), r3akt_library_core::Availability::Failed, "refresh keeps it retryable");
+
+    // Retry, or a late hub answer, sets `downloading` again with a fresh clock.
+    store.library_set_hub_item_state("rch:1", "downloading").expect("retry");
+    assert_eq!(availability(), r3akt_library_core::Availability::Downloading);
+}

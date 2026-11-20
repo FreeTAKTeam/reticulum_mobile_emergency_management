@@ -56,6 +56,10 @@ fn persist_received_library_answer(
                 .filter(|_| ok);
             let started = match (package, library_share()) {
                 (Some(package), Ok(share)) => {
+                    // A late answer restarts the deadline and shows the pull again.
+                    if let Err(error) = state.app_state.library_set_hub_item_state(&item_id, "downloading") {
+                        warn!("[library] hub item state not stored: {error}");
+                    }
                     share.download_from_hub(item_id.clone(), package);
                     true
                 }

@@ -3,6 +3,10 @@
 // download and then live as normal Library items.
 
 const LIBRARY_HUB_STATUS_KEY: &str = "library_hub_status";
+/// A hub download with no answer or RPP result after this long is shown as
+/// failed so it can be retried: two minutes for the hub answer plus the 45 s
+/// RPP fetch timeout.
+pub(crate) const LIBRARY_HUB_DOWNLOAD_DEADLINE_MS: i64 = 165_000;
 
 impl AppStateStore {
     fn initialize_library_hub(connection: &Connection) -> Result<(), NodeError> {
@@ -14,6 +18,22 @@ impl AppStateStore {
                     state TEXT NOT NULL
                 );",
             )
+            .map_err(library_store_error)?;
+        // Added after 1.8.0: when `state` last changed, for the download deadline.
+        if connection.prepare("SELECT state_ts_ms FROM rem_library_hub_items LIMIT 0").is_err() {
+            connection
+                .execute_batch(
+                    "ALTER TABLE rem_library_hub_items ADD COLUMN state_ts_ms INTEGER NOT NULL DEFAULT 0",
+                )
+                .map_err(library_store_error)?;
+        }
+        // No RPP pull survives a restart, so a download left over can never finish.
+        connection
+            .execute(
+                "UPDATE rem_library_hub_items SET state = 'failed' WHERE state = 'downloading'",
+                [],
+            )
+            .map(|_| ())
             .map_err(library_store_error)
     }
 
@@ -49,8 +69,8 @@ impl AppStateStore {
     pub(crate) fn library_set_hub_item_state(&self, item_id: &str, state: &str) -> Result<(), NodeError> {
         self.connect()?
             .execute(
-                "UPDATE rem_library_hub_items SET state = ?2 WHERE item_id = ?1",
-                params![item_id, state],
+                "UPDATE rem_library_hub_items SET state = ?2, state_ts_ms = ?3 WHERE item_id = ?1",
+                params![item_id, state, crate::numeric::u64_to_i64_saturating(now_ms())],
             )
             .map(|_| ())
             .map_err(library_store_error)
@@ -59,19 +79,24 @@ impl AppStateStore {
     pub(crate) fn library_hub_items(&self) -> Result<Vec<r3akt_library_core::LibraryItem>, NodeError> {
         let connection = self.connect()?;
         let mut statement = connection
-            .prepare("SELECT item_json, state FROM rem_library_hub_items")
+            .prepare("SELECT item_json, state, state_ts_ms FROM rem_library_hub_items")
             .map_err(library_store_error)?;
         let rows = statement
-            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?))
+            })
             .map_err(library_store_error)?;
+        let now = crate::numeric::u64_to_i64_saturating(now_ms());
         let mut items = Vec::new();
         for row in rows {
-            let (json, state) = row.map_err(library_store_error)?;
+            let (json, state, state_ts) = row.map_err(library_store_error)?;
+            // A lost hub answer must not leave the item stuck; Retry resets the clock.
+            let expired = now.saturating_sub(state_ts) > LIBRARY_HUB_DOWNLOAD_DEADLINE_MS;
             let mut item: r3akt_library_core::LibraryItem =
                 serde_json::from_str(&json).map_err(library_store_error)?;
             item.availability = match state.as_str() {
-                "downloading" => r3akt_library_core::Availability::Downloading,
-                "failed" => r3akt_library_core::Availability::Failed,
+                "downloading" if !expired => r3akt_library_core::Availability::Downloading,
+                "downloading" | "failed" => r3akt_library_core::Availability::Failed,
                 _ => r3akt_library_core::Availability::Remote,
             };
             items.push(item);
