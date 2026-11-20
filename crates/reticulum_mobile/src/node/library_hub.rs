@@ -6,15 +6,27 @@
 pub(crate) const LIBRARY_LIST_PREFIX: &str = "library-list-";
 pub(crate) const LIBRARY_FETCH_PREFIX: &str = "library-fetch-";
 
+/// The fetch command ID carries its item (hex), so the answer finds it even
+/// though RCH echoes REM's command ID, not REM's correlation ID.
+fn library_fetch_command_id(item_id: &str) -> String {
+    format!("{LIBRARY_FETCH_PREFIX}{}-{}", hex::encode(item_id), map_marker_command_id())
+}
+
+/// The item a fetch command ID (or a correlation echoing one) was sent for.
+pub(crate) fn library_fetch_item_id(command_id: &str) -> Option<String> {
+    let (item_hex, _) = command_id.strip_prefix(LIBRARY_FETCH_PREFIX)?.split_once('-')?;
+    String::from_utf8(hex::decode(item_hex).ok()?).ok()
+}
+
 fn library_hub_fields(
     identity_hex: &str,
-    prefix: &str,
+    command_id: String,
     command_type: &str,
     args: JsonValue,
     correlation_id: Option<String>,
 ) -> Result<Vec<u8>, NodeError> {
     let command = r3akt_profile_rch::MissionCommandEnvelope {
-        command_id: format!("{prefix}{}", map_marker_command_id()),
+        command_id,
         source: r3akt_profile_rch::RchSource::new(identity_hex),
         timestamp: r3akt_map_core::time::iso8601_from_unix_ms(crate::numeric::u64_to_i64_saturating(
             now_ms(),
@@ -67,7 +79,7 @@ impl Node {
         }
         let fields = library_hub_fields(
             &identity_hex,
-            LIBRARY_LIST_PREFIX,
+            format!("{LIBRARY_LIST_PREFIX}{}", map_marker_command_id()),
             r3akt_library_core::LIST_COMMAND,
             args,
             None,
@@ -89,7 +101,7 @@ impl Node {
         let (hub, identity_hex) = self.library_hub_target()?;
         let fields = library_hub_fields(
             &identity_hex,
-            LIBRARY_FETCH_PREFIX,
+            library_fetch_command_id(&item_id),
             r3akt_library_core::ITEM_FETCH_COMMAND,
             json!({ "item_id": item_id, "rpp_identity": identity_hex }),
             Some(item_id.clone()),

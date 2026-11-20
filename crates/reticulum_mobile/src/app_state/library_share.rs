@@ -38,6 +38,14 @@ impl AppStateStore {
                     received_ts_ms INTEGER NOT NULL
                 );",
             )
+            .map_err(library_store_error)?;
+        // No RPP pull survives a restart, so a download left over can never finish.
+        connection
+            .execute(
+                "UPDATE rem_library_offers SET state = 'failed' WHERE state = 'downloading'",
+                [],
+            )
+            .map(|_| ())
             .map_err(library_store_error)
     }
 
