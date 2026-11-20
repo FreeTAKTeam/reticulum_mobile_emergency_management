@@ -115,8 +115,11 @@ export const useLibraryStore = defineStore("library", () => {
     thumbnails,
     hubStatus,
     init,
+    // Reload first so a lost hub answer still shows current local state (such
+    // as expired downloads) and a hub request error is not then cleared; the
+    // hub's answer refreshes again when it arrives.
     refreshHub: () =>
-      run(async () =>
+      refresh().then(() => run(async () =>
         (await nodeStore.libraryClient()).refreshLibraryHub({
           kind: kind.value === "all" ? undefined : kind.value,
           mission_uid: mission.value || undefined,
@@ -124,7 +127,7 @@ export const useLibraryStore = defineStore("library", () => {
           page: 1,
           per_page: 50,
         }),
-      ),
+      )),
     refresh,
     importFile: (pick: "all" | "image") =>
       run(async () => (await nodeStore.libraryClient()).importLibraryFile(pick)),
