@@ -205,6 +205,10 @@ async fn send_lxmf_with_legacy_delivery_policy(
                 last_error = Some(err);
                 break;
             }
+            Err(err) if should_wait_for_direct_path(send_mode, &err) => {
+                await_direct_lxmf_route(state, requested_destination_hex, require_current_peer)
+                    .await?
+            }
             Err(err) => return Err(err),
         };
         last_resolved_destination_hex = Some(resolved_destination_hex.clone());

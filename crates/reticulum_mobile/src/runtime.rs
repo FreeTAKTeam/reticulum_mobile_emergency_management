@@ -23,6 +23,7 @@ include!("runtime/messages_commands.rs");
 include!("runtime/relay_chat.rs");
 include!("runtime/managed_links.rs");
 include!("runtime/team_link_policy.rs");
+include!("runtime/hub_presence.rs");
 include!("runtime/ack_tracking.rs");
 include!("runtime/ack_retries.rs");
 include!("runtime/delivery_send.rs");
@@ -380,6 +381,7 @@ mod tests {
     include!("runtime/tests/delivery_receipt_tracking.rs");
     include!("runtime/tests/delivery_mission_recovery_sends_do_not_wait_on_satu.rs");
     include!("runtime/tests/hub_directory.rs");
+    include!("runtime/tests/hub_presence.rs");
     include!("runtime/tests/interfaces.rs");
     include!("runtime/tests/mission_events.rs");
     include!("runtime/tests/peers_routes_direct_delivery_health_blocks_and_restores.rs");
