@@ -1,6 +1,8 @@
 .timeline {
   display: grid;
   gap: 0.8rem;
+  /* minmax(0) stops one unbreakable string from widening the whole screen */
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .event {
@@ -9,6 +11,8 @@
     linear-gradient(130deg, rgb(13 32 65 / 92%), rgb(9 19 43 / 90%));
   border: 1px solid rgb(73 112 170 / 28%);
   border-radius: 14px;
+  min-width: 0;
+  overflow-wrap: anywhere;
   padding: 0.8rem 1rem;
 }
 
