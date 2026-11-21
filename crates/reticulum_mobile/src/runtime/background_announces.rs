@@ -32,6 +32,13 @@ fn spawn_announce_tasks(
         });
     }
 
+    spawn_hub_interface_announcer(
+        state,
+        app_destination,
+        announce_capabilities,
+        power_saver_rx.clone(),
+    );
+
     {
         let transport = state.transport.clone();
         let app_destination = app_destination.clone();

@@ -346,8 +346,8 @@ async fn maintain_managed_peer_links_once(state: &NodeRuntimeState, bus: &EventB
                 continue;
             }
         }
-        let still_saved_and_current =
-            peer_for_any_destination_hex(state, target.destination_hex.as_str())
+        let still_saved_and_current = is_hub_link_destination(state, &target.destination_hex)
+            || peer_for_any_destination_hex(state, target.destination_hex.as_str())
                 .await
                 .is_some_and(|peer| managed_peer_link_target(&peer).is_some());
         if still_saved_and_current {

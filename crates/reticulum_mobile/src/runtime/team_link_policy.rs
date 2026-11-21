@@ -30,6 +30,9 @@ fn peer_has_maintained_link_membership(
 }
 
 async fn should_maintain_peer_link(state: &NodeRuntimeState, destination: &str) -> bool {
+    if is_hub_link_destination(state, destination) {
+        return true;
+    }
     let destinations = match maintained_link_destinations(&state.app_state) {
         Ok(destinations) => destinations,
         Err(error) => {
@@ -45,11 +48,16 @@ async fn should_maintain_peer_link(state: &NodeRuntimeState, destination: &str) 
 async fn reconcile_team_link_targets(state: &NodeRuntimeState) -> Result<(), NodeError> {
     let destinations = maintained_link_destinations(&state.app_state)?;
     let peers = state.messaging.lock().await.list_peers();
-    let desired = peers
+    let mut desired = peers
         .iter()
         .filter(|peer| peer_has_maintained_link_membership(peer, &destinations))
         .filter_map(managed_peer_link_target)
         .collect::<Vec<_>>();
+    if let Some(hub) = configured_hub_link_target(state)
+        .filter(|hub| !desired.iter().any(|next| next.destination_hex == hub.destination_hex))
+    {
+        desired.push(hub);
+    }
     let stale = state
         .managed_peer_links
         .desired_targets()
