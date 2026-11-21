@@ -54,6 +54,11 @@ export function resolveHouseholdId(typed: string, appDestinationHex: string): st
   return typed.trim().toLowerCase() || householdIdFromDestination(appDestinationHex);
 }
 
+/** True for a household status body ("MECP/2/B04 #HH_x REMCS1:<base64>"), whose payload is machine-only. */
+export function isHouseholdWireText(raw: string): boolean {
+  return raw.includes(" REMCS1:");
+}
+
 const COMMUNITY_EVENT_UID_PREFIX = "rem-community-status-v1:";
 
 /** Source identity of a household status event, or "" when the event is something else. */

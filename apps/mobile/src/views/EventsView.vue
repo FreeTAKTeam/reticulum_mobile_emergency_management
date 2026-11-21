@@ -10,6 +10,7 @@ import { useNodeStore } from "../stores/nodeStore";
 import {
   communityEventDetails,
   communityEventSourceIdentity,
+  isHouseholdWireText,
   statusLabel,
   type CommunityStatusProjection,
 } from "../utils/communityStatus";
@@ -434,8 +435,10 @@ async function deleteEvent(uid: string): Promise<void> {
           <div v-if="event.mecp.extras.length > 0" class="mecp-extra-list" aria-label="Decoded MECP details">
             <span v-for="extra in event.mecp.extras" :key="extra">{{ extra }}</span>
           </div>
-          <p v-if="event.mecp.details" class="mecp-details">{{ event.mecp.details }}</p>
-          <p class="mecp-raw">{{ event.mecp.raw }}</p>
+          <template v-if="!isHouseholdWireText(event.mecp.raw)">
+            <p v-if="event.mecp.details" class="mecp-details">{{ event.mecp.details }}</p>
+            <p class="mecp-raw">{{ event.mecp.raw }}</p>
+          </template>
           <p v-if="event.mecp.warnings.length > 0" class="mecp-warning">
             {{ event.mecp.warnings.join(" ") }}
           </p>

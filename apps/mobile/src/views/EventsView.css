@@ -429,6 +429,8 @@ h1 {
     font-size: 0.78rem;
     gap: 0.38rem;
     min-height: 2.7rem;
+    /* the grid column (min 2.8rem) sizes the add button, so it cannot overflow the header */
+    min-width: 0;
     padding-inline: 0.46rem;
   }
 
