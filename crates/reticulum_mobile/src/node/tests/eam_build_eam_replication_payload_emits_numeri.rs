@@ -230,6 +230,8 @@ fn build_event() -> EventProjectionRecord {
         deleted_at_ms: None,
         correlation_id: Some("corr-1".to_string()),
         topics: vec!["mission-1".to_string()],
+        latitude: None,
+        longitude: None,
     }
 }
 

@@ -74,6 +74,8 @@ async fn delete_event_replicates_to_native_peer_projection() {
         deleted_at_ms: None,
         correlation_id: Some("corr-evt-delete-native".to_string()),
         topics: vec!["r3akt-default-mission".to_string(), "Default".to_string()],
+        latitude: None,
+        longitude: None,
     };
 
     let upsert_ack_subscription = node_a.subscribe_events();

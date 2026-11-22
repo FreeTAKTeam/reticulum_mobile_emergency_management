@@ -211,6 +211,8 @@ fn situation_event_for(
         deleted_at_ms: None,
         correlation_id: household_id.map(str::to_string),
         topics: vec![DEFAULT_R3AKT_MISSION_UID.to_string()],
+        latitude: None,
+        longitude: None,
     })
 }
 

@@ -287,6 +287,8 @@ export function toEventProjectionRecord(raw: Record<string, unknown>): EventProj
       content_hashes: contentHashes,
       source_identity: sourceIdentity || undefined,
       source_display_name: sourceDisplayName,
+      latitude: toOptionalNumber(args.latitude ?? raw.latitude),
+      longitude: toOptionalNumber(args.longitude ?? raw.longitude),
     },
     correlation_id:
       typeof raw.correlation_id === "string"
@@ -320,6 +322,8 @@ export function eventProjectionRecordToPlugin(record: EventProjectionRecord): Re
     deletedAt: normalized.deleted_at,
     correlationId: normalized.correlation_id,
     topics: normalized.topics,
+    latitude: normalized.args.latitude,
+    longitude: normalized.args.longitude,
   };
 }
 

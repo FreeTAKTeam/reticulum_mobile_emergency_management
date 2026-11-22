@@ -71,6 +71,8 @@ fn sos_beacon_event_for(
         deleted_at_ms: None,
         correlation_id: Some(incident_id.to_string()),
         topics: vec![SOS_EVENT_MISSION_UID.to_string()],
+        latitude: None,
+        longitude: None,
     })
 }
 

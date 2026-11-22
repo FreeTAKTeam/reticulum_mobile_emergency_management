@@ -61,6 +61,8 @@ export interface EventSeed {
     content_hashes?: string[];
     source_identity?: string;
     source_display_name?: string;
+    latitude?: number;
+    longitude?: number;
   };
   correlation_id?: string;
   topics?: string[];

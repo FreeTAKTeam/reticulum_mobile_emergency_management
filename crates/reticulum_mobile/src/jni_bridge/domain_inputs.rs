@@ -54,6 +54,8 @@ struct EventProjectionInput {
     deleted_at: Option<u64>,
     correlation_id: Option<String>,
     topics: Vec<String>,
+    latitude: Option<f64>,
+    longitude: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]

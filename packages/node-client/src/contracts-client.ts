@@ -1,5 +1,6 @@
 import type { SensorGeometryClient } from "./contracts-sensors";
 import type { TelemetryPublicationSnapshot } from "./contracts-telemetry";
+import type { EventProjectionRecord } from "./contracts-events";
 import type {
   LogLevel, HubMode, RnodeRegion, RnodeProfileId, RnodeConnectionMode, RuntimeReadinessState, PeerState, AnnounceDestinationKind,
   AnnounceClass, SendOutcome, LxmfDeliveryStatus, TransportDeliveryState, ApplicationAckState, SendMode, LxmfDeliveryMethod, LxmfDeliveryRepresentation,
@@ -15,7 +16,7 @@ import type {
   ChecklistMode, ChecklistSyncState, ChecklistOriginType, ChecklistTaskStatus, ChecklistUserTaskStatus, ChecklistColumnType, ChecklistStatusCounts, ChecklistColumnRecord,
   ChecklistCellRecord, ChecklistTaskRecord, ChecklistFeedPublicationRecord, ChecklistRecord, ChecklistTemplateRecord, HubDirectoryPeerRecord, TelemetrySettingsRecord, ChecklistSettingsRecord,
   AppSettingsRecord, SavedPeerRecord, EamSourceRecord, EamProjectionRecord, EamTeamSummaryRecord, EamReadinessStatusMetricRecord, EamReadinessMessageRecord, EamReadinessSummaryRecord,
-  EventProjectionRecord, TelemetryPositionRecord, SosSettingsRecord, SosDeviceTelemetryRecord, SosStatusRecord, SosAlertRecord, SosLocationRecord, SosAudioRecord,
+  TelemetryPositionRecord, SosSettingsRecord, SosDeviceTelemetryRecord, SosStatusRecord, SosAlertRecord, SosLocationRecord, SosAudioRecord,
   LegacyImportPayload, ProjectionInvalidationEvent, OperationalSummary, HubDirectoryUpdatedEvent, NodeLogEvent, NodeOperationalNoticeEvent,
   NodeErrorEvent, NodeClientEvents,
   BlockOnboardingDraft, SignedBlockOnboardingEnvelope, BlockOnboardingInspection,

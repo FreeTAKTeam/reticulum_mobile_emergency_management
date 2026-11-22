@@ -573,6 +573,11 @@ MECP event body contract:
 - Sender and time remain canonical in the REM envelope through `args.callsign`, `args.server_time`, `args.client_time`, and projection timestamps. Outbound REM events must not duplicate callsign or timestamp tokens inside the MECP body.
 - The MECP codec may decode portable external callsign or timestamp tokens when they are received, but timeline display still prefers the REM envelope for callsign and time.
 
+Event position (map layer):
+- RCH adds `args.latitude` and `args.longitude` to a relayed `mission.registry.log_entry.upsert` when the event arrived with telemetry. Rust keeps them only when both are present and in range, stores them on `EventProjectionRecord`, and an update without a position keeps the stored one.
+- The map draws each non-deleted event at that position, or at the MECP coordinates in its text (`MECP/1/S02 40.000000,-75.000000`) when there is none, coloured by MECP severity. Events with neither are not drawn.
+- REM does not yet send a position on events it creates.
+
 Additional event forms:
 - Mission bootstrap command:
   - `command_type: "mission.registry.mission.upsert"`

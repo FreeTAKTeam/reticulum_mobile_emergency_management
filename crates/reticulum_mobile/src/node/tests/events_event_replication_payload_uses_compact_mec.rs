@@ -29,6 +29,8 @@ fn event_replication_payload_uses_compact_mecp_envelope_with_compatible_metadata
         deleted_at_ms: None,
         correlation_id: Some("event-upsert-legacy".to_string()),
         topics: vec!["r3akt-default-mission".to_string(), "Default".to_string()],
+        latitude: None,
+        longitude: None,
     };
     let target = MissionReplicationTarget {
         app_destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
@@ -150,6 +152,8 @@ fn event_replication_payload_stays_under_direct_and_propagation_packet_budgets()
                 .to_string(),
         ),
         topics: vec!["r3akt-default-mission".to_string(), "Default".to_string()],
+        latitude: None,
+        longitude: None,
     };
     let (body, fields) =
         build_event_replication_payload(&status, &record, &target).expect("event payload");
@@ -423,6 +427,8 @@ async fn targeted_upsert_event_replicates_to_native_peer_projection() {
         deleted_at_ms: None,
         correlation_id: Some("corr-evt-upsert-native".to_string()),
         topics: vec!["r3akt-default-mission".to_string(), "Default".to_string()],
+        latitude: None,
+        longitude: None,
     };
 
     node_a

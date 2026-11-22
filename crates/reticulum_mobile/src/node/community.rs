@@ -250,6 +250,8 @@ fn community_event_for(
         deleted_at_ms: None,
         correlation_id: None,
         topics: vec![COMMUNITY_TOPIC.to_string()],
+        latitude: None,
+        longitude: None,
     })
 }
 

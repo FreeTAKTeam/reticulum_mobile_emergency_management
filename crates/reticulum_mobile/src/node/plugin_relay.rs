@@ -260,6 +260,8 @@ impl Node {
             deleted_at_ms: None,
             correlation_id: Some(uid),
             topics: vec!["gotenna-relay".to_string()],
+            latitude: None,
+            longitude: None,
         })?;
         Ok(json!({"accepted":true}))
     }
