@@ -848,7 +848,7 @@ checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
 name = "lxmf-propagation"
-version = "0.16.2-rc.2-linux"
+version = "0.17.0"
 dependencies = [
  "hex",
  "hkdf",
@@ -865,14 +865,14 @@ dependencies = [
 
 [[package]]
 name = "lxmf-reference"
-version = "0.16.2-rc.2-linux"
+version = "0.17.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "lxmf-runtime"
-version = "0.16.2-rc.2-linux"
+version = "0.17.0"
 dependencies = [
  "base64",
  "hex",
@@ -891,7 +891,7 @@ dependencies = [
 
 [[package]]
 name = "lxmf-sdk"
-version = "0.16.2-rc.2-linux"
+version = "0.17.0"
 dependencies = [
  "hex",
  "hmac",
@@ -906,7 +906,7 @@ dependencies = [
 
 [[package]]
 name = "lxmf-wire"
-version = "0.16.2-rc.2-linux"
+version = "0.17.0"
 dependencies = [
  "base64",
  "ed25519-dalek",
@@ -1197,7 +1197,7 @@ dependencies = [
 
 [[package]]
 name = "rdo-core"
-version = "0.16.2-rc.2-linux"
+version = "0.17.0"
 dependencies = [
  "ed25519-dalek",
  "log",
@@ -1229,7 +1229,7 @@ dependencies = [
 
 [[package]]
 name = "reticulum-rs"
-version = "0.16.2-rc.2-linux"
+version = "0.17.0"
 dependencies = [
  "reticulum-rs-core",
  "reticulum-rs-transport",
@@ -1237,7 +1237,7 @@ dependencies = [
 
 [[package]]
 name = "reticulum-rs-core"
-version = "0.16.2-rc.2-linux"
+version = "0.17.0"
 dependencies = [
  "aes",
  "atomicwrites",
@@ -1257,7 +1257,7 @@ dependencies = [
 
 [[package]]
 name = "reticulum-rs-transport"
-version = "0.16.2-rc.2-linux"
+version = "0.17.0"
 dependencies = [
  "aes",
  "base64",
@@ -1362,7 +1362,7 @@ dependencies = [
 
 [[package]]
 name = "rpp-core"
-version = "0.16.2-rc.2-linux"
+version = "0.17.0"
 dependencies = [
  "log",
  "rand_core",
