@@ -19,11 +19,13 @@ export function chatPolicyReason(
   saverActive: boolean,
   destination: string,
   savedPeer?: SavedPeer,
+  hubIdentityHash = "",
 ): string {
   if (saverActive) {
     return "Power saver pauses ordinary chat and retry. SOS and permitted location updates remain available.";
   }
-  if (destination && savedPeer?.circleTier !== "inner") {
+  // The configured hub is never a saved peer, but its chats must stay answerable.
+  if (destination && savedPeer?.circleTier !== "inner" && !normalizedValuesMatch(destination, hubIdentityHash)) {
     return "Chat and exact location require a saved Inner Circle peer. Change this peer's tier in Peers.";
   }
   return "";
