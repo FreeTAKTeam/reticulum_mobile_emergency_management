@@ -440,7 +440,7 @@ export function decodeMecpMessage(input: string): DecodedMecpMessage {
   for (const token of tokens.slice(detailsStart)) {
     const timestampMatch = token.match(TIMESTAMP_PATTERN);
     if (timestampMatch) {
-      extras.timestamp = `${timestampMatch[1]}${timestampMatch[2]}`;
+      extras.timestamp ??= `${timestampMatch[1]}${timestampMatch[2]}`;
       continue;
     }
     const languageMatch = token.match(LANGUAGE_PATTERN);

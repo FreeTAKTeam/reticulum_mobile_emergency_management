@@ -17,7 +17,6 @@ const vectors = await response.json();
 
 // Cases this decoder does not pass yet, reported as TODO instead of failing.
 const KNOWN_FAILURES = new Set([
-  "timestamp MECP/3/L06 @2460 @1400 @1530",
   "timestamp MECP/3/L01 @123",
   "timestamp MECP/2/T05 @1430,",
   "reference MECP/2/C08 #base-camp,",
