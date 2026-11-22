@@ -105,6 +105,7 @@ const selectedSavedPeer = computed(() => Object.values(nodeStore.savedByDestinat
 ));
 const chatDisabledReason = computed(() => chatPolicyReason(
   nodeStore.powerState.saverActive, selectedDestinationHex.value, selectedSavedPeer.value,
+  nodeStore.settings.hub.identityHash,
 ));
 const activeThreadMessages = computed(() => {
   const selectedConversationRecord = selectedConversation.value ?? activeThreadConversation.value;
