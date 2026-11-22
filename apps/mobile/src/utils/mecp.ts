@@ -445,7 +445,7 @@ export function decodeMecpMessage(input: string): DecodedMecpMessage {
     }
     const languageMatch = token.match(LANGUAGE_PATTERN);
     if (languageMatch) {
-      extras.language = languageMatch[1].toLowerCase();
+      extras.language ??= languageMatch[1].toLowerCase();
       continue;
     }
     const callsignMatch = token.match(CALLSIGN_PATTERN);
@@ -463,7 +463,7 @@ export function decodeMecpMessage(input: string): DecodedMecpMessage {
       const latitude = Number.parseFloat(coordinateMatch[1]);
       const longitude = Number.parseFloat(coordinateMatch[2]);
       if (latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180) {
-        extras.coordinates = { latitude, longitude };
+        extras.coordinates ??= { latitude, longitude };
       } else {
         warnings.push(`Coordinates outside valid range: "${token}".`);
       }

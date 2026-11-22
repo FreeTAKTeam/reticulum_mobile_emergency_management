@@ -85,3 +85,10 @@ test("MECP decoding keeps the first valid person count", () => {
   assert.equal(decodeMecpMessage("MECP/1/S01 2pax 5pax").extras.pax, 2);
   assert.equal(decodeMecpMessage("MECP/1/S01 0pax 2pax").extras.pax, 2);
 });
+
+test("MECP decoding keeps the first position and language hint", () => {
+  const decoded = decodeMecpMessage("MECP/3/L06 47.3,8.5 48.65,20.13 @en @de");
+
+  assert.deepEqual(decoded.extras.coordinates, { latitude: 47.3, longitude: 8.5 });
+  assert.equal(decoded.extras.language, "en");
+});
