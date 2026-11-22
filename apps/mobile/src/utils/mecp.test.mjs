@@ -80,3 +80,8 @@ test("MECP decoding accepts compact wire bodies with additional text", () => {
   assert.equal(decoded.details, "Bolle");
   assert.equal(decoded.raw, "H01 Bolle");
 });
+
+test("MECP decoding keeps the first valid person count", () => {
+  assert.equal(decodeMecpMessage("MECP/1/S01 2pax 5pax").extras.pax, 2);
+  assert.equal(decodeMecpMessage("MECP/1/S01 0pax 2pax").extras.pax, 2);
+});

@@ -85,7 +85,7 @@ const CALLSIGN_PATTERN = /^~([A-Za-z0-9][A-Za-z0-9_-]*)$/;
 const COORDINATE_PATTERN = /^(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)$/;
 const ETA_PATTERN = /^(\d{1,4})(?:m|min)?$/i;
 const LANGUAGE_PATTERN = /^@([A-Za-z]{2,3})$/;
-const PAX_PATTERN = /^(\d{1,4})pax$/i;
+const PAX_PATTERN = /^0*([1-9]\d{0,3})pax$/i;
 const REFERENCE_PATTERN = /^#([A-Za-z0-9][A-Za-z0-9_.-]*)$/;
 const TIMESTAMP_PATTERN = /^@([01]\d|2[0-3])([0-5]\d)$/;
 const VALID_SEVERITIES = new Set<number>([0, 1, 2, 3]);
@@ -455,7 +455,7 @@ export function decodeMecpMessage(input: string): DecodedMecpMessage {
     }
     const paxMatch = token.match(PAX_PATTERN);
     if (paxMatch) {
-      extras.pax = Number.parseInt(paxMatch[1], 10);
+      extras.pax ??= Number.parseInt(paxMatch[1], 10);
       continue;
     }
     const coordinateMatch = token.match(COORDINATE_PATTERN);
