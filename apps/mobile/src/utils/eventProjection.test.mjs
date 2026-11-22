@@ -89,3 +89,18 @@ test("event type keywords replace stale tags and remove duplicates", () => {
     ["ops", "r3akt:event-type:Medical"],
   );
 });
+
+test("event position prefers the hub position over MECP coordinates", () => {
+  const base = { uid: "e1", content: "MECP/1/S02 40.000000,-75.000000", updatedAt: 1 };
+  const withBoth = normalizeEvent({ ...base, args: { latitude: 44, longitude: -63 } });
+  assert.deepEqual(toTimelineRecord(withBoth).position, { lat: 44, lon: -63 });
+
+  const mecpOnly = normalizeEvent(base);
+  assert.deepEqual(toTimelineRecord(mecpOnly).position, { lat: 40, lon: -75 });
+
+  const halfPosition = normalizeEvent({ ...base, args: { latitude: 44 } });
+  assert.deepEqual(toTimelineRecord(halfPosition).position, { lat: 40, lon: -75 });
+
+  const none = normalizeEvent({ uid: "e2", content: "Field report", updatedAt: 1 });
+  assert.equal(toTimelineRecord(none).position, undefined);
+});

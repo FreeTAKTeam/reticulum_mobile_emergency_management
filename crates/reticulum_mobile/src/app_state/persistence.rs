@@ -89,6 +89,26 @@ impl AppStateStore {
         transaction: &Transaction<'_>,
         record: &EventProjectionRecord,
     ) -> Result<(), NodeError> {
+        let mut record = std::borrow::Cow::Borrowed(record);
+        if record.latitude.is_none() || record.longitude.is_none() {
+            // An update without a position keeps the position already stored for the event.
+            let existing = transaction
+                .query_row(
+                    "SELECT json FROM events WHERE uid = ?1",
+                    params![record.uid],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?
+                .map(|raw| deserialize_json::<EventProjectionRecord>(&raw))
+                .transpose()?;
+            if let Some(existing) = existing.filter(|e| e.latitude.is_some() && e.longitude.is_some()) {
+                let updated = record.to_mut();
+                updated.latitude = existing.latitude;
+                updated.longitude = existing.longitude;
+            }
+        }
+        let record = record.as_ref();
         let json = serialize_json(record)?;
         transaction
             .execute(

@@ -110,6 +110,8 @@ pub struct EventProjectionRecord {
     pub deleted_at_ms: Option<u64>,
     pub correlation_id: Option<String>,
     pub topics: Vec<String>,
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

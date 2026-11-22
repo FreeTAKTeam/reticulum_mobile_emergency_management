@@ -49,6 +49,8 @@ fn to_event_projection_record(input: EventProjectionInput) -> EventProjectionRec
         deleted_at_ms: input.deleted_at,
         correlation_id: input.correlation_id,
         topics: input.topics,
+        latitude: input.latitude,
+        longitude: input.longitude,
     }
 }
 

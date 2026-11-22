@@ -718,6 +718,8 @@ dictionary EventProjectionRecord {
   u64? deleted_at_ms;
   string? correlation_id;
   sequence<string> topics;
+  f64? latitude;
+  f64? longitude;
 };
 
 dictionary CommunityStatusProjectionRecord {

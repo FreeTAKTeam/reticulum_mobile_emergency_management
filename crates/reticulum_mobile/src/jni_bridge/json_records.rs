@@ -170,7 +170,9 @@ fn event_projection_json(record: &EventProjectionRecord) -> serde_json::Value {
             "keywords": record.keywords,
             "content_hashes": record.content_hashes,
             "source_identity": record.source_identity,
-            "source_display_name": record.source_display_name
+            "source_display_name": record.source_display_name,
+            "latitude": record.latitude,
+            "longitude": record.longitude
         },
         "correlation_id": record.correlation_id,
         "topics": record.topics,

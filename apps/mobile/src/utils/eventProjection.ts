@@ -19,6 +19,8 @@ export type EventTimelineRecord = {
   summary: string;
   callsign: string;
   updatedAt: number;
+  /** Event position from the hub, else the MECP coordinates; absent when neither exists. */
+  position?: { lat: number; lon: number };
   mecp?: {
     raw: string;
     severity: string;
@@ -180,14 +182,28 @@ export function toTimelineRecord(record: EventProjectionRecord): EventTimelineRe
         byteLength: parsed.byteLength,
       }
     : undefined;
+  const position = eventPosition(record, parsed);
   return {
     uid: getEventUid(record),
     type: parsed.valid ? mecpCategoryLabel(parsed.category) : getEventType(record),
     summary: getEventContent(record),
     callsign: asTrimmedString(record.args.callsign) || "Unknown",
     updatedAt: getEventUpdatedAt(record),
+    ...(position ? { position } : {}),
     mecp,
   };
+}
+
+function eventPosition(
+  record: EventProjectionRecord,
+  parsed: DecodedMecpMessage,
+): EventTimelineRecord["position"] {
+  const { latitude, longitude } = record.args;
+  if (typeof latitude === "number" && typeof longitude === "number") {
+    return { lat: latitude, lon: longitude };
+  }
+  const coordinates = parsed.valid ? parsed.extras.coordinates : null;
+  return coordinates ? { lat: coordinates.latitude, lon: coordinates.longitude } : undefined;
 }
 
 export function normalizeEvent(
@@ -241,6 +257,8 @@ export function normalizeEvent(
       ),
       source_identity: sourceIdentity || undefined,
       source_display_name: sourceDisplayName || undefined,
+      latitude: typeof rawArgs.latitude === "number" ? rawArgs.latitude : undefined,
+      longitude: typeof rawArgs.longitude === "number" ? rawArgs.longitude : undefined,
     },
     correlation_id: asTrimmedString(raw.correlation_id) || undefined,
     topics: normalizeTopics(raw.topics, missionUid),

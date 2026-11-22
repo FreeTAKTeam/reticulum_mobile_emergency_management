@@ -264,6 +264,7 @@ pub(crate) fn event_projection_from_fields(
         let correlation_id = msgpack_get_named(command_map, &["correlation_id", "c"])
             .and_then(msgpack_string)
             .or_else(|| Some(command_id.clone()));
+        let (latitude, longitude) = event_position(args).unzip();
         return Some(EventProjectionRecord {
             uid,
             command_id,
@@ -299,10 +300,20 @@ pub(crate) fn event_projection_from_fields(
             deleted_at_ms: msgpack_get_named(args, &["deleted_at_ms", "d"]).and_then(msgpack_u64),
             correlation_id,
             topics,
+            latitude,
+            longitude,
         });
     }
 
     None
+}
+
+/// RCH sends the event position as `latitude`/`longitude` args; both must be present and in range.
+fn event_position(args: &[(MsgPackValue, MsgPackValue)]) -> Option<(f64, f64)> {
+    let latitude = msgpack_get_named(args, &["latitude"]).and_then(msgpack_f64)?;
+    let longitude = msgpack_get_named(args, &["longitude"]).and_then(msgpack_f64)?;
+    ((-90.0..=90.0).contains(&latitude) && (-180.0..=180.0).contains(&longitude))
+        .then_some((latitude, longitude))
 }
 
 async fn persist_received_event_if_present(

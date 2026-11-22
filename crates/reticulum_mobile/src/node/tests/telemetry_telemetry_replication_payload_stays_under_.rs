@@ -214,6 +214,8 @@ fn sample_event() -> EventProjectionRecord {
         deleted_at_ms: None,
         correlation_id: Some("corr-1".to_string()),
         topics: vec!["mission".to_string()],
+        latitude: None,
+        longitude: None,
     }
 }
 
