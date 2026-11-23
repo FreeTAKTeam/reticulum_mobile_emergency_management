@@ -129,6 +129,7 @@ export const MECP_EVENT_CODES: Record<MecpCategoryCode, MecpEventCode[]> = {
     { code: "M13", label: "Poisoning / toxic exposure" },
     { code: "M14", label: "Persons located alive" },
     { code: "M15", label: "Area searched, no victims found" },
+    { code: "M16", label: "Medical supply drop needed" },
   ],
   T: [
     { code: "T01", label: "Road blocked" },
@@ -187,7 +188,7 @@ export const MECP_EVENT_CODES: Record<MecpCategoryCode, MecpEventCode[]> = {
   R: [
     { code: "R01", label: "Acknowledged" },
     { code: "R02", label: "Help coming" },
-    { code: "R03", label: "ETA [minutes]" },
+    { code: "R03", label: "ETA [time]" },
     { code: "R04", label: "Cannot assist" },
     { code: "R05", label: "Redirecting to" },
     { code: "R06", label: "Stand by" },
