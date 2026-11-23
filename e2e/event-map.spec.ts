@@ -19,28 +19,32 @@ test("events with a position are drawn on the map layer", async ({ page }, info)
   });
   await gotoApp(page, "/dashboard");
   await page.getByRole("link", { name: "Map", exact: true }).click();
-  const layer = page.getByTestId("event-map-layer");
-  const features = () => layer.evaluate((el: any) =>
-    (el.__vueParentComponent.props.map.getStyle().sources["rem-events"] as any)?.data?.features ?? []);
-  await expect.poll(async () => (await features()).length).toBe(2);
-  const byCallsign = Object.fromEntries((await features()).map((f: any) => [f.properties.callsign, f]));
-  expect(byCallsign.R4.geometry.coordinates).toEqual([-63, 44]);
-  expect(byCallsign.R4.properties.severity).toBe("red");
-  expect(byCallsign.R5.geometry.coordinates).toEqual([-74, 41]);
-  expect(byCallsign.R5.properties.severity).toBe("green");
-  const point = await layer.evaluate((el: any) => {
+  const markers = page.locator(".maplibregl-marker.event-map-marker");
+  await expect(markers).toHaveCount(2);
+  // Mayday is red, Safety is green; each carries its category icon, not a dot.
+  const hub = page.locator('[data-event-uid="evt-hub"]');
+  await expect(hub).toHaveClass(/is-red/);
+  await expect(page.locator('[data-event-uid="evt-mecp"]')).toHaveClass(/is-green/);
+  await expect(hub.locator("svg")).toBeVisible();
+  const positions = await page.getByTestId("event-map-layer").evaluate((el: any) => {
     const map = el.__vueParentComponent.props.map;
     map.jumpTo({ center: [-63, 44], zoom: 8 });
-    const { x, y } = map.project([-63, 44]);
+    const at = (uid: string) => document.querySelector(`[data-event-uid="${uid}"]`)!.getBoundingClientRect();
     const box = map.getCanvas().getBoundingClientRect();
-    return { x: box.left + x, y: box.top + y };
+    const centre = (r: DOMRect) => map.unproject([r.x + r.width / 2 - box.left, r.y + r.height / 2 - box.top]);
+    return { hub: centre(at("evt-hub")), mecp: centre(at("evt-mecp")) };
   });
-  await expect.poll(() => layer.evaluate((el: any) =>
-    el.__vueParentComponent.props.map.queryRenderedFeatures({ layers: ["rem-events-circle"] }).length)).toBeGreaterThan(0);
-  await page.mouse.click(point.x, point.y);
+  expect(positions.hub.lng).toBeCloseTo(-63, 1);
+  expect(positions.hub.lat).toBeCloseTo(44, 1);
+  expect(positions.mecp.lng).toBeCloseTo(-74, 1);
+  expect(positions.mecp.lat).toBeCloseTo(41, 1);
+  await hub.click();
   const popup = page.locator(".event-map-popup");
-  await expect(popup).toContainText("Medical");
-  await expect(popup).toContainText("R4");
   await expect(popup).toContainText("injury");
+  await expect(popup).toContainText("Mayday");
+  await expect(popup).toContainText("R4");
   await page.screenshot({ path: info.outputPath("rem-event-map.png") });
+  await popup.getByRole("button", { name: "Open event" }).click();
+  await expect(page).toHaveURL(/\/events\?event=evt-hub/);
+  await expect(page.locator('[data-event-uid="evt-hub"].event-focused')).toBeVisible();
 });

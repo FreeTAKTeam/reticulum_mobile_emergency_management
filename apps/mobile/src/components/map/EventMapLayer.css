@@ -1,0 +1,89 @@
+/* Events are square icon badges; round dots are reserved for presence. */
+.event-map-marker {
+  --event-color: #8a9ba8;
+  align-items: center;
+  background: #071025;
+  border: 2px solid var(--event-color);
+  border-radius: 9px;
+  box-shadow: 0 0 12px rgb(0 0 0 / 45%);
+  color: var(--event-color);
+  cursor: pointer;
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 34px;
+  justify-content: center;
+  padding: 0;
+  width: 34px;
+}
+
+.event-map-marker svg {
+  fill: none;
+  height: 20px;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.9;
+  width: 20px;
+}
+
+.event-map-marker.is-red,
+.event-map-chip.is-red {
+  --event-color: #d9534f;
+}
+
+.event-map-marker.is-yellow,
+.event-map-chip.is-yellow {
+  --event-color: #e7b55a;
+}
+
+.event-map-marker.is-green,
+.event-map-chip.is-green {
+  --event-color: #5cb85c;
+}
+
+/* Mayday is not signalled by colour alone. */
+.event-map-marker.is-red::after {
+  background: var(--event-color);
+  border-radius: 8px;
+  color: #071025;
+  content: "!";
+  font: 900 11px/15px var(--font-ui);
+  height: 15px;
+  position: absolute;
+  right: -7px;
+  text-align: center;
+  top: -7px;
+  width: 15px;
+}
+
+.event-map-popup-head {
+  align-items: center;
+  display: flex;
+  gap: 0.6rem;
+  padding-right: 0.9rem;
+}
+
+.event-map-popup-head .event-map-marker {
+  cursor: default;
+  position: relative;
+}
+
+.event-map-chip {
+  --event-color: #8a9ba8;
+  border: 1px solid var(--event-color);
+  border-radius: 999px;
+  color: var(--event-color);
+  display: inline-block;
+  font: 900 0.7rem/1rem var(--font-ui);
+  margin-top: 0.2rem;
+  padding: 0 0.45rem;
+  text-transform: uppercase;
+}
+
+.event-map-popup .popup-action-button {
+  flex: 1;
+}
+
+.event-map-popup .popup-title::first-letter {
+  text-transform: uppercase;
+}

@@ -2,6 +2,7 @@
 import { nextTick, reactive, ref, watch } from "vue";
 
 import { MECP_CATEGORIES, type MecpCategoryCode } from "../../utils/mecp";
+import { mecpIconBody } from "../../utils/mecpCategoryIcons";
 
 const props = defineProps<{
   modelValue: MecpCategoryCode;
@@ -144,42 +145,7 @@ watch(
         @click="selectCategory(category.code)"
       >
         <span class="category-icon">
-          <svg v-if="category.icon === 'medical'" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="M12 5v14" /><path d="M5 12h14" /><path d="M6 6h12v12H6z" />
-          </svg>
-          <svg v-else-if="category.icon === 'terrain'" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="M4 18 9 7l4 7 2-4 5 8" /><path d="M8 18h8" /><path d="M11 12h2" />
-          </svg>
-          <svg v-else-if="category.icon === 'weather'" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="M7 17h10a4 4 0 0 0 0-8 6 6 0 0 0-11.6 2" /><path d="M8 20l2-3" /><path d="M14 20l2-3" />
-          </svg>
-          <svg v-else-if="category.icon === 'supplies'" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="M5 9h14v10H5z" /><path d="M8 9V6h8v3" /><path d="M12 12v4" /><path d="M10 14h4" />
-          </svg>
-          <svg v-else-if="category.icon === 'position'" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="M12 21s6-5.2 6-11a6 6 0 0 0-12 0c0 5.8 6 11 6 11Z" /><path d="M12 10h.01" />
-          </svg>
-          <svg v-else-if="category.icon === 'coordination'" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="M6 8h6" /><path d="M12 8l5 5" /><path d="M7 17h10" /><circle cx="6" cy="8" r="2" /><circle cx="18" cy="14" r="2" />
-          </svg>
-          <svg v-else-if="category.icon === 'response'" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="m5 13 4 4L19 7" /><path d="M4 20h16" />
-          </svg>
-          <svg v-else-if="category.icon === 'drill'" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="M5 8h14" /><path d="M7 8v10" /><path d="M17 8v10" /><path d="m8 6 2-2" /><path d="m14 6 2-2" />
-          </svg>
-          <svg v-else-if="category.icon === 'leisure'" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="M5 15h14" /><path d="M8 15v4" /><path d="M16 15v4" /><path d="M7 12a5 5 0 0 1 10 0" />
-          </svg>
-          <svg v-else-if="category.icon === 'threat'" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="M12 4 3 20h18L12 4Z" /><path d="M12 9v4" /><path d="M12 17h.01" />
-          </svg>
-          <svg v-else-if="category.icon === 'resources'" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="M7 12 12 7l5 5" /><path d="M8 12v7h8v-7" /><path d="M10 19v-4h4v4" />
-          </svg>
-          <svg v-else viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="M12 3v4" /><path d="M12 17v4" /><path d="M4 12h4" /><path d="M16 12h4" /><circle cx="12" cy="12" r="4" />
-          </svg>
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" v-html="mecpIconBody(category.icon)" />
         </span>
         <span class="category-copy">
           <strong>{{ category.label }}</strong>
