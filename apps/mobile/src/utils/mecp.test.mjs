@@ -11,7 +11,7 @@ const transpiled = ts.transpileModule(source, {
   },
 }).outputText;
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(transpiled).toString("base64")}`;
-const { decodeMecpMessage, encodeMecpMessage } = await import(moduleUrl);
+const { decodeMecpMessage, encodeMecpMessage, mecpEventLabel } = await import(moduleUrl);
 
 test("MECP encoding round-trips every portable boundary field", () => {
   const encoded = encodeMecpMessage({
@@ -79,6 +79,11 @@ test("MECP decoding accepts compact wire bodies with additional text", () => {
   assert.equal(decoded.codeDetails[0]?.label, "Have water available");
   assert.equal(decoded.details, "Bolle");
   assert.equal(decoded.raw, "H01 Bolle");
+});
+
+test("MECP code labels follow MECP 1.4.1", () => {
+  assert.equal(mecpEventLabel("M16"), "M16 Medical supply drop needed");
+  assert.equal(mecpEventLabel("R03"), "R03 ETA [time]");
 });
 
 test("MECP decoding keeps the first valid person count", () => {
