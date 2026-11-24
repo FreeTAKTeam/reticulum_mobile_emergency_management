@@ -9,6 +9,8 @@ import { markerSymbolColor } from "../utils/mapMarkerPresentation";
 
 const LONG_PRESS_MS = 550;
 const LONG_PRESS_TOLERANCE_PX = 10;
+/** Browsers replay a touch as mouse events shortly after touchend; ignore those. */
+const TOUCH_MOUSE_ECHO_MS = 700;
 
 interface MapMarkerPinOptions {
   map: Ref<MapLibreMap | null>;
@@ -19,6 +21,8 @@ interface MapMarkerPinOptions {
   hiddenKey: Ref<string | null>;
   onSelect: (key: string) => void;
   onLongPress: (lat: number, lon: number) => void;
+  /** A short press on the map itself (not on a pin) that did not move. */
+  onMapTap: () => void;
 }
 
 /** Picture markers (r3akt-uas #19) draw the relayed thumbnail itself. */
@@ -71,10 +75,15 @@ function pinElement(onSelect: () => void, picture: boolean): HTMLDivElement {
   return element;
 }
 
+function startedOnPin(event: MapMouseEvent | MapTouchEvent): boolean {
+  const target = event.originalEvent.target;
+  return target instanceof Element && target.closest(".map-marker-pin") !== null;
+}
+
 /** Renders shared markers as MapLibre DOM pins, separate from telemetry and SOS. */
 export function useMapMarkerPins(options: MapMarkerPinOptions): void {
   const pins = new Map<string, { marker: maplibregl.Marker; element: HTMLDivElement; icon: string }>();
-  let detachLongPress: (() => void) | null = null;
+  let detachGestures: (() => void) | null = null;
 
   function removePin(key: string): void {
     pins.get(key)?.marker.remove();
@@ -142,9 +151,14 @@ export function useMapMarkerPins(options: MapMarkerPinOptions): void {
     }
   }
 
-  function attachLongPress(map: MapLibreMap): () => void {
+  /**
+   * Long-press (touch hold or desktop context menu) and plain tap on the map.
+   * A press is tracked from its origin until it moves, ends, or the map starts moving.
+   */
+  function attachGestures(map: MapLibreMap): () => void {
     let timer: ReturnType<typeof setTimeout> | null = null;
-    let origin: { x: number; y: number } | null = null;
+    let origin: { x: number; y: number; at: number; onPin: boolean } | null = null;
+    let lastTouchEnd = 0;
     const cancel = (): void => {
       if (timer) {
         clearTimeout(timer);
@@ -152,39 +166,67 @@ export function useMapMarkerPins(options: MapMarkerPinOptions): void {
       timer = null;
       origin = null;
     };
-    const start = (event: MapTouchEvent): void => {
+    const begin = (event: MapMouseEvent | MapTouchEvent): void => {
+      origin = { x: event.point.x, y: event.point.y, at: Date.now(), onPin: startedOnPin(event) };
+    };
+    const finish = (): void => {
+      const press = origin;
+      cancel();
+      if (press && !press.onPin && Date.now() - press.at < LONG_PRESS_MS) {
+        options.onMapTap();
+      }
+    };
+    const touchStart = (event: MapTouchEvent): void => {
       cancel();
       if (event.originalEvent.touches.length !== 1) {
         return;
       }
-      origin = { x: event.point.x, y: event.point.y };
+      begin(event);
       const { lat, lng } = event.lngLat;
       timer = setTimeout(() => {
         timer = null;
+        origin = null;
         options.onLongPress(lat, lng);
       }, LONG_PRESS_MS);
     };
-    const move = (event: MapTouchEvent): void => {
+    const touchEnd = (): void => {
+      lastTouchEnd = Date.now();
+      finish();
+    };
+    const mouseDown = (event: MapMouseEvent): void => {
+      cancel();
+      if (event.originalEvent.button === 0 && Date.now() - lastTouchEnd > TOUCH_MOUSE_ECHO_MS) {
+        begin(event);
+      }
+    };
+    const move = (event: MapMouseEvent | MapTouchEvent): void => {
       if (origin && Math.hypot(event.point.x - origin.x, event.point.y - origin.y) > LONG_PRESS_TOLERANCE_PX) {
         cancel();
       }
     };
     const contextMenu = (event: MapMouseEvent): void => {
       event.preventDefault();
+      cancel();
       options.onLongPress(event.lngLat.lat, event.lngLat.lng);
     };
-    map.on("touchstart", start);
+    map.on("touchstart", touchStart);
     map.on("touchmove", move);
-    map.on("touchend", cancel);
+    map.on("touchend", touchEnd);
     map.on("touchcancel", cancel);
+    map.on("mousedown", mouseDown);
+    map.on("mousemove", move);
+    map.on("mouseup", finish);
     map.on("movestart", cancel);
     map.on("contextmenu", contextMenu);
     return () => {
       cancel();
-      map.off("touchstart", start);
+      map.off("touchstart", touchStart);
       map.off("touchmove", move);
-      map.off("touchend", cancel);
+      map.off("touchend", touchEnd);
       map.off("touchcancel", cancel);
+      map.off("mousedown", mouseDown);
+      map.off("mousemove", move);
+      map.off("mouseup", finish);
       map.off("movestart", cancel);
       map.off("contextmenu", contextMenu);
     };
@@ -193,8 +235,8 @@ export function useMapMarkerPins(options: MapMarkerPinOptions): void {
   watch(
     options.map,
     (map) => {
-      detachLongPress?.();
-      detachLongPress = map ? attachLongPress(map) : null;
+      detachGestures?.();
+      detachGestures = map ? attachGestures(map) : null;
       sync();
     },
     { immediate: true },
@@ -205,8 +247,8 @@ export function useMapMarkerPins(options: MapMarkerPinOptions): void {
   );
 
   onBeforeUnmount(() => {
-    detachLongPress?.();
-    detachLongPress = null;
+    detachGestures?.();
+    detachGestures = null;
     for (const key of [...pins.keys()]) {
       removePin(key);
     }

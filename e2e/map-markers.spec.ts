@@ -29,6 +29,13 @@ async function expectMarkerCount(page: Page, label: string): Promise<void> {
   await page.getByRole("button", { name: "Map menu" }).click();
 }
 
+async function placeFirstMarker(page: Page, symbol: string, dialogName: string): Promise<void> {
+  await page.getByRole("button", { name: "Add marker" }).click();
+  await page.getByRole("dialog", { name: "Choose a marker symbol" }).locator(`[data-symbol="${symbol}"]`).click();
+  await page.getByLabel("Aim marker").getByRole("button", { name: `Place ${symbol}` }).click();
+  await expect(page.getByRole("dialog", { name: dialogName })).toBeVisible();
+}
+
 test("adds, edits and removes a shared-symbol marker from the map", async ({ page }) => {
   await openMap(page);
   await expectMarkerCount(page, "Markers: 0, shown");
@@ -148,4 +155,29 @@ test("uses RCH colors through placement and selection without a frame", async ({
     await details.getByRole("button", { name: "Delete", exact: true }).click();
     await details.getByRole("button", { name: "Delete", exact: true }).click();
   }
+});
+
+test("a long-press while the details sheet is open places the next marker directly", async ({ page }) => {
+  await openMap(page);
+  await placeFirstMarker(page, "fire", "Marker Fire 1");
+
+  const canvas = page.locator(".map-container .maplibregl-canvas");
+  await canvas.click({ button: "right", position: { x: 60, y: 160 } });
+
+  await expect(page.getByRole("dialog", { name: "Marker Fire 2" })).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Marker Fire 1" })).toHaveCount(0);
+  await expect(page.locator(".map-marker-pin")).toHaveCount(2);
+});
+
+test("a tap on empty map closes the details sheet", async ({ page }) => {
+  await openMap(page);
+  await placeFirstMarker(page, "medic", "Marker Medic 1");
+
+  const canvas = page.locator(".map-container .maplibregl-canvas");
+  await canvas.click({ position: { x: 60, y: 160 } });
+
+  await expect(page.getByRole("dialog", { name: "Marker Medic 1" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Add marker" })).toBeVisible();
+  await expect(page.locator(".map-marker-pin")).toHaveCount(1);
+  await expectMarkerCount(page, "Markers: 1, shown");
 });
