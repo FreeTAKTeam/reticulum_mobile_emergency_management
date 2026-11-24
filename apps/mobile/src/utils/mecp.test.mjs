@@ -97,3 +97,9 @@ test("MECP decoding keeps the first position and language hint", () => {
   assert.deepEqual(decoded.extras.coordinates, { latitude: 47.3, longitude: 8.5 });
   assert.equal(decoded.extras.language, "en");
 });
+
+test("MECP decoding keeps the first valid callsign", () => {
+  assert.equal(decodeMecpMessage("MECP/3/L20 ~OK1ABC ~W1AW").extras.callsign, "OK1ABC");
+  assert.equal(decodeMecpMessage("MECP/3/L20 ~ABCDEFGHIJKLM ~OK1ABC").extras.callsign, "OK1ABC");
+  assert.equal(decodeMecpMessage("MECP/3/L20 ~ABCDEFGHIJKL").extras.callsign, "ABCDEFGHIJKL");
+});

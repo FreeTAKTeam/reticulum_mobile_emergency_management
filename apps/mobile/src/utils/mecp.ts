@@ -16,6 +16,7 @@ export type * from "./mecpTypes";
 const MECP_PREFIX = "MECP/";
 const CODE_PATTERN = /^[A-Z]\d{2}$/;
 const CALLSIGN_PATTERN = /^~([A-Za-z0-9][A-Za-z0-9_-]*)$/;
+const MAX_CALLSIGN_LENGTH = 12;
 const COORDINATE_PATTERN = /^(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)$/;
 const ETA_PATTERN = /^(\d{1,4})(?:m|min)?$/i;
 const LANGUAGE_PATTERN = /^@([A-Za-z]{2,3})$/;
@@ -385,7 +386,9 @@ export function decodeMecpMessage(input: string): DecodedMecpMessage {
     }
     const callsignMatch = token.match(CALLSIGN_PATTERN);
     if (callsignMatch) {
-      extras.callsign = callsignMatch[1];
+      if (callsignMatch[1].length <= MAX_CALLSIGN_LENGTH) {
+        extras.callsign ??= callsignMatch[1];
+      }
       continue;
     }
     const paxMatch = token.match(PAX_PATTERN);
