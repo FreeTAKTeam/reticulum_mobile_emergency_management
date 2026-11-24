@@ -13,7 +13,7 @@ It answers two urgent questions:
 
 REM is built around simple pages for team status, chat, checklists, map positions, peer discovery, and event logs. It can work directly with trusted peers over Reticulum mesh networking, and it can also use Reticulum Community Hub support when a team chooses that setup.
 
-The current Android source version is `1.9.0`. CI builds against Fabric
+The current Android source version is `1.9.1`. CI builds against Fabric
 (formerly LXMF-rs) release `v0.17.0` at source revision
 `99fc770e83ed56eec81a23d8b4b864fe2cfde80e`.
 Automated validation and the two-phone TCP matrix are release gates; the
