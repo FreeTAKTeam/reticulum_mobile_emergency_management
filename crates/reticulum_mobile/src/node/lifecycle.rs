@@ -135,6 +135,12 @@ impl Node {
 
         // Forward Rust logs to the UI event bus.
         NodeLogger::global().set_bus(Some(inner.bus.clone()));
+        emit_checklist_clock_repairs(
+            &inner.bus,
+            inner.app_state.repair_future_checklist_clocks(
+                crate::numeric::u64_to_i64_saturating(now_ms() / 1_000),
+            )?,
+        );
 
         if let Ok(guard) = inner.status.lock() {
             inner.bus.emit(NodeEvent::StatusChanged {
@@ -435,4 +441,37 @@ impl Node {
         )
     }
 
+}
+
+fn emit_checklist_clock_repairs(bus: &EventBus, outcomes: Vec<ChecklistClockRepairOutcome>) {
+    for outcome in outcomes {
+        let (level, message) = match outcome {
+            ChecklistClockRepairOutcome::Repaired {
+                checklist_uid,
+                anchor,
+                fields,
+            } => (
+                LogLevel::Warn {},
+                format!(
+                    "Repaired checklist {checklist_uid}: {} future-dated version timestamp(s) reset to {anchor} ({}); original kept in checklist_clock_repairs",
+                    fields.len(),
+                    fields.join(", ")
+                ),
+            ),
+            ChecklistClockRepairOutcome::Skipped {
+                checklist_uid,
+                reason,
+            } => (
+                LogLevel::Error {},
+                format!("Checklist {checklist_uid} not repaired: {reason}"),
+            ),
+        };
+        bus.emit(NodeEvent::OperationalNotice {
+            notice: OperationalNotice {
+                level,
+                message,
+                at_ms: now_ms(),
+            },
+        });
+    }
 }
