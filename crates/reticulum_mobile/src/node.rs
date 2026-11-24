@@ -18,8 +18,8 @@ use tokio::sync::{mpsc, watch};
 
 use crate::announce_metadata::has_capability_token;
 use crate::app_state::{
-    canonicalize_chat_message, ChecklistClockRepairOutcome, current_timestamp_rfc3339, AppStateStore, ConversationPeerResolver,
-    HouseholdSituationWrite, LibraryEntry,
+    canonicalize_chat_message, current_timestamp_rfc3339, AppStateStore,
+    ChecklistClockRepairOutcome, ConversationPeerResolver, HouseholdSituationWrite, LibraryEntry,
 };
 use crate::delivery_policy;
 use crate::delivery_policy::normalize_hex_32;
