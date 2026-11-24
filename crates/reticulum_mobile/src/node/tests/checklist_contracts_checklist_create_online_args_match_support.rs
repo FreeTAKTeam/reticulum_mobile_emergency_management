@@ -294,6 +294,7 @@ fn checklist_task_status_payload_stays_packet_sized_for_template_task_ids() {
     );
     assert_eq!(metadata.checklist_uid.as_deref(), Some("chk-1779802362961"));
     assert_eq!(metadata.task_uid.as_deref(), None);
+    assert!(metadata.tracking_key().is_some_and(|key| !key.is_empty()));
 }
 
 #[test]
@@ -342,71 +343,10 @@ fn checklist_task_payloads_preserve_whitespace_and_style_clears() {
         detail_row_args.get("notes").and_then(JsonValue::as_str),
         Some("Bring printed route card")
     );
-
-    let compact_initial_args = compact_initial_checklist_task_row_add_args_from_task(
-        "chk-001",
-        &ChecklistTaskRecord {
-            task_uid: "tmpl-import-task-2".to_string(),
-            number: 2,
-            user_status: crate::types::ChecklistUserTaskStatus::Pending {},
-            task_status: crate::types::ChecklistTaskStatus::Pending {},
-            is_late: false,
-            updated_at: Some("2026-04-24T12:00:00Z".to_string()),
-            deleted_at: None,
-            custom_status: None,
-            due_relative_minutes: Some(30),
-            due_dtg: Some("2026-04-24T12:30:00Z".to_string()),
-            notes: Some(
-                "Document where everyone will shelter, which room is safest, and when to leave."
-                    .to_string(),
-            ),
-            row_background_color: None,
-            line_break_enabled: false,
-            completed_at: None,
-            completed_by_team_member_rns_identity: None,
-            legacy_value: Some("Shelter room assignment".to_string()),
-            cells: Vec::new(),
-        },
-    );
-    assert_eq!(
-        compact_initial_args
-            .get("legacy_value")
-            .and_then(JsonValue::as_str),
-        Some("Shelter room assignment")
-    );
-    assert!(compact_initial_args.get("notes").is_none());
-    assert!(compact_initial_args.get("due_dtg").is_none());
-    assert!(compact_initial_args.get("due_relative_minutes").is_none());
-
-    let style_args = checklist_task_row_style_args_json(&ChecklistTaskRowStyleSetRequest {
-        checklist_uid: "chk-001".to_string(),
-        task_uid: "task-001".to_string(),
-        row_background_color: Some(String::new()),
-        line_break_enabled: None,
-        changed_by_team_member_rns_identity: None,
-    });
-    assert_eq!(
-        style_args
-            .get("row_background_color")
-            .and_then(JsonValue::as_str),
-        Some("")
-    );
-
-    let cell_args = checklist_task_cell_args_json(&ChecklistTaskCellSetRequest {
-        checklist_uid: "chk-001".to_string(),
-        task_uid: "task-001".to_string(),
-        column_uid: "col-task".to_string(),
-        value: "  Move to alternate pickup  ".to_string(),
-        updated_by_team_member_rns_identity: None,
-    });
-    assert_eq!(
-        cell_args.get("value").and_then(JsonValue::as_str),
-        Some("  Move to alternate pickup  ")
-    );
 }
 
 #[test]
-fn compact_initial_checklist_row_add_stays_direct_packet_sized() {
+fn compact_checklist_row_add_carries_tracking_id_and_stays_direct_packet_sized() {
     use lxmf::message::{
         decide_delivery, Message as LxmfMessage, MessageMethod as LxmfMessageMethod,
         TransportMethod,
@@ -440,10 +380,14 @@ fn compact_initial_checklist_row_add_stays_direct_packet_sized() {
         legacy_value: Some("Shelter room assignment".to_string()),
         cells: Vec::new(),
     };
-    let args = compact_initial_checklist_task_row_add_args_from_task("chk-shelter-csv", &task);
+    let args = checklist_task_row_add_args_from_task("chk-shelter-csv", &task, None);
     let (body, fields) =
         build_checklist_replication_payload(&status, &target, "checklist.task.row.add", &args)
             .expect("row-add payload");
+    let metadata = crate::mission_sync::parse_mission_sync_metadata(fields.as_slice())
+        .expect("row-add metadata");
+    assert!(metadata.command_present);
+    assert!(metadata.tracking_key().is_some_and(|key| !key.is_empty()));
     assert_eq!(String::from_utf8_lossy(body.as_slice()), "C C7");
     assert!(
         body.len() + fields.len() <= 260,

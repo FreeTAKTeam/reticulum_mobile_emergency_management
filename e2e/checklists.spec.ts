@@ -21,3 +21,29 @@ test("operators can create a checklist and open its task detail", async ({ page 
   await expect(page.getByRole("heading", { name: "Field readiness" })).toBeVisible();
   await expect(page.locator(".task-card")).not.toHaveCount(0);
 });
+
+test("ticking a checklist task asks first and can be undone", async ({ page }) => {
+  await seedAppStorage(page);
+  await gotoApp(page, "/checklists");
+
+  await page.getByRole("button", { name: "Create checklist" }).click();
+  await page.getByLabel("Checklist title").fill("Tick safety");
+  await page.getByLabel("Checklist template").selectOption({ index: 1 });
+  await page.locator(".create-submit").click();
+  await page.getByRole("button", { name: "Open Tick safety" }).first().click();
+
+  const toggle = page.locator(".task-toggle").first();
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+
+  page.once("dialog", (dialog) => dialog.dismiss());
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+
+  page.once("dialog", (dialog) => dialog.accept());
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+
+  page.once("dialog", (dialog) => dialog.accept());
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+});

@@ -200,6 +200,14 @@ fn emit_lxmf_delivery(
         Ok(None) => {},
         Err(error) => bus.emit(NodeEvent::Error { code: "IoError".to_string(), message: format!("telemetry delivery projection failed: {error}") }),
     }
+    match app_state.record_checklist_delivery(&update) {
+        Ok(invalidations) => {
+            for invalidation in invalidations {
+                bus.emit(NodeEvent::ProjectionInvalidated { invalidation });
+            }
+        }
+        Err(error) => bus.emit(NodeEvent::Error { code: "IoError".to_string(), message: format!("checklist delivery projection failed: {error}") }),
+    }
     bus.emit(NodeEvent::LxmfDelivery { update });
 }
 
@@ -237,6 +245,14 @@ fn emit_lxmf_delivery_with_source(
         Ok(Some(invalidation)) => bus.emit(NodeEvent::ProjectionInvalidated { invalidation }),
         Ok(None) => {},
         Err(error) => bus.emit(NodeEvent::Error { code: "IoError".to_string(), message: format!("telemetry delivery projection failed: {error}") }),
+    }
+    match app_state.record_checklist_delivery(&update) {
+        Ok(invalidations) => {
+            for invalidation in invalidations {
+                bus.emit(NodeEvent::ProjectionInvalidated { invalidation });
+            }
+        }
+        Err(error) => bus.emit(NodeEvent::Error { code: "IoError".to_string(), message: format!("checklist delivery projection failed: {error}") }),
     }
     bus.emit(NodeEvent::LxmfDelivery { update });
 }

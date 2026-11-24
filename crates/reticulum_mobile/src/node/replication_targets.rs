@@ -12,7 +12,6 @@ struct PrioritizedMissionReplicationTarget {
 }
 
 type ScheduledMissionSend = (String, Vec<u8>, Vec<u8>, SendMode);
-const CHECKLIST_INITIAL_TASK_SEND_INTERVAL: Duration = Duration::from_millis(100);
 
 fn effective_hub_mode(
     configured_mode: HubMode,

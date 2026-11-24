@@ -121,10 +121,7 @@ impl Node {
         &self,
         request: ChecklistCreateFromTemplateRequest,
     ) -> Result<(), NodeError> {
-        let mut scheduled_sends = Vec::<ScheduledMissionSend>::new();
-        let mut delayed_sends = Vec::<ScheduledMissionSend>::new();
-        let mut cmd_tx = None;
-        let (bus, power_saver_rx) = {
+        let checklist_uid = {
             let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             ensure_outbound_admitted(
                 inner.power_state.saver_active,
@@ -167,151 +164,16 @@ impl Node {
                 .filter(|value| !value.is_empty())
                 .ok_or(NodeError::InvalidConfig {})?
                 .to_string();
-            let create_command_id = format!("cmd-{checklist_uid}");
             let invalidations = inner.app_state.create_checklist_from_template(&request)?;
             for invalidation in invalidations {
                 emit_projection_invalidation(&inner.bus, invalidation);
             }
 
-            if let Some(tx) = inner.cmd_tx.clone() {
-                cmd_tx = Some(tx);
-                let create_request = ChecklistCreateOnlineRequest {
-                    checklist_uid: Some(checklist_uid.clone()),
-                    mission_uid: request.mission_uid.clone(),
-                    template_uid: request.template_uid.clone(),
-                    name: request.name.clone(),
-                    description: request.description.clone(),
-                    start_time: request.start_time.clone(),
-                    created_by_team_member_rns_identity: request
-                        .created_by_team_member_rns_identity
-                        .clone(),
-                    created_by_team_member_display_name: request
-                        .created_by_team_member_display_name
-                        .clone(),
-                };
-                let mut snapshot = inner
-                    .app_state
-                    .get_checklist_any(checklist_uid.as_str())?
-                    .ok_or(NodeError::InternalError {})?;
-                snapshot.uploaded_at = Some(current_timestamp_rfc3339());
-                snapshot.last_changed_by_team_member_rns_identity =
-                    request.created_by_team_member_rns_identity.clone();
-                snapshot.sync_state = crate::types::ChecklistSyncState::Synced {};
-                let invalidations = inner
-                    .app_state
-                    .upsert_checklist(&snapshot, "checklist-uploaded")?;
-                for invalidation in invalidations {
-                    emit_projection_invalidation(&inner.bus, invalidation);
-                }
-                let create_args = compact_checklist_create_online_args_json(
-                    &create_request,
-                    snapshot.expected_task_count,
-                )?;
-                let create_replicates_template_tasks =
-                    create_template_replicates_tasks_from_template(&create_args);
-                let peers = inner
-                    .peers_snapshot
-                    .lock()
-                    .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
-                    .clone();
-                let hub_directory_snapshot = inner
-                    .hub_directory_snapshot
-                    .lock()
-                    .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
-                    .clone();
-                let saved_peers = inner.app_state.get_saved_peers()?;
-                let sync_status = inner
-                    .sync_status_snapshot
-                    .lock()
-                    .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
-                    .clone();
-                let replication_targets = build_runtime_checklist_replication_targets(
-                    &status,
-                    peers.as_slice(),
-                    saved_peers.as_slice(),
-                    sync_status.active_propagation_node_hex.as_deref(),
-                    inner.active_config.as_ref(),
-                    hub_directory_snapshot.as_ref(),
-                    Some(&snapshot),
-                )?;
-                for target in replication_targets {
-                    match build_checklist_replication_payload_with_command_id(
-                        &status,
-                        &target,
-                        "checklist.create.online",
-                        &create_args,
-                        Some(create_command_id.as_str()),
-                    ) {
-                        Ok((body, fields)) => scheduled_sends.push((
-                            target.app_destination_hex.clone(),
-                            body,
-                            fields,
-                            target.send_mode,
-                        )),
-                        Err(err) => inner.bus.emit(NodeEvent::Error {
-                            code: "InvalidConfig".to_string(),
-                            message: format!(
-                                "checklist replication skipped destination={} command={} reason={}",
-                                target.app_destination_hex, "checklist.create.online", err
-                            ),
-                        }),
-                    }
-                    if !create_replicates_template_tasks {
-                        delayed_sends.extend(build_initial_checklist_task_payloads(
-                            &status,
-                            &target,
-                            checklist_uid.as_str(),
-                            snapshot.tasks.as_slice(),
-                            request.created_by_team_member_rns_identity.as_deref(),
-                        ));
-                    }
-                }
-            }
-
-            (inner.bus.clone(), inner.power_saver_tx.subscribe())
+            checklist_uid
         };
-
-        let Some(tx) = cmd_tx else {
-            return Ok(());
-        };
-
-        for send in scheduled_sends {
-            let destination_hex = send.0.clone();
-            if let Err(err) =
-                dispatch_scheduled_mission_send(&tx, send, *power_saver_rx.borrow())
-            {
-                bus.emit(NodeEvent::Error {
-                    code: "NotRunning".to_string(),
-                    message: format!(
-                        "checklist replication enqueue failed destination={} command={} reason={}",
-                        destination_hex, "checklist.create.online", err
-                    ),
-                });
-            }
-        }
-
-        if !delayed_sends.is_empty() {
-            let bus = bus.clone();
-            std::thread::spawn(move || {
-                for send in delayed_sends {
-                    std::thread::sleep(CHECKLIST_INITIAL_TASK_SEND_INTERVAL);
-                    let destination_hex = send.0.clone();
-                    if let Err(err) =
-                        dispatch_scheduled_mission_send(&tx, send, *power_saver_rx.borrow())
-                    {
-                        bus.emit(NodeEvent::Error {
-                            code: "NotRunning".to_string(),
-                            message: format!(
-                                "checklist replication enqueue failed destination={} command={} reason={}",
-                                destination_hex, "checklist.task.row.add", err
-                            ),
-                        });
-                    }
-                }
-            });
-        }
-
-        Ok(())
+        // The full snapshot is the initial sync unit (#271): it carries every column, cell and
+        // task, and the checklist becomes Synced only when a peer acknowledges it (#269).
+        self.upload_checklist(checklist_uid)
     }
 
     pub fn create_online_checklist(

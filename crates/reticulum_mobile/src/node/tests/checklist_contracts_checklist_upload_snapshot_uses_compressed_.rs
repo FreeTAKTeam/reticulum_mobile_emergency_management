@@ -226,24 +226,6 @@ fn compact_checklist_create_payload_stays_packet_sized() {
 }
 
 #[test]
-fn built_in_checklist_create_replicates_template_tasks() {
-    let request = ChecklistCreateOnlineRequest {
-        checklist_uid: Some("chk-1780000000000".to_string()),
-        mission_uid: Some("LORA".to_string()),
-        template_uid: "tmpl-72-hour-home-preparedness".to_string(),
-        name: "LoRaChk".to_string(),
-        description: String::new(),
-        start_time: "2026-04-23T12:00:00Z".to_string(),
-        created_by_team_member_rns_identity: Some("peer-a".to_string()),
-        created_by_team_member_display_name: Some("Peer A".to_string()),
-    };
-    let create_args =
-        compact_checklist_create_online_args_json(&request, Some(12)).expect("create args");
-
-    assert!(create_template_replicates_tasks_from_template(&create_args));
-}
-
-#[test]
 fn checklist_cell_subject_includes_task_and_column() {
     let task_one_args = checklist_task_cell_args_json(&ChecklistTaskCellSetRequest {
         checklist_uid: "chk-hydrate".to_string(),
@@ -359,9 +341,10 @@ async fn send_built_checklist_replication_payloads_acknowledge_after_persistence
         .command_type
         .clone()
         .expect("create command type");
-    assert!(
-        create_metadata.command_id.is_none(),
-        "compact create updates intentionally omit command ids"
+    assert_eq!(
+        create_metadata.tracking_key(),
+        Some("cmd-chk-operational-ack"),
+        "compact create derives its tracking id from the checklist uid"
     );
 
     node_a
@@ -410,8 +393,8 @@ async fn send_built_checklist_replication_payloads_acknowledge_after_persistence
         .clone()
         .expect("status command type");
     assert!(
-        status_metadata.command_id.is_none(),
-        "compact status updates intentionally omit command ids"
+        status_metadata.tracking_key().is_some(),
+        "compact status updates derive a tracking id"
     );
 
     node_a

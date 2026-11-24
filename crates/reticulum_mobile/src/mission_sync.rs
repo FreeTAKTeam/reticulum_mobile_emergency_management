@@ -242,6 +242,9 @@ fn parse_command_envelope(envelope: &MsgPackValue, metadata: &mut MissionSyncMet
         false,
     );
     parse_identifier_fields(entries, metadata);
+    if metadata.command_id.is_none() && metadata.correlation_id.is_none() {
+        metadata.command_id = compact_checklist_command_id(entries);
+    }
     if let Some(args_entries) = args_entries {
         parse_identifier_fields(args_entries, metadata);
         if let Some(uid) = metadata.event_uid.as_deref() {
@@ -259,6 +262,32 @@ fn parse_command_envelope(envelope: &MsgPackValue, metadata: &mut MissionSyncMet
                 parse_identifier_fields(patch_entries, metadata);
             }
         }
+    }
+}
+
+/// Packet-sized checklist commands have no room for an id, so sender and receiver derive the
+/// same one from the content; a retry of the same change yields the same id.
+fn compact_checklist_command_id(entries: &[(MsgPackValue, MsgPackValue)]) -> Option<String> {
+    let command_type = msgpack_get_named(entries, &["t"])
+        .and_then(msgpack_string)
+        .map(|value| canonical_command_type(value.as_str()).to_string())?;
+    let checklist_uid = msgpack_get_named(entries, &["cl"]).and_then(msgpack_checklist_uid)?;
+    let row = msgpack_get_named(entries, &["tsk"])
+        .and_then(msgpack_string)
+        .or_else(|| {
+            msgpack_get_named(entries, &["no"])
+                .and_then(MsgPackValue::as_u64)
+                .map(|number| format!("n{number}"))
+        })?;
+    match command_type.as_str() {
+        "checklist.task.status.set" => {
+            let done = msgpack_get_named(entries, &["x"])
+                .and_then(MsgPackValue::as_bool)
+                .unwrap_or(false);
+            Some(format!("st-{checklist_uid}-{row}-{}", u8::from(done)))
+        }
+        "checklist.task.row.add" => Some(format!("ra-{checklist_uid}-{row}")),
+        _ => None,
     }
 }
 
@@ -281,6 +310,11 @@ fn parse_positional_command_envelope(values: &[MsgPackValue], metadata: &mut Mis
     set_if_none(
         &mut metadata.checklist_uid,
         values.get(1).and_then(msgpack_checklist_uid),
+    );
+    // Same id the sender uses (`cmd-{uid}`), derived so the packet stays within its budget.
+    set_if_none(
+        &mut metadata.command_id,
+        metadata.checklist_uid.as_deref().map(|uid| format!("cmd-{uid}")),
     );
     let Some(mission_uid) = values.get(2) else {
         return;

@@ -96,16 +96,24 @@ export function useChecklistDetail() {
     return `task-meta-${tone}`;
   }
 
-  async function completeTask(taskId: string): Promise<void> {
+  async function toggleTaskCompletion(task: ChecklistTask): Promise<void> {
     if (!checklistId.value || !liveChecklistRuntimeRecord.value || isMutating.value) {
+      return;
+    }
+    const completed = task.status === "completed";
+    // Ticks replicate to every peer, so a stray tap must not change shared state.
+    const question = completed
+      ? `Mark "${task.title}" as not done?`
+      : `Mark "${task.title}" as done?`;
+    if (!window.confirm(question)) {
       return;
     }
     isMutating.value = true;
     try {
       await checklistsStore.setTaskStatus({
         checklistUid: checklistId.value,
-        taskUid: taskId,
-        userStatus: "COMPLETE",
+        taskUid: task.id,
+        userStatus: completed ? "PENDING" : "COMPLETE",
       });
     } finally {
       isMutating.value = false;
@@ -306,7 +314,7 @@ export function useChecklistDetail() {
     addTaskRow,
     visibleTasks,
     taskStatusClass,
-    completeTask,
+    toggleTaskCompletion,
     isTaskEditing,
     editingTaskValue,
     saveTaskRow,

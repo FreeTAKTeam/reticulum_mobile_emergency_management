@@ -373,6 +373,7 @@ include!("runtime/identity.rs");
 mod tests {
     include!("runtime/tests/support.rs");
     include!("runtime/tests/checklist_clock.rs");
+    include!("runtime/tests/checklist_sync_tracking.rs");
     include!("runtime/tests/checklists_inbound_delete_marks_existing_checklist_de.rs");
     include!("runtime/tests/checklists_upload_snapshot_hydrates_hidden_placeholde.rs");
     include!("runtime/tests/command_tasks.rs");

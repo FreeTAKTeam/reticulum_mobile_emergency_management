@@ -21,7 +21,8 @@ impl Node {
             }
             checklist.uploaded_at = Some(current_timestamp_rfc3339());
             checklist.last_changed_by_team_member_rns_identity = Some(status.identity_hex.clone());
-            checklist.sync_state = crate::types::ChecklistSyncState::Synced {};
+            // Synced is set by `record_checklist_delivery` when a peer accepts the upload.
+            checklist.sync_state = crate::types::ChecklistSyncState::UploadPending {};
             let invalidations = inner
                 .app_state
                 .upsert_checklist(&checklist, "checklist-uploaded")?;
@@ -33,7 +34,8 @@ impl Node {
                 let args = checklist_uid_args_json(normalized_uid);
                 let snapshot_json =
                     serde_json::to_string(&checklist).map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
-                let upload_command_id = format!("cmd-{normalized_uid}-upload");
+                let upload_command_id =
+                    crate::app_state::checklist_upload_command_id(normalized_uid);
                 let peers = inner
                     .peers_snapshot
                     .lock()

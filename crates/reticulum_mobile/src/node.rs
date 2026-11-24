@@ -352,6 +352,7 @@ mod tests {
     include!("node/tests/local_propagation.rs");
     include!("node/tests/checklist_contracts_checklist_create_online_args_match_support.rs");
     include!("node/tests/checklist_contracts_checklist_upload_snapshot_uses_compressed_.rs");
+    include!("node/tests/checklist_initial_sync.rs");
     include!("node/tests/checklist_contracts_create_online_checklist_rejects_invalid_pa.rs");
     include!("node/tests/checklist_routing.rs");
     include!("node/tests/checklist_runtime.rs");
