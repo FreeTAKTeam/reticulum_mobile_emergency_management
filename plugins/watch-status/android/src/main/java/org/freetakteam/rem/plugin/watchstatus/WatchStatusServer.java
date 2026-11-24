@@ -25,6 +25,7 @@ final class WatchStatusServer {
     private final Object lock = new Object();
     private final Set<Socket> clients = ConcurrentHashMap.newKeySet();
     private ServerSocket socket;
+    private Thread acceptThread;
     private ThreadPoolExecutor connections;
     private String bindError = "";
 
@@ -46,7 +47,7 @@ final class WatchStatusServer {
                     });
                 final ServerSocket active = socket;
                 final ThreadPoolExecutor executor = connections;
-                final Thread acceptThread = new Thread(() -> acceptLoop(active, executor, provider, radar), "rem-watch-status-server");
+                acceptThread = new Thread(() -> acceptLoop(active, executor, provider, radar), "rem-watch-status-server");
                 acceptThread.setDaemon(true);
                 acceptThread.start();
             } catch (IOException error) {
@@ -64,6 +65,12 @@ final class WatchStatusServer {
     private void stopLocked() {
         close(socket);
         socket = null;
+        // close() only signals a thread blocked in accept(); the port stays bound until that thread returns.
+        if (acceptThread != null) {
+            try { acceptThread.join(1_000); }
+            catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
+        }
+        acceptThread = null;
         for (Socket client : clients) close(client);
         clients.clear();
         if (connections != null) connections.shutdownNow();
