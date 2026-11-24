@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, reactive, shallowRef, watch } from "vue";
-import { RouterLink } from "vue-router";
+import { computed, nextTick, reactive, shallowRef, watch } from "vue";
+import { RouterLink, useRoute } from "vue-router";
 
 import MecpCategorySelector from "../components/events/MecpCategorySelector.vue";
 import ListWindowControls from "../components/ListWindowControls.vue";
@@ -121,6 +121,18 @@ const events = computed(() =>
 const eventWindow = useListWindow(events, {
   resetKey: () => `${filters.severity}:${filters.category}`,
 });
+
+// "Open event" on the map links here with ?event=<uid>: show its page and scroll to it.
+const route = useRoute();
+const focusedEventUid = computed(() => typeof route.query.event === "string" ? route.query.event : "");
+watch(focusedEventUid, async (uid) => {
+  if (!uid) return;
+  resetFilters();
+  await nextTick(); // let the filter reset rewind the window before paging to the event
+  eventWindow.showIndex(events.value.findIndex((event) => event.uid === uid));
+  await nextTick();
+  document.querySelector(`[data-event-uid="${CSS.escape(uid)}"]`)?.scrollIntoView({ block: "center" });
+}, { immediate: true });
 
 watch(
   () => createForm.category,
@@ -387,8 +399,10 @@ async function deleteEvent(uid: string): Promise<void> {
           {
             'mecp-event': event.mecp,
             [`mecp-event-${event.mecp?.severityStatus}`]: event.mecp,
+            'event-focused': event.uid === focusedEventUid,
           },
         ]"
+        :data-event-uid="event.uid"
         v-for="event in eventWindow.items.value"
         :key="event.uid"
       >

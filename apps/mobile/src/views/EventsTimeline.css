@@ -206,3 +206,8 @@ h3 {
   font-family: var(--font-body);
   margin: 0;
 }
+
+.event-focused {
+  outline: 2px solid #14f0ff;
+  outline-offset: 2px;
+}

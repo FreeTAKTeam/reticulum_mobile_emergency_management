@@ -1,96 +1,85 @@
 <script setup lang="ts">
+import "./EventMapLayer.css";
+
 import * as maplibregl from "maplibre-gl";
-import type { GeoJSONSource, Map as MapLibreMap, MapLayerMouseEvent } from "maplibre-gl";
-import type { FeatureCollection, Point } from "geojson";
+import type { Map as MapLibreMap } from "maplibre-gl";
 import { onBeforeUnmount, watch } from "vue";
+import { useRouter } from "vue-router";
 
 import { useEventsStore } from "../../stores/eventsStore";
+import type { EventTimelineRecord } from "../../utils/eventProjection";
+import { mecpCategoryIconBody } from "../../utils/mecpCategoryIcons";
 
 const props = defineProps<{ map: MapLibreMap | null }>();
 const events = useEventsStore();
-const SOURCE = "rem-events";
-const LAYER = "rem-events-circle";
-const SEVERITY_COLORS = { red: "#d9534f", yellow: "#e7b55a", green: "#5cb85c", unknown: "#8a9ba8" };
+const router = useRouter();
+let markers: maplibregl.Marker[] = [];
 
-function data(): FeatureCollection<Point> {
-  return {
-    type: "FeatureCollection",
-    features: events.records.flatMap((event) => event.position ? [{
-      type: "Feature" as const,
-      geometry: { type: "Point" as const, coordinates: [event.position.lon, event.position.lat] },
-      properties: {
-        severity: event.mecp?.severityStatus ?? "unknown",
-        category: event.type,
-        callsign: event.callsign,
-        text: event.mecp
-          ? [event.mecp.codeLabels.join(", "), event.mecp.details].filter(Boolean).join(" — ")
-          : event.summary,
-      },
-    }] : []),
-  };
-}
-
-function render(): void {
-  const map = props.map;
-  if (!map) return;
-  if (!map.isStyleLoaded()) {
-    // Records rarely change, so wait for the style instead of the next update.
-    map.off("idle", render);
-    map.once("idle", render);
-    return;
-  }
-  const source = map.getSource(SOURCE) as GeoJSONSource | undefined;
-  if (source) {
-    source.setData(data());
-    return;
-  }
-  map.addSource(SOURCE, { type: "geojson", data: data() });
-  map.addLayer({ id: LAYER, source: SOURCE, type: "circle", paint: {
-    "circle-radius": 8,
-    "circle-color": ["match", ["get", "severity"],
-      "red", SEVERITY_COLORS.red, "yellow", SEVERITY_COLORS.yellow, "green", SEVERITY_COLORS.green,
-      SEVERITY_COLORS.unknown],
-    "circle-stroke-color": "#202a30",
-    "circle-stroke-width": 2,
-  } });
-}
-
-function showPopup(event: MapLayerMouseEvent): void {
-  const feature = event.features?.[0];
-  const map = props.map;
-  if (!feature || !map || feature.geometry.type !== "Point") return;
-  const { category, callsign, text } = feature.properties as Record<string, string>;
-  const body = document.createElement("div");
-  body.className = "event-map-popup";
+function el<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text = ""): HTMLElementTagNameMap[K] {
+  const node = document.createElement(tag);
+  node.className = className;
   // textContent only: event text comes from the network.
-  for (const [tag, value] of [["strong", category], ["div", callsign], ["p", text]] as const) {
-    const line = document.createElement(tag);
-    line.textContent = value;
-    body.append(line);
+  node.textContent = text;
+  return node;
+}
+
+// Not a <button>: the global button press transform would fight MapLibre's positioning transform.
+function badge(event: EventTimelineRecord): HTMLElement {
+  const node = el("div", `event-map-marker is-${event.mecp?.severityStatus ?? "unknown"}`);
+  node.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${mecpCategoryIconBody(event.mecp?.categoryCode)}</svg>`;
+  return node;
+}
+
+function popupElement(event: EventTimelineRecord): HTMLDivElement {
+  const body = el("div", "event-map-popup");
+  const head = el("div", "event-map-popup-head");
+  const heading = el("div", "");
+  heading.append(el("div", "popup-title", event.mecp?.codeLabels.join(" + ") || event.type));
+  if (event.mecp) {
+    heading.append(el("span", `event-map-chip is-${event.mecp.severityStatus}`, event.mecp.severity));
   }
-  new maplibregl.Popup({ closeButton: true, offset: 12 })
-    .setLngLat(feature.geometry.coordinates as [number, number])
-    .setDOMContent(body)
-    .addTo(map);
+  head.append(badge(event), heading);
+  const open = el("button", "popup-action-button", "Open event");
+  open.type = "button";
+  open.addEventListener("click", () => void router.push({ name: "events", query: { event: event.uid } }));
+  const actions = el("div", "popup-actions");
+  actions.append(open);
+  body.append(
+    head,
+    el("div", "popup-body", event.mecp ? event.mecp.details : event.summary),
+    el("div", "popup-secondary", [event.callsign, event.mecp?.codes.join(" ")].filter(Boolean).join(" · ")),
+    el("div", "popup-secondary", `${event.position?.lat.toFixed(6)}, ${event.position?.lon.toFixed(6)}`),
+    el("div", "popup-secondary", `Updated ${new Date(event.updatedAt).toLocaleString()}`),
+    actions,
+  );
+  return body;
 }
 
-function detach(map: MapLibreMap | null | undefined): void {
+function clear(): void {
+  for (const marker of markers) marker.remove();
+  markers = [];
+}
+
+// Records rarely change, so rebuild every marker rather than diffing them.
+function render(): void {
+  clear();
+  const map = props.map;
   if (!map) return;
-  map.off("styledata", render);
-  map.off("idle", render);
-  map.off("click", LAYER, showPopup);
-  if (map.getLayer(LAYER)) map.removeLayer(LAYER);
-  if (map.getSource(SOURCE)) map.removeSource(SOURCE);
+  for (const event of events.records) {
+    if (!event.position) continue;
+    const element = badge(event);
+    element.setAttribute("role", "button");
+    element.setAttribute("aria-label", `${event.type} event from ${event.callsign}`);
+    element.dataset.eventUid = event.uid;
+    markers.push(new maplibregl.Marker({ element })
+      .setLngLat([event.position.lon, event.position.lat])
+      .setPopup(new maplibregl.Popup({ closeButton: true, offset: 22 }).setDOMContent(popupElement(event)))
+      .addTo(map));
+  }
 }
 
-watch(() => props.map, (map, previous) => {
-  detach(previous);
-  map?.on("styledata", render);
-  map?.on("click", LAYER, showPopup);
-  render();
-}, { immediate: true });
-watch(() => events.records, render);
-onBeforeUnmount(() => detach(props.map));
+watch([() => props.map, () => events.records], render, { immediate: true });
+onBeforeUnmount(clear);
 </script>
 
 <template>
