@@ -314,7 +314,10 @@ fn parse_positional_command_envelope(values: &[MsgPackValue], metadata: &mut Mis
     // Same id the sender uses (`cmd-{uid}`), derived so the packet stays within its budget.
     set_if_none(
         &mut metadata.command_id,
-        metadata.checklist_uid.as_deref().map(|uid| format!("cmd-{uid}")),
+        metadata
+            .checklist_uid
+            .as_deref()
+            .map(|uid| format!("cmd-{uid}")),
     );
     let Some(mission_uid) = values.get(2) else {
         return;
