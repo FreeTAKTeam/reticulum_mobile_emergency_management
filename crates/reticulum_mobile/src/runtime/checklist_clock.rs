@@ -1,4 +1,4 @@
-const CHECKLIST_MAX_CLOCK_SKEW_SECONDS: i64 = 15 * 60;
+pub(crate) const CHECKLIST_MAX_CLOCK_SKEW_SECONDS: i64 = 15 * 60;
 
 fn checklist_timestamp_is_acceptable(timestamp: &str, now_seconds: i64) -> bool {
     parse_rfc3339_sort_key(timestamp).is_some_and(|(seconds, _)| {

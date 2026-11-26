@@ -430,8 +430,28 @@ The bound covers checklist creation/update/upload/deletion, task update/deletion
 completion, cell updates, and feed publication timestamps. Scheduled start/due
 times remain unrestricted. Rejection emits an InvalidConfig runtime event and
 leaves stored checklist state unchanged; the sender must correct its clock and
-retry. This protects new inbound state; previously stored poisoned records are
-not migrated by this change.
+retry. This protects new inbound state only.
+
+Records stored before that check (pre-1.6.1) are recovered once per database
+when the node starts (#336). Every version timestamp listed above that is more
+than 15 minutes ahead is reset to the newest trustworthy version timestamp already
+in the same record (or `1970-01-01T00:00:00Z` if none is). The anchor comes from
+the record, not the local clock, so peers holding the same poisoned copy repair it
+to the same value and later real edits win normally. Tombstones keep their
+`deleted_at` (deletion intent is kept); start/due times and all task, column and
+cell data are untouched. The repair runs in one SQLite transaction together with
+the `checklist_clock_repair_v1` metadata marker, so an interrupted run leaves no
+partial state and a completed one never runs again. Each repaired record's
+original JSON is kept in `checklist_clock_repairs` as the backup; there is no
+automatic rollback, an operator restores it by hand. Each repair or refusal is
+emitted as an operational notice. A record that has both future and unparseable
+version timestamps is left as is and reported. The repair is skipped (and retried
+on the next start) while the device clock reads earlier than 2026-11-05, because
+such a clock would make every record look future-dated. An old poisoned copy
+replayed later is still rejected by the ingress check. Limits: peers on builds
+older than 1.6.1 keep their poisoned copies and reject repaired edits until they
+upgrade, and a poisoned timestamp only modestly in the future becomes acceptable
+again once real time passes it.
 
 Checklist templates can be built in or imported from CSV. CSV import is handled in Rust. The importer accepts arbitrary normal columns and treats `CompletedDTG`, `Completed DTG`, `Due`, `DueRelativeDTG`, `Due Relative DTG`, `Due Relative Minutes`, or `Due Minutes` as the deadline column. REM stores that column as the pinned system column `DUE_RELATIVE_DTG` with relative task deadlines in `due_relative_minutes`. If the CSV does not include a deadline column, Rust creates one and applies the configured default deadline step, currently 30 minutes per row.
 
