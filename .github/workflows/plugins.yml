@@ -34,6 +34,16 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
+      # Maven Central answers hosted runners with HTTP 429 often enough to fail
+      # the job, so keep what Gradle resolved (Robolectric's runtime jars
+      # included) and the Gradle distribution across runs.
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: plugins-gradle-${{ hashFiles('rem/**/*.gradle', 'rem/**/gradle-wrapper.properties', 'rem/package-lock.json') }}
+          restore-keys: plugins-gradle-
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.99.1"
