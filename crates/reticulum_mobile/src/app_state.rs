@@ -316,6 +316,7 @@ include!("app_state/mission.rs");
 include!("app_state/household_situation.rs");
 include!("app_state/checklist_lifecycle.rs");
 include!("app_state/checklist_tasks.rs");
+include!("app_state/checklist_clock_repair.rs");
 include!("app_state/messaging.rs");
 include!("app_state/telemetry_sos.rs");
 include!("app_state/map_markers.rs");

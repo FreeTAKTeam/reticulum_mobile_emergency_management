@@ -205,7 +205,7 @@ impl AppStateStore {
         let transaction = connection
             .transaction()
             .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
-        for template in default_checklist_templates() {
+        for template in default_checklist_templates()? {
             self.write_checklist_template_tx(&transaction, &template)?;
         }
         transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;

@@ -203,10 +203,24 @@ fn default_checklist_templates_are_seeded() {
     let templates = store
         .list_checklist_templates()
         .expect("list checklist templates");
-    assert_eq!(templates.len(), 3);
+    assert_eq!(templates.len(), 13);
     assert!(templates
         .iter()
         .any(|template| template.uid == "tmpl-24-hour-survival-pack"));
+    let bundled: Vec<_> = templates
+        .iter()
+        .filter(|template| template.uid.starts_with("tmpl-prepared-citizen-"))
+        .collect();
+    assert_eq!(bundled.len(), 10);
+    assert!(bundled.iter().all(|template| {
+        !template.tasks.is_empty()
+            && template.origin_type == ChecklistOriginType::RchTemplate {}
+            && template.tasks.iter().all(|task| {
+                task.cells.iter().any(|cell| {
+                    cell.value.as_deref().is_some_and(|value| !value.trim().is_empty())
+                })
+            })
+    }));
     assert!(templates.iter().all(|template| {
         template.columns.iter().any(|column| {
             column.system_key == Some(ChecklistSystemColumnKey::DueRelativeDtg {})
