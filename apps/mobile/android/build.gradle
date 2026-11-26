@@ -25,6 +25,38 @@ allprojects {
     }
 }
 
+// Robolectric's android-all runtime jars, one per SDK level the unit tests run on. Left alone,
+// Robolectric downloads them from Maven Central itself in the middle of a test run, without retry.
+// Resolving them here uses Gradle's cached, retrying resolver, and offline mode forbids the download.
+// The -i7 suffix belongs to Robolectric 4.14.1; a missing jar fails the test run naming the file.
+def robolectricRuntimeDir = layout.buildDirectory.dir('robolectric-runtime')
+tasks.register('syncRobolectricRuntime', Sync) {
+    from([
+        '5.0.2_r3-robolectric-r0-i7', // SDK 21: tests with no @Config(sdk)
+        '9-robolectric-4913185-2-i7', // SDK 28
+        '15-robolectric-12650502-i7', // SDK 35: every test loads the newest SDK too
+    ].collect { version ->
+        // Detached: two versions of one module in a shared configuration resolve to a single jar.
+        configurations.detachedConfiguration(
+            dependencies.create("org.robolectric:android-all-instrumented:$version"))
+    })
+    into robolectricRuntimeDir
+}
+
+subprojects {
+    tasks.withType(Test).configureEach {
+        dependsOn rootProject.tasks.named('syncRobolectricRuntime')
+        systemProperty 'robolectric.offline', 'true'
+        systemProperty 'robolectric.dependency.dir', robolectricRuntimeDir.get().asFile.path
+        // A passing run prints nothing about its tests otherwise; show that they ran.
+        afterSuite { suite, result ->
+            if (suite.parent == null) {
+                logger.lifecycle("${path}: ${result.testCount} tests, ${result.failedTestCount} failed, ${result.skippedTestCount} skipped")
+            }
+        }
+    }
+}
+
 task clean(type: Delete) {
     delete rootProject.buildDir
 }
