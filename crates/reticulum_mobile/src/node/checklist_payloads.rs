@@ -172,19 +172,6 @@ fn compact_checklist_create_online_args_json(
     Ok(args)
 }
 
-fn create_template_replicates_tasks_from_template(args: &JsonMap<String, JsonValue>) -> bool {
-    let has_template = args
-        .get("template_uid")
-        .and_then(JsonValue::as_str)
-        .and_then(default_checklist_template_wire_code)
-        .is_some();
-    let has_tasks = args
-        .get("total_tasks")
-        .and_then(JsonValue::as_u64)
-        .is_some_and(|total| total > 0);
-    has_template && has_tasks
-}
-
 #[cfg(test)]
 fn append_checklist_create_snapshot_args(
     args: &mut JsonMap<String, JsonValue>,
@@ -268,70 +255,6 @@ fn checklist_task_row_add_args_from_task(
         );
     }
     args
-}
-
-fn compact_initial_checklist_task_row_add_args_from_task(
-    checklist_uid: &str,
-    task: &crate::types::ChecklistTaskRecord,
-) -> JsonMap<String, JsonValue> {
-    let mut args = JsonMap::new();
-    args.insert("checklist_uid".to_string(), JsonValue::from(checklist_uid));
-    args.insert(
-        "task_uid".to_string(),
-        JsonValue::from(task.task_uid.as_str()),
-    );
-    args.insert("number".to_string(), JsonValue::from(task.number));
-    if let Some(legacy_value) = task.legacy_value.as_deref() {
-        args.insert("legacy_value".to_string(), JsonValue::from(legacy_value));
-    }
-    args
-}
-
-fn build_initial_checklist_task_payloads(
-    status: &NodeStatus,
-    target: &MissionReplicationTarget,
-    checklist_uid: &str,
-    tasks: &[crate::types::ChecklistTaskRecord],
-    _changed_by_identity: Option<&str>,
-) -> Vec<ScheduledMissionSend> {
-    tasks
-        .iter()
-        .filter(|task| task.deleted_at.is_none())
-        .filter_map(|task| {
-            let args = compact_initial_checklist_task_row_add_args_from_task(checklist_uid, task);
-            build_checklist_replication_payload(status, target, "checklist.task.row.add", &args)
-                .ok()
-                .map(|(body, fields)| {
-                    (
-                        target.app_destination_hex.clone(),
-                        body,
-                        fields,
-                        target.send_mode,
-                    )
-                })
-        })
-        .collect()
-}
-
-fn dispatch_scheduled_mission_send(
-    tx: &mpsc::Sender<Command>,
-    send: ScheduledMissionSend,
-    saver_active: bool,
-) -> Result<(), NodeError> {
-    ensure_outbound_admitted(saver_active, OutboundTrafficClass::Checklist {})?;
-    let (destination_hex, body, fields_bytes, send_mode) = send;
-    let (resp_tx, _resp_rx) = cb::bounded(1);
-    dispatch_command(
-        tx,
-        Command::SendBytes {
-            destination_hex,
-            bytes: body,
-            fields_bytes: Some(fields_bytes),
-            send_mode,
-            traffic_class: OutboundTrafficClass::Checklist {},
-            resp: resp_tx,
-        },
-    )
 }
 
 fn checklist_update_args_json(request: &ChecklistUpdateRequest) -> JsonMap<String, JsonValue> {

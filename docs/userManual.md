@@ -470,8 +470,12 @@ USB-assisted pairing, firmware guidance, verification, and troubleshooting.
    select a built-in or imported CSV template.
 2. Set the start time and create the checklist. Open it and assign or update a
    row.
-3. Ensure both phones saved each other, then use **Upload/Sync** when shown.
+3. Ensure both phones saved each other. The new checklist is sent to them
+   automatically and shows as synced once a phone confirms it stored the whole
+   checklist; tap **Sync** on the checklist to retry if it stays pending.
 4. On the second phone, join the checklist and change one task to **Complete**.
+   REM asks for confirmation before ticking or unticking a task, and a ticked
+   task can be marked not done again the same way.
 5. Confirm the creator receives the same task state and that repeating the
    update does not create a duplicate row.
 6. A timed-out synchronization is safe to retry. Do not delete and recreate the

@@ -1,22 +1,4 @@
 #[test]
-fn custom_or_empty_checklist_create_still_needs_task_rows() {
-    let mut args = JsonMap::new();
-    args.insert(
-        "template_uid".to_string(),
-        JsonValue::from("tmpl-custom-offline"),
-    );
-    args.insert("total_tasks".to_string(), JsonValue::from(12_u64));
-    assert!(!create_template_replicates_tasks_from_template(&args));
-
-    args.insert(
-        "template_uid".to_string(),
-        JsonValue::from("tmpl-72-hour-home-preparedness"),
-    );
-    args.insert("total_tasks".to_string(), JsonValue::from(0_u64));
-    assert!(!create_template_replicates_tasks_from_template(&args));
-}
-
-#[test]
 fn checklist_delete_replication_respects_local_only_flag() {
     let status = build_status_for_tests();
     let saved_peer = SavedPeerRecord {

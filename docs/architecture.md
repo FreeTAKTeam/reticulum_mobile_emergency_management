@@ -459,12 +459,11 @@ Bundled templates are seeded through the same Rust store and include the same pi
 
 Live checklist deadlines are calculated from the checklist start DTG plus each task's `due_relative_minutes`. A pending task becomes late when the current time is after that due DTG. A completed task is `Complete Late` only when its `completed_at` timestamp is after the calculated due DTG. `CompletedDTG` is therefore a required-by deadline, not the actual completion timestamp.
 
-Initial autonomous sharing uses packet-first replication:
+Initial sharing sends one complete snapshot:
 
-- `checklist.create.online` carries the RCH-compatible checklist identity, template, participant, and count metadata. It deliberately omits descriptive metadata plus task and column snapshots so the create command remains packet-sized. The sender follows creation with the existing `checklist.update` command for description and start time, preserving metadata without changing the compact create envelope.
-- Checklist column schema is fanned out as compact per-column `checklist.update` patches before row/cell data. This is required for new/non-template checklists where the receiver cannot hydrate columns from a local template.
-- The initial rows are fanned out as compact `checklist.task.row.add` commands plus compact `checklist.task.cell.set` commands for non-empty cells, so the first sync can stay under the small LXMF packet budget instead of forcing resource transfer.
-- `checklist.upload` remains available for full snapshot hydration. Its content uses `rem.checklist.snapshot.v2` with a `zlib+msgpack` snapshot body; receivers also accept the older uncompressed `rem.checklist.snapshot.v1` format.
+- Creating a checklist from a template stores it as `UPLOAD_PENDING` and sends `checklist.upload` with command id `cmd-{checklist_uid}-upload`. Its content uses `rem.checklist.snapshot.v2` with a `zlib+msgpack` snapshot body (receivers also accept the older uncompressed `rem.checklist.snapshot.v1`), so every column, cell, note, due time, style and participant travels together. Receivers never need a matching local template.
+- The receiver merges and persists the snapshot, then returns a correlated `accepted` result. The sender marks the checklist `SYNCED` only when that result arrives. Transport delivery alone, a rejection or a timeout leaves it `UPLOAD_PENDING`, and **Sync** on the checklist retries the same idempotent command (also after a restart).
+- `checklist.create.online` remains for RCH-compatible online creation. Its positional packet form has no room for ids, so sender and receiver both derive the tracking id `cmd-{checklist_uid}` from it.
 
 Incremental collaboration keeps using the specific task commands:
 
@@ -473,6 +472,8 @@ Incremental collaboration keeps using the specific task commands:
 - `checklist.task.row.style.set`
 - `checklist.task.cell.set`
 - `checklist.task.status.set`
+
+Packet-sized `checklist.task.status.set` and `checklist.task.row.add` commands also carry no explicit id. Both sides derive one from the content (`st-{checklist}-{row}-{0|1}` and `ra-{checklist}-{row}`), so the receiver can acknowledge after persistence and the sender's retry and timeout tracking applies without growing the packet.
 
 Large checklist snapshots use the existing LXMF resource-capable delivery path rather than a separate transport, but they are compressed before being placed in resource content. Smaller task edits send only the changed data. Incoming checklist commands update the Rust aggregate, emit `Checklists` and `ChecklistDetail` invalidations, and Android posts inbound checklist notifications through the same service notification path used by other operational updates.
 

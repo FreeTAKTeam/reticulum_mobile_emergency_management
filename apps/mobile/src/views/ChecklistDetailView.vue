@@ -14,7 +14,7 @@ const {
   addTaskRow,
   visibleTasks,
   taskStatusClass,
-  completeTask,
+  toggleTaskCompletion,
   isTaskEditing,
   editingTaskValue,
   saveTaskRow,
@@ -140,9 +140,10 @@ const taskWindow = useListWindow(visibleTasks);
                 type="button"
                 class="task-toggle"
                 :class="taskStatusClass(task.status)"
-                :aria-label="`Mark ${task.title} as completed`"
-                :disabled="isTemplatePreview || task.status === 'completed' || task.status === 'submitted' || isMutating"
-                @click="completeTask(task.id)"
+                :aria-label="task.status === 'completed' ? `Mark ${task.title} as not done` : `Mark ${task.title} as completed`"
+                :aria-pressed="task.status === 'completed'"
+                :disabled="isTemplatePreview || task.status === 'submitted' || isMutating"
+                @click="toggleTaskCompletion(task)"
               >
                 <svg v-if="task.status === 'completed'" viewBox="0 0 24 24" fill="none">
                   <path d="m8 12 2.5 2.5L16 9" />

@@ -113,3 +113,42 @@ fn checklist_metadata_is_extracted_from_nested_result_payload() {
     assert_eq!(metadata.column_uid.as_deref(), Some("col-style"));
     assert!(metadata.is_mission_related());
 }
+
+#[test]
+fn compact_checklist_commands_derive_stable_tracking_ids() {
+    let commands = |command: MsgPackValue| {
+        metadata_from_fields(MsgPackValue::Map(vec![(
+            MsgPackValue::from(FIELD_COMMANDS),
+            MsgPackValue::Array(vec![command]),
+        )]))
+    };
+    let create = commands(MsgPackValue::Array(vec![
+        MsgPackValue::from(1_u64),
+        MsgPackValue::from("chk-001"),
+        MsgPackValue::from("mission-alpha"),
+        MsgPackValue::from("tmpl-001"),
+        MsgPackValue::from("Evac"),
+    ]));
+    assert_eq!(create.tracking_key(), Some("cmd-chk-001"));
+
+    let status = |done: bool| {
+        commands(MsgPackValue::Map(vec![
+            (MsgPackValue::from("t"), MsgPackValue::from("checklist.task.status.set")),
+            (MsgPackValue::from("cl"), MsgPackValue::from("chk-001")),
+            (MsgPackValue::from("no"), MsgPackValue::from(3_u64)),
+            (MsgPackValue::from("x"), MsgPackValue::from(done)),
+        ]))
+    };
+    assert_eq!(status(true).tracking_key(), Some("st-chk-001-n3-1"));
+    assert_eq!(status(true).tracking_key(), status(true).tracking_key());
+    assert_ne!(status(true).tracking_key(), status(false).tracking_key());
+
+    let row_add = commands(MsgPackValue::Map(vec![
+        (MsgPackValue::from("t"), MsgPackValue::from("checklist.task.row.add")),
+        (MsgPackValue::from("cl"), MsgPackValue::from("chk-001")),
+        (MsgPackValue::from("tsk"), MsgPackValue::from("task-9")),
+        (MsgPackValue::from("no"), MsgPackValue::from(9_u64)),
+    ]));
+    assert!(row_add.command_present);
+    assert_eq!(row_add.tracking_key(), Some("ra-chk-001-task-9"));
+}

@@ -93,6 +93,54 @@ impl AppStateStore {
         Ok(invalidations)
     }
 
+    /// Marks a checklist Synced once a peer accepted its snapshot upload; other updates are ignored.
+    pub(crate) fn record_checklist_delivery(
+        &self,
+        update: &crate::types::LxmfDeliveryUpdate,
+    ) -> Result<Vec<ProjectionInvalidation>, NodeError> {
+        let accepted = matches!(update.status, crate::types::LxmfDeliveryStatus::Acknowledged {})
+            && matches!(
+                update.application_ack_state,
+                crate::types::ApplicationAckState::Accepted {}
+                    | crate::types::ApplicationAckState::Completed {}
+            );
+        let Some(checklist_uid) = update
+            .command_id
+            .as_deref()
+            .and_then(checklist_uid_from_upload_command_id)
+            .filter(|_| accepted && update.command_type.as_deref() == Some("checklist.upload"))
+        else {
+            return Ok(Vec::new());
+        };
+        let mut connection = self.connect()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
+        let raw: Option<String> = transaction
+            .query_row(
+                "SELECT json FROM checklists WHERE uid = ?1",
+                params![checklist_uid],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
+        let Some(mut checklist) = raw.map(|value| deserialize_json::<ChecklistRecord>(&value)).transpose()? else {
+            return Ok(Vec::new());
+        };
+        if matches!(checklist.sync_state, ChecklistSyncState::Synced {}) {
+            return Ok(Vec::new());
+        }
+        checklist.sync_state = ChecklistSyncState::Synced {};
+        self.write_checklist_tx(&transaction, &checklist)?;
+        let invalidations = self.bump_checklist_projection_revisions_tx(
+            &transaction,
+            checklist_uid,
+            "checklist-upload-acknowledged",
+        )?;
+        transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
+        Ok(invalidations)
+    }
+
     pub fn create_online_checklist(
         &self,
         request: &ChecklistCreateOnlineRequest,
@@ -367,4 +415,16 @@ impl AppStateStore {
         Ok(invalidations)
     }
 
+}
+
+/// Upload command ids are `cmd-{checklist_uid}-upload` (see `Node::upload_checklist`).
+pub(crate) fn checklist_upload_command_id(checklist_uid: &str) -> String {
+    format!("cmd-{checklist_uid}-upload")
+}
+
+fn checklist_uid_from_upload_command_id(command_id: &str) -> Option<&str> {
+    command_id
+        .strip_prefix("cmd-")?
+        .strip_suffix("-upload")
+        .filter(|uid| !uid.is_empty())
 }
