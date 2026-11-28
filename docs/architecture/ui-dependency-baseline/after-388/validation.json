@@ -3,11 +3,11 @@
     "tool": "archgraph",
     "tool_version": "0.1.0",
     "report_schema": "archgraph/validation/v1",
-    "input_sha256": "e5554507ee09e038389c77e8bab9bb8628655a6046da9c5ee6a4b798c69fbca0",
+    "input_sha256": "c8cc8b404b4fae673597e063ca5f710e2500a750b494d49c5aca075c6e85d83d",
     "source": {
       "extractor": "ts-import-graph (typescript AST + @vue/compiler-sfc)",
-      "commit": "e104e32c7515ef15cd1839d0dbd491d25c3fa90d",
-      "dirty": true,
+      "commit": "cee80d1facd3dbb6558155c7ae522a4c92cac7db",
+      "dirty": false,
       "settings": {
         "aliases": "/src=apps/mobile/src,@reticulum/node-client=packages/node-client/src/index.ts",
         "granularity": "directory",
