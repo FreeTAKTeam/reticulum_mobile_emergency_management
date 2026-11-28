@@ -7,7 +7,7 @@ import NetworkFields from "../components/settings/forms/NetworkFields.vue";
 import RnodePairingFields from "../components/settings/forms/RnodePairingFields.vue";
 import RoutingFields from "../components/settings/forms/RoutingFields.vue";
 import SosFields from "../components/settings/forms/SosFields.vue";
-import { SETTINGS_PAGE_COPY, type SettingsPageCopy } from "../components/settings/settingsPageCopy";
+import { SETTINGS_PAGE_COPY, type SettingsPageCopy } from "../utils/settingsPageCopy";
 import SetupWelcomeStep from "../components/setup/SetupWelcomeStep.vue";
 import WizardProgress from "../components/setup/WizardProgress.vue";
 import { useSetupWizard } from "../composables/useSetupWizard";

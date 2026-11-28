@@ -6,8 +6,8 @@ import SettingsLeaveDialog from "../../components/settings/SettingsLeaveDialog.v
 import SettingsPage from "../../components/settings/SettingsPage.vue";
 import SettingsSaveBar from "../../components/settings/SettingsSaveBar.vue";
 import IdentityFields from "../../components/settings/forms/IdentityFields.vue";
-import { identitySlice } from "../../components/settings/settingsFormSlices";
-import { SETTINGS_PAGE_COPY } from "../../components/settings/settingsPageCopy";
+import { identitySlice } from "../../utils/settingsFormSlices";
+import { SETTINGS_PAGE_COPY } from "../../utils/settingsPageCopy";
 import { useNodeSettingsForm } from "../../components/settings/useNodeSettingsForm";
 import { useNodeStore } from "../../stores/nodeStore";
 

@@ -18,7 +18,7 @@ import {
   rnodeProfileSummary,
   rnodeRegionDefaultFrequencyHz,
 } from "../../../utils/rnodeProfiles";
-import { normalizedTcpClients, type NetworkDraft } from "../settingsFormSlices";
+import { normalizedTcpClients, type NetworkDraft } from "../../../utils/settingsFormSlices";
 
 /**
  * Network form body, shared by Settings > Network and the setup wizard. With `pairTo`

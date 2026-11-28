@@ -8,8 +8,8 @@ import SettingsPage from "../../components/settings/SettingsPage.vue";
 import SettingsSaveBar from "../../components/settings/SettingsSaveBar.vue";
 import SettingsSosPinSheet from "../../components/settings/SettingsSosPinSheet.vue";
 import SosFields from "../../components/settings/forms/SosFields.vue";
-import { SETTINGS_PAGE_COPY } from "../../components/settings/settingsPageCopy";
-import { readSosDraft, sosSettingsForSave, sosSettingsWithoutPin } from "../../components/settings/sosFormDraft";
+import { SETTINGS_PAGE_COPY } from "../../utils/settingsPageCopy";
+import { readSosDraft, sosSettingsForSave, sosSettingsWithoutPin } from "../../composables/sosFormDraft";
 import { useSettingsDraft } from "../../components/settings/useSettingsDraft";
 import { useSosStore } from "../../stores/sosStore";
 

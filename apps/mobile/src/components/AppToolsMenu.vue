@@ -2,7 +2,7 @@
 import { ref } from "vue";
 import { RouterLink } from "vue-router";
 
-import { iconPaths, menuItems } from "../appNavigation";
+import { iconPaths, menuItems } from "./appNavigation";
 import { shutdownRem } from "../services/shutdownRem";
 
 const props = defineProps<{

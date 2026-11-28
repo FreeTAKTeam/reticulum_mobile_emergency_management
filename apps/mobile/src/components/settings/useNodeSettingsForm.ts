@@ -3,15 +3,9 @@ import { onMounted } from "vue";
 import { useNodeStore } from "../../stores/nodeStore";
 import { useSettingsRestartNotice } from "../../stores/settingsRestartNotice";
 import type { NodeUiSettings } from "../../types/domain";
+import type { NodeSettingsSlice } from "../../utils/settingsFormSlices";
 import { changedRestartFields } from "../../utils/settingsRestartReasons";
 import { useSettingsDraft } from "./useSettingsDraft";
-
-/** One Settings page's slice of the node settings: how to draft it and what to save. */
-export interface NodeSettingsSlice<D extends object> {
-  read: (settings: NodeUiSettings, appDestinationHex: string) => D;
-  patch: (draft: D, settings: NodeUiSettings) => Partial<NodeUiSettings>;
-  validate?: (draft: D) => string | undefined;
-}
 
 export interface NodeSettingsFormOptions {
   /** Runs after a successful save; a returned string replaces the default feedback. */

@@ -4,7 +4,7 @@ import { Capacitor } from "@capacitor/core";
 import { computed, onMounted, onUnmounted, shallowRef, watch } from "vue";
 import { RouterLink, RouterView, useRoute, useRouter } from "vue-router";
 
-import { footerItems, iconPaths } from "./appNavigation";
+import { footerItems, iconPaths } from "./components/appNavigation";
 import logoUrl from "./assets/rem-logo.png";
 import AppToolsMenu from "./components/AppToolsMenu.vue";
 import SplashScreen from "./components/SplashScreen.vue";

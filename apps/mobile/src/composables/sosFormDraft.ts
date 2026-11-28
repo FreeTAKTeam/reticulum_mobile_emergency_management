@@ -1,6 +1,6 @@
 import type { SosSettingsRecord } from "@reticulum/node-client";
 
-import { normalizeReleaseSosSettings } from "../../stores/sosStore";
+import { normalizeReleaseSosSettings } from "../stores/sosStore";
 
 /** Draft for the SOS form, shared by Settings > SOS and the setup wizard. */
 export function readSosDraft(settings: SosSettingsRecord): SosSettingsRecord {

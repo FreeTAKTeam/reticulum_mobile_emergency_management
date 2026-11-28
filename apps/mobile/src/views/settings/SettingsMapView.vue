@@ -2,7 +2,7 @@
 import SettingsLeaveDialog from "../../components/settings/SettingsLeaveDialog.vue";
 import SettingsPage from "../../components/settings/SettingsPage.vue";
 import SettingsSaveBar from "../../components/settings/SettingsSaveBar.vue";
-import { mapSlice } from "../../components/settings/settingsFormSlices";
+import { mapSlice } from "../../utils/settingsFormSlices";
 import { useNodeSettingsForm } from "../../components/settings/useNodeSettingsForm";
 
 const form = useNodeSettingsForm(mapSlice);

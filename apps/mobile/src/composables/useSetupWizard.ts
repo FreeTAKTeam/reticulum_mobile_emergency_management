@@ -7,9 +7,9 @@ import {
   networkSlice,
   normalizedTcpClients,
   routingSlice,
-} from "../components/settings/settingsFormSlices";
-import { SETTINGS_PAGE_COPY } from "../components/settings/settingsPageCopy";
-import { readSosDraft, sosSettingsForSave } from "../components/settings/sosFormDraft";
+} from "../utils/settingsFormSlices";
+import { SETTINGS_PAGE_COPY } from "../utils/settingsPageCopy";
+import { readSosDraft, sosSettingsForSave } from "./sosFormDraft";
 import { checkSetupPermissions, requestLocationPermission } from "../services/setupPermissions";
 import { useNodeStore } from "../stores/nodeStore";
 import { useSosStore } from "../stores/sosStore";

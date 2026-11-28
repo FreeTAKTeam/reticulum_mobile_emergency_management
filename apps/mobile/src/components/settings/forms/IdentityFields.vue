@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { SettingsSaveField } from "../../../utils/settingsSaveErrors";
 import SettingsRoleBadgesInput from "../SettingsRoleBadgesInput.vue";
-import type { IdentityDraft } from "../settingsFormSlices";
+import type { IdentityDraft } from "../../../utils/settingsFormSlices";
 
 /** Identity form body, shared by Settings > Identity and the setup wizard. */
 const props = defineProps<{
