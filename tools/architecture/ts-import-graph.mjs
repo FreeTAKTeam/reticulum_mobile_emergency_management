@@ -2,6 +2,7 @@
 //
 // A component is a source directory plus its first sub-directory (`apps/mobile/src/stores`);
 // files directly in a source directory form the root component (`apps/mobile/src`).
+// `--granularity file` makes every file its own component, to find cycles hidden inside a directory.
 // An edge `from -> to` means `from` imports `to`. Unresolvable imports go to `unresolved`.
 //
 //   node tools/architecture/ts-import-graph.mjs --root . --source apps/mobile/src \
@@ -105,7 +106,9 @@ function gitSource(root) {
   }
 }
 
-export function buildGraph({ root, sources, testSources = [], aliases = {}, schema = "archgraph/graph/v1" }) {
+export function buildGraph({
+  root, sources, testSources = [], aliases = {}, schema = "archgraph/graph/v1", granularity = "directory",
+}) {
   root = path.resolve(root);
   const allSources = [
     ...sources.map((s) => [s.replace(/\/+$/, ""), false]),
@@ -116,6 +119,7 @@ export function buildGraph({ root, sources, testSources = [], aliases = {}, sche
     for (const [src, isTest] of allSources) {
       if (rel.startsWith(src + "/")) {
         const rest = rel.slice(src.length + 1).split("/");
+        if (granularity === "file") return { id: rel, isTest };
         return { id: rest.length === 1 ? src : `${src}/${rest[0]}`, isTest };
       }
     }
@@ -191,6 +195,7 @@ export function buildGraph({ root, sources, testSources = [], aliases = {}, sche
       extractor: "ts-import-graph (typescript AST + @vue/compiler-sfc)",
       ...gitSource(root),
       settings: {
+        granularity,
         sources: sources.join(","),
         test_sources: testSources.join(","),
         aliases: Object.entries(aliases).sort().map(([k, v]) => `${k}=${v}`).join(","),
@@ -221,6 +226,7 @@ function main() {
       "test-source": { type: "string", multiple: true, default: [] },
       alias: { type: "string", multiple: true, default: [] },
       schema: { type: "string", default: "archgraph/graph/v1" },
+      granularity: { type: "string", default: "directory" },
       out: { type: "string" },
     },
   });
@@ -231,6 +237,7 @@ function main() {
   }));
   const graph = buildGraph({
     root: values.root, sources: values.source, testSources: values["test-source"], aliases, schema: values.schema,
+    granularity: values.granularity,
   });
   const text = JSON.stringify(graph, null, 2) + "\n";
   if (values.out) writeFileSync(values.out, text);

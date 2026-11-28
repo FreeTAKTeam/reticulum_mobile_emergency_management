@@ -19,3 +19,12 @@ node "$here/ts-import-graph.mjs" --root "$root" \
   --policy "$policy" --out-dir "$out"
 "$archgraph" validate --graph "$out/graph.json" --policy "$policy" --today 2026-11-28 \
   --out "$out/validation.json"
+
+# File-level graph: cycles hidden inside one directory (no policy; layers are per directory).
+mkdir -p "$out/files"
+node "$here/ts-import-graph.mjs" --root "$root" --granularity file \
+  --source apps/mobile/src --source packages/node-client/src --test-source e2e \
+  --alias @reticulum/node-client=packages/node-client/src/index.ts --alias /src=apps/mobile/src \
+  --out "$out/files/graph.json"
+"$archgraph" analyze --graph "$out/files/graph.json" --kinds import,type-import,dynamic-import \
+  --out-dir "$out/files"
