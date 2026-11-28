@@ -1,0 +1,12 @@
+depends_on →,apps/mobile/src,apps/mobile/src/components,apps/mobile/src/composables,apps/mobile/src/services,apps/mobile/src/stores,apps/mobile/src/types,apps/mobile/src/utils,apps/mobile/src/views,e2e,e2e/support,packages/node-client/src
+apps/mobile/src,,import,,import,import,,import,dynamic-import,,,
+apps/mobile/src/components,,,import,import+type-import,import,type-import,import+type-import,,,,type-import
+apps/mobile/src/composables,,,,import,import,type-import,import+type-import,,,,import+type-import
+apps/mobile/src/services,,,,,,,import,,,,import+type-import
+apps/mobile/src/stores,,,,import+type-import,,type-import,import+type-import,,,,import+type-import
+apps/mobile/src/types,,,,,,,,,,,
+apps/mobile/src/utils,,,,import,,type-import,,,,,import+type-import
+apps/mobile/src/views,,import,import,import,import,type-import,dynamic-import+import+type-import,,,,import+type-import
+e2e,,,,,,,,,,,
+e2e/support,,,,,,,,,,,
+packages/node-client/src,,,,,,,,,,,
