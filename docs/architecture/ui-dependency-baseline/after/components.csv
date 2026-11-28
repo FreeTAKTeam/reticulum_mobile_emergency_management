@@ -1,0 +1,12 @@
+id,fan_in,fan_out,in_cycle,cluster
+apps/mobile/src,0,5,false,C010
+apps/mobile/src/components,2,6,false,C008
+apps/mobile/src/composables,2,5,false,C007
+apps/mobile/src/services,6,2,true,C005
+apps/mobile/src/stores,4,4,false,C006
+apps/mobile/src/types,5,0,false,C001
+apps/mobile/src/utils,6,3,true,C005
+apps/mobile/src/views,1,7,false,C009
+e2e,0,0,false,C002
+e2e/support,0,0,false,C003
+packages/node-client/src,6,0,false,C004

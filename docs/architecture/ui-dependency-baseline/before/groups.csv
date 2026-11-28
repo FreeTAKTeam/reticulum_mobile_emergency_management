@@ -1,0 +1,10 @@
+group,members,internal_pairs,possible_internal,cohesion,crossing_pairs,possible_crossing,coupling,outgoing,incoming
+app-shell,apps/mobile/src,0,0,,6,20,0.3000,5,1
+e2e,e2e,0,0,,0,20,0.0000,0,0
+e2e/support,e2e/support,0,0,,0,20,0.0000,0,0
+native-client,packages/node-client/src,0,0,,6,20,0.3000,0,6
+presentation,apps/mobile/src/components apps/mobile/src/views,1,2,0.5000,16,36,0.4444,13,3
+services,apps/mobile/src/services,0,0,,8,20,0.4000,2,6
+state,apps/mobile/src/composables apps/mobile/src/stores,1,2,0.5000,14,36,0.3889,9,5
+types,apps/mobile/src/types,0,0,,5,20,0.2500,0,5
+utils,apps/mobile/src/utils,0,0,,9,20,0.4500,3,6
