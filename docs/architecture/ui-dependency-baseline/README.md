@@ -16,6 +16,7 @@ Report-only: nothing here gates CI.
 | `*/validation.json` | archgraph `validate` report: findings with first source evidence, every runtime edge, input SHA-256 |
 | `../../../tools/architecture/ts-import-graph.mjs` | Parser-backed extractor; fixtures in `ts-import-graph.test.mjs` (`npm run test:architecture`) |
 | `../../../tools/architecture/ui-baseline.sh` | Reproduces one directory |
+| `../../testing/frontend-regression.md` | Test toolchain, commands and clean-checkout results per architecture PR (#389) |
 
 ## Reproduce
 
