@@ -11,6 +11,7 @@ Report-only: nothing here gates CI.
 | `rem-ui.policy.json` | Reviewed module policy (`archgraph/policy/v1`) |
 | `before/` | Pinned baseline, revision `8bcfdd3d4a656b70c4ef958f621a3f0a24ccca0f` (main, 2026-11-27, clean tree) |
 | `after/` | Same analysis after #387 (commit recorded in `validation.json` → `metadata.source.commit`) |
+| `after-388/` | Same analysis after #388, with the stricter policy |
 | `*/dsm.csv`, `*/dsm-reordered.csv`, `*/components.csv`, `*/groups.csv` | archgraph `analyze` output: DSM sorted by id, DSM providers-first with cycles as blocks, fan-in/out, per-layer cohesion/coupling with denominators |
 | `*/validation.json` | archgraph `validate` report: findings with first source evidence, every runtime edge, input SHA-256 |
 | `../../../tools/architecture/ts-import-graph.mjs` | Parser-backed extractor; fixtures in `ts-import-graph.test.mjs` (`npm run test:architecture`) |
@@ -92,7 +93,11 @@ No imports in comments or strings changed a pair.
    `utils/missionSync`; `utils/checklistNotifications.ts:3` imports
    `services/operationalNotifications`. Left for #388 under a dated exception.
 
-Neither cycle is a false positive.
+Both are real at the policy's directory granularity, so neither is an extraction artifact.
+Neither is a file-level import loop, though. The file-level graph
+(`ui-baseline.sh` → `files/`, `--granularity file`) has **316 files, 788 pairs and 0 cycles**
+at the pinned revision. Each cycle comes from module placement (ownership), not from code
+that imports itself back.
 
 ## Module policy
 
@@ -112,7 +117,7 @@ Layers, lowest first. A module may depend on its own layer or lower ones:
 
 Rules:
 
-- **Layer order** (warning): an upward edge is a finding. Type-only edges count: an
+- **Layer order** (error since #388; warning before): an upward edge is a finding. Type-only edges count: an
   upward type import still couples a lower module to a higher module's contract. Move the
   type down instead (as `NodeSettingsSlice` moved into `utils/settingsFormSlices.ts`).
 - **`views-only-from-router`** (error): route screens are imported only by the app shell
@@ -122,7 +127,19 @@ Rules:
   outside the scope and never create findings.
 
 Exceptions (owner REM maintainers, expire 2027-02-28): the `services` ↔ `utils` cycle and
-the `utils → services` layer edge, both tracked by #388.
+the `utils → services` layer edge. Both were deferred by #388 as operational (see below).
+
+### Module ownership
+
+| Concern | Owner | Notes |
+| --- | --- | --- |
+| Native records and bridge types (`RnodeBleDeviceRecord`, `SosSettingsRecord`, …) | `@reticulum/node-client` | Import them from the package, not through a `services/*` re-export |
+| Shared app domain types | `apps/mobile/src/types/domain.ts` | Reuse before adding near-duplicates |
+| Reusable UI primitives | top-level `components/*.vue` (`StatusPill`, `ListWindowControls`, `PowerSaverBadge`, `SplashScreen`) | Feature components live in `components/<feature>/` |
+| Menu and navigation metadata | `components/appNavigation.ts` | Read by `App.vue` and `AppToolsMenu` |
+| Formatting and presentation helpers | pure modules in `utils/` (`listWindow`, `settingsIndexSummaries`, `mapMarkerPresentation`, …) | No imports from `services`, `stores`, `composables`, `components`, `views` (except the deferred operational edges below) |
+| Generic settings/configuration interfaces | `utils/settingsFormSlices.ts` (`NodeSettingsSlice`, draft slices), `utils/settingsPageCopy.ts`, `stores/nodeSettingsModel.ts` | Store-backed form helpers go in `composables/` (`sosFormDraft`) |
+| Reusable state helpers | `composables/` (`useListWindow`, …) | Feature-local `use*` helpers may stay beside their components |
 
 ## Results
 
@@ -130,6 +147,7 @@ the `utils → services` layer edge, both tracked by #388.
 | --- | --- | --- | --- | --- | --- |
 | Pinned `8bcfdd3` | 34 | 34/110 = 0.309 | 2 (4, 2) | 1 error (cycle 1), 2 warnings | 2 (#388) |
 | After #387 | 32 | 32/110 = 0.291 | 1 (2) | 0 | 2 (#388) |
+| After #388 | 32 | 32/110 = 0.291 | 1 (2) | 0 | 2 (deferred, operational) |
 
 #387 removed `components → apps/mobile/src` and `composables → components` by moving four
 files, without changing behaviour:
@@ -142,3 +160,25 @@ files, without changing behaviour:
 | `components/settings/sosFormDraft.ts` | `composables/sosFormDraft.ts` | Depends on `stores/sosStore`, so it cannot sit in `utils` |
 
 Focused tests for the moved helpers: `apps/mobile/src/utils/settingsFormSlices.test.ts`.
+
+### #388: remaining findings
+
+After #387, archgraph reports one cycle, `services` ↔ `utils`, plus its `utils → services`
+layer edge. At file level there are no cycles. Each edge, classified:
+
+| Edge | Evidence | Class | Action |
+| --- | --- | --- | --- |
+| `utils → services` (type) | `utils/rnodeUsbPairing.ts:1` imported `RnodeBleDeviceRecord` via `services/rnodeBluetooth`, which only re-exports it from `@reticulum/node-client` | Type-only, ownership artifact | **Fixed:** imports the type from `@reticulum/node-client` |
+| `utils → services` | `utils/checklistNotifications.ts:3` → `services/operationalNotifications` | Runtime, operational (checklist notifications) | Deferred |
+| `utils → services` | `utils/eamProjection.ts:1`, `utils/eventProjection.ts:1`, `utils/legacyStorage.ts:4` → `services/operationalStorage` | Runtime, operational (EAM, events, legacy storage) | Deferred |
+| `services → utils` | `services/hubRegistryBootstrap.ts:4,11` → `utils/missionSync`, `utils/r3akt` | Runtime, operational (mission sync, hub registry) | Deferred |
+
+No generic UI cycle remains, at directory or file level. The remaining cycle runs only
+through operational modules. Breaking it means first deciding who owns mission sync and
+checklist notifications (assessment proposal 4). That decision is out of scope for #388, so
+the cycle stays under its dated exception, tracked by #393.
+
+The policy now makes `layer-order` an error, so any new upward edge outside the exception
+is an error finding. Validated with `--blocking --baseline after/validation.json`: exit 0,
+0 new findings.
+

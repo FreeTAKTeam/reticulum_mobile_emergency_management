@@ -14,7 +14,7 @@
     {"name": "presentation", "members": ["apps/mobile/src/components", "apps/mobile/src/views"]},
     {"name": "app-shell", "members": ["apps/mobile/src"]}
   ],
-  "layer_rule": {"severity": "warning", "allow_same_layer": true, "unlayered": "warning"},
+  "layer_rule": {"severity": "error", "allow_same_layer": true, "unlayered": "warning"},
   "rules": [
     {"id": "types-are-leaf", "effect": "forbid", "from": "apps/mobile/src/types", "to": "*",
      "severity": "error", "rationale": "shared domain types depend on nothing in the app"},
@@ -27,10 +27,10 @@
   "cycles": {"severity": "error"},
   "exceptions": [
     {"rule": "cycle", "components": ["apps/mobile/src/services", "apps/mobile/src/utils"],
-     "owner": "REM maintainers", "rationale": "mission-sync/checklist-notification split is tracked by FreeTAKTeam/reticulum_mobile_emergency_management#388",
+     "owner": "REM maintainers", "rationale": "operational coupling deferred by #388: services/hubRegistryBootstrap uses the utils mission-sync and R3AKT codecs; utils checklist notifications, EAM/event projections and legacy storage use services. Needs a mission-sync ownership decision first: #393",
      "expires": "2027-02-28"},
     {"rule": "layer-order", "from": "apps/mobile/src/utils", "to": "apps/mobile/src/services",
-     "owner": "REM maintainers", "rationale": "same debt as the services/utils cycle, tracked by #388",
+     "owner": "REM maintainers", "rationale": "same operational debt as the services/utils cycle, deferred by #388, tracked by #393",
      "expires": "2027-02-28"}
   ],
   "expired_exception_severity": "error",

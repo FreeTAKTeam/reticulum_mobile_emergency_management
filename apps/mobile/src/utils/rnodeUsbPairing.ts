@@ -1,4 +1,4 @@
-import type { RnodeBleDeviceRecord } from "../services/rnodeBluetooth";
+import type { RnodeBleDeviceRecord } from "@reticulum/node-client";
 
 function bluetoothDeviceKey(device: RnodeBleDeviceRecord): string {
   return String(device.id || device.address || "").trim().toLowerCase();

@@ -94,4 +94,7 @@ test("builds components, aliases, unresolved and test edges", () => {
     ["@/x", "unconfigured alias; pass --alias"],
   ]);
   assert.equal(graph.edges.find((e) => e.from === "app/src/views").evidence[0].line, 2);
+
+  const files = buildGraph({ root, sources: ["app/src", "pkg/src"], aliases: { "@pkg/client": "pkg/src/index.ts" }, granularity: "file" });
+  assert.ok(files.edges.some((e) => e.from === "app/src/views/V.vue" && e.to === "app/src/utils/u.ts"));
 });
