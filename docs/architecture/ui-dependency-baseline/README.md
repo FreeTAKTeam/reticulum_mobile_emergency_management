@@ -183,3 +183,57 @@ The policy now makes `layer-order` an error, so any new upward edge outside the 
 is an error finding. Validated with `--blocking --baseline after/validation.json`: exit 0,
 0 new findings.
 
+
+## Quality gate (#390)
+
+`tools/architecture/ui-gate.mjs` (`npm run architecture:gate`) runs in CI as
+`.github/workflows/architecture.yml`, a separate workflow, so existing jobs are unchanged. Steps:
+1. Extract the graph with the settings above.
+2. Check that archgraph is exactly `archgraph 0.1.0`. CI installs rev `4e8c84b` (tag `v0.1.0`) and caches it.
+3. Validate against `rem-ui.policy.json` with `after-388/validation.json` as the baseline.
+4. Write `graph.json`, `validation.json`, `validation.sarif` and `summary.md`. CI uploads them
+   as the `architecture-ui-gate` artifact and adds `summary.md` to the job summary.
+
+The summary lists:
+- new findings since the baseline;
+- cyclic groups and new cycles;
+- forbidden imports (policy rules);
+- layer-order findings;
+- documented exceptions with owner and expiry;
+- unresolved imports (runtime and test);
+- new and removed edges, and resolved findings.
+
+- **Report-only:** exit 0 whatever the findings are. Exit 2 when the gate itself is broken
+  (wrong archgraph version, invalid policy or graph), so a broken gate never reads as clean.
+- **Dates:** CI uses the real date. When an exception expires, it shows up as an
+  `expired-exception` error finding, without failing the build.
+- **Synthetic diagnostics:** `tools/architecture/ui-gate.test.mjs` builds a small app tree
+  and checks four things:
+  - the clean tree matches its own baseline;
+  - adding `types → utils` and a `utils ↔ stores` loop reports a new `cycle` and a new
+    `types-are-leaf` finding, with file and line, and still exits 0;
+  - `--blocking` exits 1 on that regression;
+  - a broken gate or an invalid policy exits 2.
+
+  They skip when archgraph 0.1.0 is not installed. The CI workflow installs it and runs them.
+
+### Before/after summary for #386–#388
+
+The gate, run on the current tree with the pinned `before/validation.json` as its baseline,
+reports no new findings and no new edges. It reports 2 removed edges
+(`components → apps/mobile/src`, `composables → components`) and 3 resolved findings:
+- the 4-member app-shell cycle;
+- both of those layer-order findings.
+
+The `services` ↔ `utils` cycle remains under its exception (#393).
+
+### Switching to blocking
+
+Needs explicit owner review and is not done by this change:
+
+1. Owners approve the layers, rules and exceptions in `rem-ui.policy.json` in a PR that
+   says so. The `owner` of each exception becomes a named maintainer rather than a role.
+2. Refresh the baseline only on purpose: rerun the gate, copy `validation.json` over the
+   baseline, and state the reason in the commit.
+3. Add `--blocking` to the gate step and make the check required. With a baseline, only new
+   active error findings fail (archgraph exit 1); existing debt does not.

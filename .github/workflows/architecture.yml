@@ -1,0 +1,64 @@
+name: Architecture (report-only)
+
+# Report-only REM UI dependency gate (#390). It never fails on findings; it fails only when
+# the gate itself is broken. Switching to --blocking needs owner approval of the policy and
+# exceptions first (docs/architecture/ui-dependency-baseline/README.md, "Quality gate").
+
+on:
+  pull_request:
+    branches: ["main"]
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: architecture-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  ARCHGRAPH_REV: 4e8c84bb75e70cbf40c8b25c9ba74b6fbd47b059 # archgraph v0.1.0
+
+jobs:
+  ui-gate:
+    name: Architecture / UI gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out mobile app
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Restore archgraph
+        id: archgraph-cache
+        uses: actions/cache@v6
+        with:
+          path: ~/.archgraph
+          key: archgraph-${{ runner.os }}-${{ env.ARCHGRAPH_REV }}
+
+      - name: Install archgraph
+        if: steps.archgraph-cache.outputs.cache-hit != 'true'
+        run: cargo install --locked --git https://github.com/FreeTAKTeam/archgraph --rev "$ARCHGRAPH_REV" --root ~/.archgraph
+
+      - name: Test gate diagnostics on synthetic graphs
+        run: ARCHGRAPH=~/.archgraph/bin/archgraph node --test tools/architecture/*.test.mjs
+
+      - name: Run report-only gate
+        run: ARCHGRAPH=~/.archgraph/bin/archgraph node tools/architecture/ui-gate.mjs --out architecture-report
+
+      - name: Keep machine-readable evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: architecture-ui-gate
+          path: architecture-report/
+          if-no-files-found: warn
