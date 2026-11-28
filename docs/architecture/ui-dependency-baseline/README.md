@@ -176,7 +176,7 @@ layer edge. At file level there are no cycles. Each edge, classified:
 No generic UI cycle remains, at directory or file level. The remaining cycle runs only
 through operational modules. Breaking it means first deciding who owns mission sync and
 checklist notifications (assessment proposal 4). That decision is out of scope for #388, so
-the cycle stays under its dated exception.
+the cycle stays under its dated exception, tracked by #393.
 
 The policy now makes `layer-order` an error, so any new upward edge outside the exception
 is an error finding. Validated with `--blocking --baseline after/validation.json`: exit 0,

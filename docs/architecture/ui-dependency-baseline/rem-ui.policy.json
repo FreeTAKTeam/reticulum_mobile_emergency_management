@@ -27,10 +27,10 @@
   "cycles": {"severity": "error"},
   "exceptions": [
     {"rule": "cycle", "components": ["apps/mobile/src/services", "apps/mobile/src/utils"],
-     "owner": "REM maintainers", "rationale": "operational coupling deferred by #388: services/hubRegistryBootstrap uses the utils mission-sync and R3AKT codecs; utils checklist notifications, EAM/event projections and legacy storage use services. Needs a mission-sync ownership decision first",
+     "owner": "REM maintainers", "rationale": "operational coupling deferred by #388: services/hubRegistryBootstrap uses the utils mission-sync and R3AKT codecs; utils checklist notifications, EAM/event projections and legacy storage use services. Needs a mission-sync ownership decision first: #393",
      "expires": "2027-02-28"},
     {"rule": "layer-order", "from": "apps/mobile/src/utils", "to": "apps/mobile/src/services",
-     "owner": "REM maintainers", "rationale": "same operational debt as the services/utils cycle, deferred by #388",
+     "owner": "REM maintainers", "rationale": "same operational debt as the services/utils cycle, deferred by #388, tracked by #393",
      "expires": "2027-02-28"}
   ],
   "expired_exception_severity": "error",
