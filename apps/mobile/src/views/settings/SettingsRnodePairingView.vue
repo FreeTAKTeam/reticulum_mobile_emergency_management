@@ -2,7 +2,7 @@
 import { useRouter } from "vue-router";
 
 import RnodePairingFields from "../../components/settings/forms/RnodePairingFields.vue";
-import type { NetworkDraft } from "../../components/settings/settingsFormSlices";
+import type { NetworkDraft } from "../../utils/settingsFormSlices";
 
 defineProps<{ draft: NetworkDraft }>();
 const router = useRouter();

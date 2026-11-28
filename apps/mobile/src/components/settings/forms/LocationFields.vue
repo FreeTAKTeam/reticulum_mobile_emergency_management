@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { checkSetupPermissions, requestLocationPermission } from "../../../services/setupPermissions";
 import SettingsPermissionRow from "../SettingsPermissionRow.vue";
-import type { LocationDraft } from "../settingsFormSlices";
+import type { LocationDraft } from "../../../utils/settingsFormSlices";
 
 /**
  * Location sharing form body and permission row, shared by Settings > Location and

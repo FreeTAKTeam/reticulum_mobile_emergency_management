@@ -31,7 +31,7 @@ import {
   sosSummary,
   teamsSummary,
 } from "../../utils/settingsIndexSummaries";
-import { normalizedTcpClients } from "./settingsFormSlices";
+import { normalizedTcpClients } from "../../utils/settingsFormSlices";
 
 export interface SettingsIndexRow {
   id: string;

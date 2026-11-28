@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { RnodeBluetoothDeviceRecord } from "../../../services/rnodeBluetooth";
-import type { NetworkDraft } from "../settingsFormSlices";
+import type { NetworkDraft } from "../../../utils/settingsFormSlices";
 import { useSettingsRnode } from "../useSettingsRnode";
 
 /** RNode pairing body, shared by Settings > Network > Pair RNode and the setup wizard. */

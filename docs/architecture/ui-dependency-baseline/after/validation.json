@@ -1,0 +1,269 @@
+{
+  "metadata": {
+    "tool": "archgraph",
+    "tool_version": "0.1.0",
+    "report_schema": "archgraph/validation/v1",
+    "input_sha256": "f0f7ecc71378bff48cda7421400032803facf7467c86568f0168a3778b627a95",
+    "source": {
+      "extractor": "ts-import-graph (typescript AST + @vue/compiler-sfc)",
+      "commit": "75c7704685424a9d0ef48e4391d1daa7f4c480d6",
+      "dirty": false,
+      "settings": {
+        "aliases": "/src=apps/mobile/src,@reticulum/node-client=packages/node-client/src/index.ts",
+        "sources": "apps/mobile/src,packages/node-client/src",
+        "test_sources": "e2e"
+      },
+      "limitations": [
+        "parser-backed: imports inside comments and strings are ignored; require() and CSS @import are not read",
+        "type-import = `import type`, `export type`, all-`type` named bindings, or `import(\"x\").T` type nodes",
+        "*.test.*/*.spec.* files and --test-source directories give test-* edge kinds",
+        "310 intra-component imports not shown in the DSM; 18 asset imports (css, images) not modelled",
+        "414 third-party import statements to 24 packages not modelled: @capacitor/app, @capacitor/barcode-scanner, @capacitor/clipboard, @capacitor/core, @capacitor/local-notifications, @capacitor/share, @mdi/js, @phosphor-icons/vue, @playwright/test, geojson, maplibre-gl, msgpackr, node:assert, node:fs, node:path, node:perf_hooks, node:test, node:url, pinia, qrcode, typescript, vitest, vue, vue-router"
+      ]
+    },
+    "settings": {
+      "blocking": "false",
+      "policy_sha256": "c1f588b0c87319136697cbc7a6e0b0fb46e536689d0421a94c269fd115df33f5"
+    }
+  },
+  "today": "2026-11-28",
+  "blocking": false,
+  "outcome": "pass",
+  "counts": {
+    "error": 0,
+    "warning": 0,
+    "note": 0,
+    "suppressed": 2,
+    "new": 0
+  },
+  "findings": [
+    {
+      "rule": "cycle",
+      "severity": "error",
+      "message": "dependency cycle: apps/mobile/src/services, apps/mobile/src/utils",
+      "components": [
+        "apps/mobile/src/services",
+        "apps/mobile/src/utils"
+      ],
+      "evidence": [
+        {
+          "location": "apps/mobile/src/services/hubRegistryBootstrap.ts",
+          "line": 4,
+          "detail": "import { createMissionCommandEnvelope, parseMissionSyncFields, type MissionCommandEnvelope, type MissionResultPayload, type MissionResponsePayload, } from \"../u"
+        },
+        {
+          "location": "apps/mobile/src/services/hubRegistryBootstrap.ts",
+          "line": 11,
+          "detail": "import { DEFAULT_R3AKT_TEAM_COLOR, formatR3aktTeamColorLabel, normalizeR3aktTeamColor, type R3aktTeamColor, } from \"../utils/r3akt\";"
+        },
+        {
+          "location": "apps/mobile/src/utils/checklistNotifications.ts",
+          "line": 3,
+          "detail": "import { notifyOperationalUpdateOnce, primeOperationalNotificationScope, truncateNotificationBody, } from \"../services/operationalNotifications\";"
+        },
+        {
+          "location": "apps/mobile/src/utils/eamProjection.ts",
+          "line": 1,
+          "detail": "import { operationalStorage } from \"../services/operationalStorage\";"
+        },
+        {
+          "location": "apps/mobile/src/utils/eventProjection.ts",
+          "line": 1,
+          "detail": "import { operationalStorage } from \"../services/operationalStorage\";"
+        },
+        {
+          "location": "apps/mobile/src/utils/legacyStorage.ts",
+          "line": 4,
+          "detail": "import { operationalStorage } from \"../services/operationalStorage\";"
+        },
+        {
+          "location": "apps/mobile/src/utils/rnodeUsbPairing.ts",
+          "line": 1,
+          "detail": "import type { RnodeBleDeviceRecord } from \"../services/rnodeBluetooth\";"
+        }
+      ],
+      "fingerprint": "cycle|apps/mobile/src/services,apps/mobile/src/utils",
+      "suppressed_by": {
+        "owner": "REM maintainers",
+        "rationale": "mission-sync/checklist-notification split is tracked by FreeTAKTeam/reticulum_mobile_emergency_management#388",
+        "expires": "2027-02-28"
+      }
+    },
+    {
+      "rule": "layer-order",
+      "severity": "warning",
+      "message": "apps/mobile/src/utils (layer utils) -> apps/mobile/src/services (layer services) (import+type-import) points up the layer order",
+      "from": "apps/mobile/src/utils",
+      "to": "apps/mobile/src/services",
+      "evidence": [
+        {
+          "location": "apps/mobile/src/utils/checklistNotifications.ts",
+          "line": 3,
+          "detail": "import { notifyOperationalUpdateOnce, primeOperationalNotificationScope, truncateNotificationBody, } from \"../services/operationalNotifications\";"
+        },
+        {
+          "location": "apps/mobile/src/utils/eamProjection.ts",
+          "line": 1,
+          "detail": "import { operationalStorage } from \"../services/operationalStorage\";"
+        },
+        {
+          "location": "apps/mobile/src/utils/eventProjection.ts",
+          "line": 1,
+          "detail": "import { operationalStorage } from \"../services/operationalStorage\";"
+        },
+        {
+          "location": "apps/mobile/src/utils/legacyStorage.ts",
+          "line": 4,
+          "detail": "import { operationalStorage } from \"../services/operationalStorage\";"
+        },
+        {
+          "location": "apps/mobile/src/utils/rnodeUsbPairing.ts",
+          "line": 1,
+          "detail": "import type { RnodeBleDeviceRecord } from \"../services/rnodeBluetooth\";"
+        }
+      ],
+      "fingerprint": "layer-order|apps/mobile/src/utils|apps/mobile/src/services",
+      "suppressed_by": {
+        "owner": "REM maintainers",
+        "rationale": "same debt as the services/utils cycle, tracked by #388",
+        "expires": "2027-02-28"
+      }
+    }
+  ],
+  "edges": [
+    [
+      "apps/mobile/src",
+      "apps/mobile/src/components"
+    ],
+    [
+      "apps/mobile/src",
+      "apps/mobile/src/services"
+    ],
+    [
+      "apps/mobile/src",
+      "apps/mobile/src/stores"
+    ],
+    [
+      "apps/mobile/src",
+      "apps/mobile/src/utils"
+    ],
+    [
+      "apps/mobile/src",
+      "apps/mobile/src/views"
+    ],
+    [
+      "apps/mobile/src/components",
+      "apps/mobile/src/composables"
+    ],
+    [
+      "apps/mobile/src/components",
+      "apps/mobile/src/services"
+    ],
+    [
+      "apps/mobile/src/components",
+      "apps/mobile/src/stores"
+    ],
+    [
+      "apps/mobile/src/components",
+      "apps/mobile/src/types"
+    ],
+    [
+      "apps/mobile/src/components",
+      "apps/mobile/src/utils"
+    ],
+    [
+      "apps/mobile/src/components",
+      "packages/node-client/src"
+    ],
+    [
+      "apps/mobile/src/composables",
+      "apps/mobile/src/services"
+    ],
+    [
+      "apps/mobile/src/composables",
+      "apps/mobile/src/stores"
+    ],
+    [
+      "apps/mobile/src/composables",
+      "apps/mobile/src/types"
+    ],
+    [
+      "apps/mobile/src/composables",
+      "apps/mobile/src/utils"
+    ],
+    [
+      "apps/mobile/src/composables",
+      "packages/node-client/src"
+    ],
+    [
+      "apps/mobile/src/services",
+      "apps/mobile/src/utils"
+    ],
+    [
+      "apps/mobile/src/services",
+      "packages/node-client/src"
+    ],
+    [
+      "apps/mobile/src/stores",
+      "apps/mobile/src/services"
+    ],
+    [
+      "apps/mobile/src/stores",
+      "apps/mobile/src/types"
+    ],
+    [
+      "apps/mobile/src/stores",
+      "apps/mobile/src/utils"
+    ],
+    [
+      "apps/mobile/src/stores",
+      "packages/node-client/src"
+    ],
+    [
+      "apps/mobile/src/utils",
+      "apps/mobile/src/services"
+    ],
+    [
+      "apps/mobile/src/utils",
+      "apps/mobile/src/types"
+    ],
+    [
+      "apps/mobile/src/utils",
+      "packages/node-client/src"
+    ],
+    [
+      "apps/mobile/src/views",
+      "apps/mobile/src/components"
+    ],
+    [
+      "apps/mobile/src/views",
+      "apps/mobile/src/composables"
+    ],
+    [
+      "apps/mobile/src/views",
+      "apps/mobile/src/services"
+    ],
+    [
+      "apps/mobile/src/views",
+      "apps/mobile/src/stores"
+    ],
+    [
+      "apps/mobile/src/views",
+      "apps/mobile/src/types"
+    ],
+    [
+      "apps/mobile/src/views",
+      "apps/mobile/src/utils"
+    ],
+    [
+      "apps/mobile/src/views",
+      "packages/node-client/src"
+    ]
+  ],
+  "cycles": [
+    [
+      "apps/mobile/src/services",
+      "apps/mobile/src/utils"
+    ]
+  ]
+}

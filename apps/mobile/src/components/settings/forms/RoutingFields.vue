@@ -2,7 +2,7 @@
 import { computed } from "vue";
 
 import { useNodeStore } from "../../../stores/nodeStore";
-import type { RoutingDraft } from "../settingsFormSlices";
+import type { RoutingDraft } from "../../../utils/settingsFormSlices";
 
 /** Routing mode and hub form body, shared by Settings > Routing and the setup wizard. */
 const props = defineProps<{ draft: RoutingDraft }>();

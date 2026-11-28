@@ -1,0 +1,38 @@
+{
+  "schema": "archgraph/policy/v1",
+  "scope": {
+    "include": ["apps/mobile/src*", "packages/node-client/src"],
+    "exclude": [],
+    "edge_kinds": ["import", "type-import", "dynamic-import"]
+  },
+  "layers": [
+    {"name": "types", "members": ["apps/mobile/src/types"]},
+    {"name": "native-client", "members": ["packages/node-client/src"]},
+    {"name": "utils", "members": ["apps/mobile/src/utils"]},
+    {"name": "services", "members": ["apps/mobile/src/services"]},
+    {"name": "state", "members": ["apps/mobile/src/stores", "apps/mobile/src/composables"]},
+    {"name": "presentation", "members": ["apps/mobile/src/components", "apps/mobile/src/views"]},
+    {"name": "app-shell", "members": ["apps/mobile/src"]}
+  ],
+  "layer_rule": {"severity": "warning", "allow_same_layer": true, "unlayered": "warning"},
+  "rules": [
+    {"id": "types-are-leaf", "effect": "forbid", "from": "apps/mobile/src/types", "to": "*",
+     "severity": "error", "rationale": "shared domain types depend on nothing in the app"},
+    {"id": "node-client-is-app-independent", "effect": "forbid", "from": "packages/node-client/src", "to": "apps/mobile/src*",
+     "severity": "error", "rationale": "the native bridge client must not know the Vue app"},
+    {"id": "views-only-from-router", "effect": "forbid", "from": "*", "to": "apps/mobile/src/views",
+     "except": ["apps/mobile/src", "apps/mobile/src/views"],
+     "severity": "error", "rationale": "route screens are reached through router.ts, never imported by reusable code"}
+  ],
+  "cycles": {"severity": "error"},
+  "exceptions": [
+    {"rule": "cycle", "components": ["apps/mobile/src/services", "apps/mobile/src/utils"],
+     "owner": "REM maintainers", "rationale": "mission-sync/checklist-notification split is tracked by FreeTAKTeam/reticulum_mobile_emergency_management#388",
+     "expires": "2027-02-28"},
+    {"rule": "layer-order", "from": "apps/mobile/src/utils", "to": "apps/mobile/src/services",
+     "owner": "REM maintainers", "rationale": "same debt as the services/utils cycle, tracked by #388",
+     "expires": "2027-02-28"}
+  ],
+  "expired_exception_severity": "error",
+  "frdp_coupled_severity": "warning"
+}

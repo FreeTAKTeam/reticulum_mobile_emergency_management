@@ -1,15 +1,21 @@
 import type { PreferredMapLayer, RnodeConnectionMode } from "@reticulum/node-client";
 
-import type { NodeUiSettings } from "../../types/domain";
-import { householdIdFromDestination } from "../../utils/communityStatus";
-import { ensureRequiredAnnounceCapabilities, normalizeDisplayName } from "../../utils/peers";
+import type { NodeUiSettings } from "../types/domain";
+import { householdIdFromDestination } from "./communityStatus";
+import { ensureRequiredAnnounceCapabilities, normalizeDisplayName } from "./peers";
 import {
   RNODE_FREQUENCY_MAX_HZ,
   RNODE_FREQUENCY_MIN_HZ,
   isRnodeFrequencyHz,
   normalizeRnodeSettings,
-} from "../../utils/rnodeProfiles";
-import type { NodeSettingsSlice } from "./useNodeSettingsForm";
+} from "./rnodeProfiles";
+
+/** One Settings page's slice of the node settings: how to draft it and what to save. */
+export interface NodeSettingsSlice<D extends object> {
+  read: (settings: NodeUiSettings, appDestinationHex: string) => D;
+  patch: (draft: D, settings: NodeUiSettings) => Partial<NodeUiSettings>;
+  validate?: (draft: D) => string | undefined;
+}
 
 /*
  * Draft <-> settings mapping for each Settings form page. Normalization here is

@@ -2,7 +2,7 @@
 import SettingsLeaveDialog from "../../components/settings/SettingsLeaveDialog.vue";
 import SettingsPage from "../../components/settings/SettingsPage.vue";
 import SettingsSaveBar from "../../components/settings/SettingsSaveBar.vue";
-import { powerSlice } from "../../components/settings/settingsFormSlices";
+import { powerSlice } from "../../utils/settingsFormSlices";
 import { useNodeSettingsForm } from "../../components/settings/useNodeSettingsForm";
 import type { SettingsSaveField } from "../../utils/settingsSaveErrors";
 
