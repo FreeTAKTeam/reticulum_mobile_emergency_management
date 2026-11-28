@@ -18,6 +18,7 @@
     "test:components": "vitest run --root apps/mobile src/components",
     "test:node-client": "npm --workspace packages/node-client run test",
     "test:architecture": "node --test tools/architecture/*.test.mjs",
+    "architecture:gate": "node tools/architecture/ui-gate.mjs --out architecture-report",
     "test:unit": "npm run test:source-size && npm run test:architecture && npm run test:app-unit && npm run test:node-client && npm run test:dependency-compatibility",
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",

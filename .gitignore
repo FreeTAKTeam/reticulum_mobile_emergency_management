@@ -16,6 +16,7 @@ coverage/
 .idea/
 playwright-report/
 test-results/
+architecture-report/
 tmp/
 crates/reticulum_mobile/reticulum-mobile/app_state.db
 
